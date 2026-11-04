@@ -870,21 +870,14 @@ Translated Translator::translateScan(
   for (const auto& [schemaName, outName] : columns) {
     Name inTableName = toName(schemaName);
     Name outNameInterned = toName(outName);
-    ColumnCP schemaColumn = schemaTable->findColumn(inTableName);
-    VELOX_CHECK_NOT_NULL(schemaColumn);
     // Give each duplicate scan distinct optimizer symbols while retaining the
     // schema identity used by connector-facing operations.
     const Name columnName = translatingDuplicate_
         ? queryCtx()->newName(outNameInterned)
         : inTableName;
     const Name outputAlias = translatingDuplicate_ ? nullptr : outNameInterned;
-    auto* column = make<Column>(
-        columnName,
-        baseTable,
-        schemaColumn->value(),
-        outputAlias,
-        schemaColumn->name());
-    baseTable->columns.push_back(column);
+    ColumnCP column =
+        baseTable->addColumn(inTableName, columnName, outputAlias);
     outputColumns.push_back(column);
     scope[outName] = column;
   }
@@ -1644,16 +1637,10 @@ void Translator::rebindScope(
   }
 }
 
-// The Column 'scope' binds 'name' to, materialized onto 'node' when 'name'
-// binds an expression. A scope covers every name of its LP node's outputType,
-// so a miss is a translation bug.
-ColumnCP Translator::columnInScope(
-    NodeCP* node,
-    const Scope& scope,
-    const std::string& name) {
-  auto it = scope.find(name);
-  VELOX_CHECK(it != scope.end(), "Scope missing column: {}", name);
-  return materializeColumn(node, it->second, name);
+ColumnCP Translator::columnInScope(Translated& input, const std::string& name) {
+  auto it = input.scope.find(name);
+  VELOX_CHECK(it != input.scope.end(), "Scope missing column: {}", name);
+  return materializeColumn(&input.node, it->second, name);
 }
 
 ExprCP Translator::materializeInto(
@@ -2518,12 +2505,12 @@ Translated Translator::translateSet(
         ExprVector rightKeys;
         leftKeys.reserve(firstType.size());
         rightKeys.reserve(firstType.size());
-        for (size_t columnIndex = 0; columnIndex < firstType.size();
+        for (uint32_t columnIndex = 0; columnIndex < firstType.size();
              ++columnIndex) {
-          leftKeys.push_back(columnInScope(
-              &first.node, first.scope, firstType.nameOf(columnIndex)));
-          rightKeys.push_back(columnInScope(
-              &other.node, other.scope, otherType.nameOf(columnIndex)));
+          leftKeys.push_back(
+              columnInScope(first, firstType.nameOf(columnIndex)));
+          rightKeys.push_back(
+              columnInScope(other, otherType.nameOf(columnIndex)));
         }
         NodeCP joinedNode = simplified.node;
         simplified = nodeSimplifier_.make(
@@ -2649,125 +2636,29 @@ bool correlatesToOtherSide(NodeCP lifted, NodeCP beforeLift, NodeCP otherSide) {
   return false;
 }
 
+// Returns the names both inputs of a join bind. Logical plan names are unique,
+// so the inputs bind disjoint names.
+Translator::Scope mergeScopes(
+    const Translator::Scope& left,
+    const Translator::Scope& right) {
+  Translator::Scope merged = left;
+  merged.insert(right.begin(), right.end());
+  return merged;
+}
+
 } // namespace
 
-Translated Translator::translateVectorSearch(
-    const lp::VectorSearchNode& search,
-    const LpNameSet& required) {
-  const auto& probeType = *search.probe()->outputType();
-  const auto& buildType = *search.build()->outputType();
-
-  // Each input supplies what the search reads from it and the outputs the
-  // consumer reads.
-  LpNameSet probeRequired{search.probeKeys().begin(), search.probeKeys().end()};
-  probeRequired.insert(search.probeEmbedding());
-  LpNameSet buildRequired{search.buildKeys().begin(), search.buildKeys().end()};
-  buildRequired.insert(search.buildIndex());
-  for (const auto& name : probeType.names()) {
-    if (required.contains(name)) {
-      probeRequired.insert(name);
+Translated Translator::translateInput(
+    const lp::LogicalPlanNode& input,
+    const LpNameSet& required,
+    const LpNameSet& read) {
+  LpNameSet inputRequired;
+  for (const auto& name : input.outputType()->names()) {
+    if (required.contains(name) || read.contains(name)) {
+      inputRequired.insert(name);
     }
   }
-  for (const auto& name : buildType.names()) {
-    if (required.contains(name)) {
-      buildRequired.insert(name);
-    }
-  }
-  Translated probe = translateNode(*search.probe(), probeRequired);
-  Translated build = translateNode(*search.build(), buildRequired);
-
-  const velox::core::JoinType joinType = toVeloxJoinType(search.joinType());
-
-  // The build side of a left search is null-extended. Its expressions are
-  // computed below the search: above it, a padded row would read their inputs
-  // as NULL rather than the expressions themselves.
-  if (joinType == velox::core::JoinType::kLeft) {
-    materializeScope(&build.node, build.scope, buildType);
-  }
-
-  ExprVector probeKeys;
-  for (const auto& name : search.probeKeys()) {
-    probeKeys.push_back(columnInScope(&probe.node, probe.scope, name));
-  }
-  ExprVector buildKeys;
-  for (const auto& name : search.buildKeys()) {
-    buildKeys.push_back(columnInScope(&build.node, build.scope, name));
-  }
-  ColumnCP probeEmbedding =
-      columnInScope(&probe.node, probe.scope, search.probeEmbedding());
-  ColumnCP buildIndex =
-      columnInScope(&build.node, build.scope, search.buildIndex());
-
-  // A name binds to an expression, so the search outputs what the expressions
-  // of the required names read.
-  PlanObjectSet requiredColumns;
-  Scope scope;
-  for (const auto* side : {&probe, &build}) {
-    for (const auto& [name, expr] : side->scope) {
-      if (required.contains(name)) {
-        requiredColumns.unionColumns(expr);
-        scope[name] = expr;
-      }
-    }
-  }
-
-  ColumnVector outputColumns;
-  ColumnVector sourceColumns;
-  ColumnVector nullExtendedSources;
-  ColumnVector nullExtendedOutputs;
-  for (ColumnCP column : probe.node->outputColumns()) {
-    if (requiredColumns.contains(column)) {
-      sourceColumns.push_back(column);
-      outputColumns.push_back(column);
-    }
-  }
-  for (ColumnCP column : build.node->outputColumns()) {
-    if (requiredColumns.contains(column)) {
-      sourceColumns.push_back(column);
-      if (joinType == velox::core::JoinType::kLeft) {
-        nullExtendedSources.push_back(column);
-        nullExtendedOutputs.push_back(
-            Column::createForNullExtendedValue(column));
-        outputColumns.push_back(nullExtendedOutputs.back());
-      } else {
-        outputColumns.push_back(column);
-      }
-    }
-  }
-  rebindScope(scope, nullExtendedSources, nullExtendedOutputs);
-
-  ColumnCP id =
-      columnForSymbol(toName(search.idName()), Value(toType(velox::BIGINT())));
-  ColumnCP score =
-      columnForSymbol(toName(search.scoreName()), Value(toType(velox::REAL())));
-  if (required.contains(search.idName())) {
-    sourceColumns.push_back(id);
-    outputColumns.push_back(id);
-    scope[search.idName()] = id;
-  }
-  if (required.contains(search.scoreName())) {
-    sourceColumns.push_back(score);
-    outputColumns.push_back(score);
-    scope[search.scoreName()] = score;
-  }
-
-  NodeCP node = builder_.make<VectorSearch>({
-      .probe = probe.node,
-      .build = build.node,
-      .joinType = joinType,
-      .probeKeys = std::move(probeKeys),
-      .buildKeys = std::move(buildKeys),
-      .probeEmbedding = probeEmbedding,
-      .buildIndex = buildIndex,
-      .metric = search.metric(),
-      .k = search.k(),
-      .searchOptions = search.searchOptions(),
-      .id = id,
-      .score = score,
-      .outputColumns = std::move(outputColumns),
-      .sourceColumns = std::move(sourceColumns),
-  });
-  return {node, std::move(scope)};
+  return translateNode(input, inputRequired);
 }
 
 Translated Translator::translateJoin(
@@ -2779,24 +2670,9 @@ Translated Translator::translateJoin(
   if (join.condition() != nullptr) {
     collectUsedNames(*join.condition(), conditionNames);
   }
-  const auto& leftType = *join.left()->outputType();
-  const auto& rightType = *join.right()->outputType();
-  LpNameSet leftRequired;
-  LpNameSet rightRequired;
-  for (size_t i = 0; i < leftType.size(); ++i) {
-    const auto& name = leftType.nameOf(i);
-    if (required.contains(name) || conditionNames.contains(name)) {
-      leftRequired.insert(name);
-    }
-  }
-  for (size_t i = 0; i < rightType.size(); ++i) {
-    const auto& name = rightType.nameOf(i);
-    if (required.contains(name) || conditionNames.contains(name)) {
-      rightRequired.insert(name);
-    }
-  }
-  Translated left = translateNode(*join.left(), leftRequired);
-  Translated right = translateNode(*join.right(), rightRequired);
+
+  Translated left = translateInput(*join.left(), required, conditionNames);
+  Translated right = translateInput(*join.right(), required, conditionNames);
 
   const velox::core::JoinType joinType = toVeloxJoinType(join.joinType());
 
@@ -2805,19 +2681,19 @@ Translated Translator::translateJoin(
   // expression itself being NULL: `ARRAY[a, b]` would read `ARRAY[NULL, NULL]`
   // where the row should carry NULL. The join's own condition is evaluated
   // before padding, so it is free to read the expression inline.
+  const auto& leftType = *join.left()->outputType();
   if (joinType == velox::core::JoinType::kRight ||
       joinType == velox::core::JoinType::kFull) {
     materializeScope(&left.node, left.scope, leftType);
   }
+
+  const auto& rightType = *join.right()->outputType();
   if (joinType == velox::core::JoinType::kLeft ||
       joinType == velox::core::JoinType::kFull) {
     materializeScope(&right.node, right.scope, rightType);
   }
 
-  Scope merged = left.scope;
-  for (auto& [name, expr] : right.scope) {
-    merged[name] = expr;
-  }
+  Scope merged = mergeScopes(left.scope, right.scope);
 
   const bool isInner = joinType == velox::core::JoinType::kInner;
   const bool conditionHasSubquery =
@@ -2961,6 +2837,165 @@ Translated Translator::simplifyJoin(Join::Key key, Scope scope) {
   return {simplified.node, std::move(scope)};
 }
 
+std::pair<ExprVector, ExprVector> Translator::translateVectorSearchCondition(
+    const lp::Expr& condition,
+    velox::core::JoinType joinType,
+    Translated& probe,
+    Translated& build) {
+  Scope merged = mergeScopes(probe.scope, build.scope);
+  const auto probeColumns =
+      PlanObjectSet::fromObjects(probe.node->outputColumns());
+  const auto buildColumns =
+      PlanObjectSet::fromObjects(build.node->outputColumns());
+  auto split = JoinCondition::splitEquiKeys(
+      ExprFactory::flattenAnd(
+          translateExpr(condition, merged, /*liftTarget=*/nullptr)),
+      probeColumns,
+      buildColumns);
+  // A conjunct of build columns narrows the rows a probe row can match. One
+  // of probe columns narrows the probe rows of an inner search; a left
+  // search outputs the other probe rows too.
+  ExprVector probeFilters;
+  ExprVector buildFilters;
+  for (ExprCP conjunct : split.residual) {
+    if (buildColumns.containsColumns(conjunct)) {
+      buildFilters.push_back(conjunct);
+      continue;
+    }
+    if (!probeColumns.containsColumns(conjunct)) {
+      VELOX_NYI(
+          "Vector search condition supports only equalities between "
+          "probe and build expressions and conditions on one input: {}",
+          conjunct->toString());
+    }
+    if (joinType != velox::core::JoinType::kInner) {
+      VELOX_NYI(
+          "Vector search condition on probe columns supports only an INNER join: {}",
+          conjunct->toString());
+    }
+    probeFilters.push_back(conjunct);
+  }
+  if (!probeFilters.empty()) {
+    probe.node = builder_.make<Filter>({probe.node, std::move(probeFilters)});
+  }
+  if (!buildFilters.empty()) {
+    build.node = builder_.make<Filter>({build.node, std::move(buildFilters)});
+  }
+  ExprVector probeKeys;
+  ExprVector buildKeys;
+  std::tie(probe.node, probeKeys) = PrecomputeProjections::materializeKeys(
+      probe.node, split.leftKeys, builder_, simplifier_);
+  std::tie(build.node, buildKeys) = PrecomputeProjections::materializeKeys(
+      build.node, split.rightKeys, builder_, simplifier_);
+  return {std::move(probeKeys), std::move(buildKeys)};
+}
+
+Translated Translator::translateVectorSearch(
+    const lp::VectorSearchNode& search,
+    const LpNameSet& required) {
+  LpNameSet read{search.probeEmbedding(), search.buildEmbedding()};
+  if (search.condition() != nullptr) {
+    collectUsedNames(*search.condition(), read);
+  }
+  Translated probe = translateInput(*search.probe(), required, read);
+  Translated build = translateInput(*search.build(), required, read);
+
+  const velox::core::JoinType joinType = toVeloxJoinType(search.joinType());
+
+  // The build side of a left search is null-extended. Its expressions are
+  // computed below the search: above it, a padded row would read their inputs
+  // as NULL rather than the expressions themselves.
+  if (joinType == velox::core::JoinType::kLeft) {
+    materializeScope(&build.node, build.scope, *search.build()->outputType());
+  }
+
+  ExprVector probeKeys;
+  ExprVector buildKeys;
+  if (search.condition() != nullptr) {
+    std::tie(probeKeys, buildKeys) = translateVectorSearchCondition(
+        *search.condition(), joinType, probe, build);
+  }
+  ColumnCP probeEmbedding = columnInScope(probe, search.probeEmbedding());
+  ColumnCP buildEmbedding = columnInScope(build, search.buildEmbedding());
+
+  // A name binds to an expression, so the search outputs what the expressions
+  // of the required names read.
+  PlanObjectSet requiredColumns;
+  Scope scope;
+  for (const auto* side : {&probe, &build}) {
+    for (const auto& [name, expr] : side->scope) {
+      if (required.contains(name)) {
+        requiredColumns.unionColumns(expr);
+        scope[name] = expr;
+      }
+    }
+  }
+
+  ColumnVector outputColumns;
+  ColumnVector sourceColumns;
+  ColumnVector nullExtendedSources;
+  ColumnVector nullExtendedOutputs;
+  for (ColumnCP column : probe.node->outputColumns()) {
+    if (requiredColumns.contains(column)) {
+      sourceColumns.push_back(column);
+      outputColumns.push_back(column);
+    }
+  }
+  for (ColumnCP column : build.node->outputColumns()) {
+    if (requiredColumns.contains(column)) {
+      sourceColumns.push_back(column);
+      if (joinType == velox::core::JoinType::kLeft) {
+        nullExtendedSources.push_back(column);
+        nullExtendedOutputs.push_back(
+            Column::createForNullExtendedValue(column));
+        outputColumns.push_back(nullExtendedOutputs.back());
+      } else {
+        outputColumns.push_back(column);
+      }
+    }
+  }
+  rebindScope(scope, nullExtendedSources, nullExtendedOutputs);
+
+  ColumnCP score = nullptr;
+  const auto& scoreName = search.scoreName();
+  if (scoreName.has_value() && required.contains(scoreName.value())) {
+    score = columnForSymbol(
+        toName(scoreName.value()), Value(toType(velox::REAL())));
+    sourceColumns.push_back(score);
+    outputColumns.push_back(score);
+    scope[scoreName.value()] = score;
+  }
+
+  QGVector<std::pair<Name, Name>> searchOptions;
+  for (const auto& [name, value] : search.hints()) {
+    if (lp::VectorSearchNode::isLocalIndexOption(name)) {
+      searchOptions.emplace_back(toName(name), toName(value));
+    }
+  }
+  const auto index = search.index();
+
+  NodeCP node = builder_.make<VectorSearch>({
+      .probe = probe.node,
+      .build = build.node,
+      .joinType = joinType,
+      .probeKeys = std::move(probeKeys),
+      .buildKeys = std::move(buildKeys),
+      .probeEmbedding = probeEmbedding,
+      .buildIndex = buildEmbedding,
+      .metric = search.metric(),
+      .k = search.k(),
+      .numProbes = search.numProbes(),
+      .index = index.has_value() ? std::optional<Name>(toName(index.value()))
+                                 : std::nullopt,
+      .searchOptions = std::move(searchOptions),
+      .id = nullptr,
+      .score = score,
+      .outputColumns = std::move(outputColumns),
+      .sourceColumns = std::move(sourceColumns),
+  });
+  return {node, std::move(scope)};
+}
+
 Translated Translator::translateLateralJoin(
     const lp::LateralJoinNode& join,
     const LpNameSet& /*required*/) {
@@ -2989,10 +3024,7 @@ Translated Translator::translateLateralJoin(
   }
 
   // The ON condition may read either side.
-  Scope merged = left.scope;
-  for (auto& [name, expr] : right.scope) {
-    merged[name] = expr;
-  }
+  Scope merged = mergeScopes(left.scope, right.scope);
 
   ExprVector filter;
   if (join.condition() != nullptr) {

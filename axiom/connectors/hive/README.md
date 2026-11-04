@@ -45,7 +45,8 @@ a local directory.
 - `CREATE TABLE AS SELECT`.
 - `INSERT INTO`.
 - `DROP TABLE`.
-- `CREATE VECTOR INDEX` and `DROP VECTOR INDEX`.
+- Vector indexes: `VECTOR INDEX` elements of `CREATE TABLE`, and
+  `ALTER TABLE ADD/DROP VECTOR INDEX`.
 - Per-column statistics (`.stats` files) are persisted on write for use by
   the optimizer.
 
@@ -334,21 +335,26 @@ INSERT INTO t SELECT * FROM tpch.sf1.lineitem;
 DROP TABLE t;
 ```
 
-### CREATE VECTOR INDEX and DROP VECTOR INDEX
+### Vector indexes
 
 ```sql
-CREATE VECTOR INDEX products (id BIGINT, embedding ARRAY(REAL), ds VARCHAR)
-WITH (
-    distance_metric = 'cosine',
-    index_type = 'flat',
-    num_clusters = 1000,
-    partitioned_by = ARRAY['ds']);
+CREATE TABLE products (
+    id BIGINT,
+    embedding ARRAY(REAL),
+    ds VARCHAR,
+    VECTOR INDEX product_index (embedding) KEY (id) WITH (
+        distance_metric = 'cosine',
+        index_type = 'flat',
+        num_clusters = 1000))
+WITH (partitioned_by = ARRAY['ds']);
 
-DROP VECTOR INDEX products;
+ALTER TABLE products ADD VECTOR INDEX product_ivf (embedding) KEY (id)
+WITH (distance_metric = 'cosine', index_type = 'ivf_flat', num_clusters = 1000);
+
+ALTER TABLE products DROP VECTOR INDEX product_ivf;
 ```
 
-Besides the partition columns, an index has exactly two columns: a `BIGINT`
-id and an `ARRAY(REAL)` embedding. Its properties:
+An index's properties:
 
 - `distance_metric`, required: `cosine`.
 - `index_type`, required: `flat`, `ivf_flat`, `ivf_sq` or `hnsw_sq`.
@@ -357,12 +363,16 @@ id and an `ARRAY(REAL)` embedding. Its properties:
 - `index_options`, optional: a `MAP(VARCHAR, VARCHAR)` of local index settings,
   such as `ivf.nlist`.
 
-Any other property is a table property of both tables. `bucketed_by`,
+Any other property is a table property of both of its storage tables. The
+index's partitions are its table's, so `partitioned_by`, `bucketed_by`,
 `bucket_count` and `sorted_by` are not supported.
 
-The index is stored as two tables, `products__codecs` and `products__index`,
-and a record of its settings in `products.vector_index` in the data
-directory. `DROP VECTOR INDEX` removes the record, then both tables.
+The table's `.schema` records each index's settings. The index is stored as two
+tables named after the table and the index, `products__product_index__codecs`
+and `products__product_index__index`, partitioned as the table is. Dropping the
+index removes its record, then both tables; dropping the table drops its
+indexes' tables too. A DELETE of partitions of the table removes the same
+partitions from both tables of each of its indexes.
 
 ## Statistics
 

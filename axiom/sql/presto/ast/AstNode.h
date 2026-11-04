@@ -160,7 +160,6 @@ enum class NodeType {
   // DDL Statements
   kCreateTable,
   kCreateTableAsSelect,
-  kCreateVectorIndex,
   kCreateView,
   kCreateMaterializedView,
   kCreateSchema,
@@ -176,6 +175,8 @@ enum class NodeType {
   kDropRole,
   kAlterFunction,
   kAddColumn,
+  kAddVectorIndex,
+  kRefreshVectorIndex,
   kDropColumn,
   kRenameColumn,
   kRenameTable,
@@ -235,6 +236,7 @@ enum class NodeType {
 
   // Table Elements
   kColumnDefinition,
+  kVectorIndexDefinition,
   kLikeClause,
   kConstraintSpecification,
 

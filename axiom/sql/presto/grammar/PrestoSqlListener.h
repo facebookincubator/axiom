@@ -70,16 +70,6 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
   virtual void enterDropTable(PrestoSqlParser::DropTableContext* ctx) = 0;
   virtual void exitDropTable(PrestoSqlParser::DropTableContext* ctx) = 0;
 
-  virtual void enterCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* ctx) = 0;
-  virtual void exitCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* ctx) = 0;
-
-  virtual void enterDropVectorIndex(
-      PrestoSqlParser::DropVectorIndexContext* ctx) = 0;
-  virtual void exitDropVectorIndex(
-      PrestoSqlParser::DropVectorIndexContext* ctx) = 0;
-
   virtual void enterInsertInto(PrestoSqlParser::InsertIntoContext* ctx) = 0;
   virtual void exitInsertInto(PrestoSqlParser::InsertIntoContext* ctx) = 0;
 
@@ -102,6 +92,16 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
 
   virtual void enterAddColumn(PrestoSqlParser::AddColumnContext* ctx) = 0;
   virtual void exitAddColumn(PrestoSqlParser::AddColumnContext* ctx) = 0;
+
+  virtual void enterAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* ctx) = 0;
+  virtual void exitAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* ctx) = 0;
+
+  virtual void enterDropVectorIndex(
+      PrestoSqlParser::DropVectorIndexContext* ctx) = 0;
+  virtual void exitDropVectorIndex(
+      PrestoSqlParser::DropVectorIndexContext* ctx) = 0;
 
   virtual void enterAddConstraint(
       PrestoSqlParser::AddConstraintContext* ctx) = 0;
@@ -157,6 +157,11 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
       PrestoSqlParser::RefreshMaterializedViewContext* ctx) = 0;
   virtual void exitRefreshMaterializedView(
       PrestoSqlParser::RefreshMaterializedViewContext* ctx) = 0;
+
+  virtual void enterRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* ctx) = 0;
+  virtual void exitRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* ctx) = 0;
 
   virtual void enterCreateFunction(
       PrestoSqlParser::CreateFunctionContext* ctx) = 0;
@@ -307,6 +312,11 @@ class PrestoSqlListener : public antlr4::tree::ParseTreeListener {
 
   virtual void enterTableElement(PrestoSqlParser::TableElementContext* ctx) = 0;
   virtual void exitTableElement(PrestoSqlParser::TableElementContext* ctx) = 0;
+
+  virtual void enterVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* ctx) = 0;
+  virtual void exitVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* ctx) = 0;
 
   virtual void enterColumnDefinition(
       PrestoSqlParser::ColumnDefinitionContext* ctx) = 0;

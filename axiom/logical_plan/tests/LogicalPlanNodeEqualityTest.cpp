@@ -302,52 +302,45 @@ TEST_F(LogicalPlanNodeEqualityTest, lateralJoin) {
 
 TEST_F(LogicalPlanNodeEqualityTest, vectorSearch) {
   const PlanBuilder::VectorSearch search{
-      .probeKeys = {"c"},
-      .buildKeys = {"d"},
       .probeEmbedding = "b",
-      .buildIndex = "e",
-      .metric = common::vectorindex::VectorIndexMetric::kCosine,
+      .buildEmbedding = "e",
       .k = 1,
-      .idName = "id",
       .scoreName = "score"};
-  auto makeSearch = [](const PlanBuilder::VectorSearch& search) {
+  auto makeSearch = [](const PlanBuilder::VectorSearch& search,
+                       const std::string& condition = "c = d",
+                       JoinType joinType = JoinType::kInner) {
     return PlanBuilder()
         .values(
-            ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+            ROW({{"a", BIGINT()}, {"b", ARRAY(REAL())}, {"c", VARCHAR()}}),
             std::vector<Variant>{})
         .vectorSearch(
             PlanBuilder().values(
-                ROW({"d", "e"}, {VARCHAR(), VARBINARY()}),
+                ROW({{"d", VARCHAR()}, {"e", ARRAY(REAL())}}),
                 std::vector<Variant>{}),
+            condition,
+            joinType,
             search)
         .planNode();
   };
 
   EXPECT_EQ(*makeSearch(search), *makeSearch(search));
+  EXPECT_NE(*makeSearch(search), *makeSearch(search, "c = d", JoinType::kLeft));
+  EXPECT_NE(*makeSearch(search), *makeSearch(search, ""));
 
   auto other = search;
-  other.joinType = JoinType::kLeft;
-  EXPECT_NE(*makeSearch(search), *makeSearch(other));
-
-  other = search;
   other.k = 2;
   EXPECT_NE(*makeSearch(search), *makeSearch(other));
 
   other = search;
-  other.probeKeys = {};
-  other.buildKeys = {};
-  EXPECT_NE(*makeSearch(search), *makeSearch(other));
-
-  other = search;
-  other.searchOptions = {{"ivf.nprobe", "4"}};
-  EXPECT_NE(*makeSearch(search), *makeSearch(other));
-
-  other = search;
-  other.idName = "x";
+  other.hints = {{"ivf.nprobe", "4"}};
   EXPECT_NE(*makeSearch(search), *makeSearch(other));
 
   other = search;
   other.scoreName = "x";
+  EXPECT_NE(*makeSearch(search), *makeSearch(other));
+
+  other = search;
+  other.scoreName = std::nullopt;
   EXPECT_NE(*makeSearch(search), *makeSearch(other));
 }
 

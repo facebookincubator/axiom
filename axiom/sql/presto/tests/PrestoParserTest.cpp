@@ -208,6 +208,248 @@ TEST_F(PrestoParserTest, tableFunction) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT * FROM TABLE(f(x => 1))"),
       "Table function not found: f");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM TABLE(s.f(x => 1))"),
+      "Qualified table function names are not supported yet");
+}
+
+TEST_F(PrestoParserTest, vectorSearch) {
+  connector_->addTable(
+      "v",
+      ROW({{"id", BIGINT()}, {"embedding", ARRAY(REAL())}, {"ds", VARCHAR()}}));
+  connector_->addTable(
+      "t", ROW({{"a", ARRAY(REAL())}, {"b", ARRAY(REAL())}, {"id", BIGINT()}}));
+  connector_->addTable("u", ROW({{"c", VARCHAR()}, {"e", ARRAY(REAL())}}));
+
+  // A search of a table of queries compares the columns 'embeddings' names by
+  // the metric. It returns the requested score, the queries' columns, and the
+  // corpus's columns. index, num_probes and options become the search's
+  // hints.
+  testSelect(
+      "SELECT * FROM TABLE(vector_search("
+      "  queries => TABLE(u), "
+      "  corpus => TABLE(SELECT * FROM v WHERE ds = 'x'), "
+      "  embeddings => DESCRIPTOR(e, embedding), metric => 'cosine', "
+      "  k => 2, score => DESCRIPTOR(score), "
+      "  hints => MAP(ARRAY['index', 'num_probes', 'ivf.nprobe'], "
+      "    ARRAY['v_index', '3', '4'])))",
+      matchScan("u")
+          .project()
+          .vectorSearch(
+              matchScan("v").filter("ds = 'x'").project().project().build(),
+              [](const lp::LogicalPlanNodePtr& node) {
+                const auto* search = node->as<lp::VectorSearchNode>();
+                EXPECT_EQ(lp::JoinType::kInner, search->joinType());
+                EXPECT_EQ(nullptr, search->condition());
+                EXPECT_EQ("e", search->probeEmbedding());
+                EXPECT_EQ("embedding", search->buildEmbedding());
+                EXPECT_EQ(
+                    common::vectorindex::VectorIndexMetric::kCosine,
+                    search->metric());
+                EXPECT_EQ(2, search->k());
+                EXPECT_EQ("score", search->scoreName());
+                EXPECT_THAT(
+                    search->hints(),
+                    testing::ElementsAre(
+                        std::pair<std::string, std::string>{"index", "v_index"},
+                        std::pair<std::string, std::string>{"num_probes", "3"},
+                        std::pair<std::string, std::string>{
+                            "ivf.nprobe", "4"}));
+              })
+          .project()
+          .output({"score", "c", "e", "id", "embedding", "ds"}));
+
+  // A search for one embedding, without hints or a score. 'embeddings' names
+  // only the corpus's column.
+  testSelect(
+      "SELECT * FROM TABLE(vector_search("
+      "  query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+      "  embeddings => DESCRIPTOR(embedding), metric => 'cosine', k => 1))",
+      matchValues()
+          .project()
+          .vectorSearch(
+              matchScan("v").project().build(),
+              [](const lp::LogicalPlanNodePtr& node) {
+                const auto* search = node->as<lp::VectorSearchNode>();
+                EXPECT_EQ(1, search->k());
+                EXPECT_TRUE(search->hints().empty());
+                EXPECT_EQ(std::nullopt, search->scoreName());
+              })
+          .project()
+          .output({"embedding", "id", "embedding", "ds"}));
+
+  // 'embeddings' picks the queries' column among several ARRAY(REAL) columns,
+  // and 'score' names the score.
+  testSelect(
+      "SELECT * FROM TABLE(vector_search("
+      "  queries => TABLE(SELECT a, b FROM t), corpus => TABLE(v), "
+      "  embeddings => DESCRIPTOR(b, embedding), metric => 'cosine', k => 1, "
+      "  score => DESCRIPTOR(similarity)))",
+      matchScan("t")
+          .project()
+          .project()
+          .vectorSearch(
+              matchScan("v").project().build(),
+              [](const lp::LogicalPlanNodePtr& node) {
+                const auto* search = node->as<lp::VectorSearchNode>();
+                EXPECT_EQ("b", search->probeEmbedding());
+                EXPECT_EQ("embedding", search->buildEmbedding());
+              })
+          .project()
+          .output({"similarity", "a", "b", "id", "embedding", "ds"}));
+
+  // A column both sides have resolves qualified by the alias of its table
+  // argument, or by its table's name, as in a join. The alias may rename the
+  // columns. One name in 'embeddings' names a column both sides
+  // have.
+  const auto qualifiedSearch = [](std::string_view select,
+                                  std::string_view score) {
+    return fmt::format(
+        "SELECT {} FROM TABLE(vector_search("
+        "  queries => TABLE(SELECT a, b, id FROM t) AS q(embedding, id, score), "
+        "  corpus => TABLE(v), embeddings => DESCRIPTOR(embedding), metric => 'cosine', "
+        "  k => 1{}))",
+        select,
+        score);
+  };
+  testSelect(
+      qualifiedSearch("q.id, v.id, q.score", ""),
+      matchScan("t")
+          .project()
+          .project()
+          .project()
+          .vectorSearch(matchScan("v").project().build())
+          .project()
+          .project()
+          .output(
+              ROW({"id", "id", "score"}, {ARRAY(REAL()), BIGINT(), BIGINT()})));
+
+  // A score named like a column of the queries makes the bare name ambiguous.
+  VELOX_ASSERT_THROW(
+      parseSql(qualifiedSearch("score", ", score => DESCRIPTOR(score)")),
+      "Cannot resolve column: score");
+
+  const auto search = [&](std::string_view arguments) {
+    return parseSql(
+        fmt::format("SELECT * FROM TABLE(vector_search({}))", arguments));
+  };
+  const std::string_view query =
+      "query => ARRAY[REAL '1', REAL '0'], embeddings => DESCRIPTOR(embedding), "
+      "metric => 'cosine'";
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, TABLE(v), k => 1", query)),
+      "vector_search arguments must be named");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, corpus => TABLE(v), k => 1, x => 1", query)),
+      "Unknown vector_search argument: x");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, corpus => TABLE(v), k => 1, k => 2", query)),
+      "Duplicate vector_search argument: k");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, corpus => TABLE(v)", query)),
+      "Missing vector_search argument: k");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, corpus => TABLE(v), k => 0", query)),
+      "vector_search argument must be a positive integer: k");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          fmt::format(
+              "{}, corpus => TABLE(v), k => 1, hints => MAP(ARRAY['a'], ARRAY[1])",
+              query)),
+      "vector_search argument hints must be MAP(ARRAY[...], ARRAY[...]) of VARCHAR literals");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          fmt::format(
+              "{}, corpus => TABLE(v), k => 1, "
+              "hints => MAP(ARRAY['a', 'b'], ARRAY['1'])",
+              query)),
+      "vector_search argument hints must have one value per name");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          fmt::format(
+              "{}, corpus => TABLE(v), k => 1, "
+              "hints => MAP(ARRAY['num_probes'], ARRAY['0'])",
+              query)),
+      "vector_search hint num_probes must be a positive integer: 0");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search("corpus => TABLE(v), k => 1"),
+      "vector_search takes one of queries and query");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          fmt::format(
+              "{}, queries => TABLE(t), corpus => TABLE(v), k => 1", query)),
+      "vector_search takes one of queries and query");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "metric => 'cosine', k => 1"),
+      "Missing vector_search argument: embeddings");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(embedding), k => 1"),
+      "Missing vector_search argument: metric");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "queries => TABLE(t), corpus => TABLE(v), embeddings => DESCRIPTOR(a, b, c), "
+          "metric => 'cosine', k => 1"),
+      "vector_search argument embeddings must be DESCRIPTOR(column) or DESCRIPTOR(query column, corpus column)");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(a, embedding), metric => 'cosine', k => 1"),
+      "vector_search argument embeddings must be DESCRIPTOR(column) with query");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(embedding), metric => 1, k => 1"),
+      "vector_search argument metric must be a VARCHAR literal");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(embedding), metric => 'l2', k => 1"),
+      "Unknown vector_search metric: l2");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(fmt::format("{}, corpus => 1, k => 1", query)),
+      "vector_search argument must be a table: corpus");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => 1, corpus => TABLE(v), embeddings => DESCRIPTOR(embedding), "
+          "metric => 'cosine', k => 1"),
+      "vector_search argument query must be ARRAY(REAL)");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "queries => TABLE(t), corpus => TABLE(v), embeddings => DESCRIPTOR(x, embedding), "
+          "metric => 'cosine', k => 1"),
+      "vector_search column not found: queries.x");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "queries => TABLE(t), corpus => TABLE(v), embeddings => DESCRIPTOR(id, embedding), "
+          "metric => 'cosine', k => 1"),
+      "vector_search column must be ARRAY(REAL): queries.id");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(x), metric => 'cosine', k => 1"),
+      "vector_search column not found: corpus.x");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "query => ARRAY[REAL '1', REAL '0'], corpus => TABLE(v), "
+          "embeddings => DESCRIPTOR(id), metric => 'cosine', k => 1"),
+      "vector_search column must be ARRAY(REAL): corpus.id");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          "queries => TABLE(SELECT a, id FROM t) AS q(embedding), "
+          "corpus => TABLE(v), embeddings => DESCRIPTOR(embedding), "
+          "metric => 'cosine', k => 1"),
+      "Column alias list size does not match the number of output columns");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      search(
+          fmt::format(
+              "{}, corpus => TABLE(v), k => 1, score => DESCRIPTOR(a, b)",
+              query)),
+      "vector_search argument must be DESCRIPTOR(column): score");
 }
 
 TEST_F(PrestoParserTest, lateralJoin) {

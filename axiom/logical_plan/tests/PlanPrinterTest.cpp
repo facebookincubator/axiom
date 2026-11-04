@@ -1265,31 +1265,28 @@ TEST_F(PlanPrinterTest, vectorSearch) {
   auto plan =
       PlanBuilder(context)
           .values(
-              ROW({"a", "b", "c"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+              ROW({{"a", BIGINT()}, {"b", ARRAY(REAL())}, {"c", VARCHAR()}}),
               std::vector<Variant>{})
           .vectorSearch(
               PlanBuilder(context).values(
-                  ROW({"d", "e"}, {VARCHAR(), VARBINARY()}),
+                  ROW({{"d", VARCHAR()}, {"e", ARRAY(REAL())}}),
                   std::vector<Variant>{}),
-              {.joinType = JoinType::kLeft,
-               .probeKeys = {"c"},
-               .buildKeys = {"d"},
-               .probeEmbedding = "b",
-               .buildIndex = "e",
-               .metric = common::vectorindex::VectorIndexMetric::kCosine,
+              "c = d",
+              JoinType::kLeft,
+              {.probeEmbedding = "b",
+               .buildEmbedding = "e",
                .k = 2,
-               .searchOptions = {{"ivf.nprobe", "4"}},
-               .idName = "id",
-               .scoreName = "score"})
+               .scoreName = "score",
+               .hints = {{"num_probes", "4"}, {"ivf.nprobe", "4"}}})
           .build();
 
   EXPECT_THAT(
       toLines(plan),
       testing::ElementsAre(
           testing::Eq(
-              "- VectorSearch LEFT: c = d, nearest e to b, k = 2, cosine, "
-              "ivf.nprobe = 4 -> ROW<a:BIGINT,b:ARRAY<REAL>,c:VARCHAR,"
-              "d:VARCHAR,id:BIGINT,score:REAL>"),
+              "- VectorSearch LEFT: eq(c, d), nearest e to b, cosine, k = 2, "
+              "num_probes = 4, ivf.nprobe = 4 -> ROW<a:BIGINT,b:ARRAY<REAL>,"
+              "c:VARCHAR,d:VARCHAR,e:ARRAY<REAL>,score:REAL>"),
           testing::StartsWith("  - Values: 0 rows"),
           testing::StartsWith("  - Values: 0 rows"),
           testing::Eq("")));

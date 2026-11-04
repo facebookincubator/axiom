@@ -2617,6 +2617,8 @@ VectorSearch::VectorSearch(Key key, Builder& builder)
       buildIndex_(key.buildIndex),
       metric_(key.metric),
       k_(key.k),
+      numProbes_(key.numProbes),
+      index_(key.index),
       searchOptions_(std::move(key.searchOptions)),
       id_(key.id),
       score_(key.score),
@@ -2642,6 +2644,14 @@ VectorSearch::VectorSearch(Key key, Builder& builder)
   }
   VELOX_CHECK(probeColumns.contains(probeEmbedding_));
   VELOX_CHECK(buildColumns.contains(buildIndex_));
+  if (searchesEmbeddings()) {
+    VELOX_CHECK(
+        buildIndex_->value().type->equivalent(*velox::ARRAY(velox::REAL())));
+  } else {
+    VELOX_CHECK(buildIndex_->value().type->equivalent(*velox::VECTOR_INDEX()));
+    VELOX_CHECK(!numProbes_.has_value());
+    VELOX_CHECK(!index_.has_value());
+  }
 
   if (placed()) {
     // Each output row is tied to one probe row and one build row, as in a join
@@ -2673,7 +2683,7 @@ VectorSearch::VectorSearch(Key key, Builder& builder)
         "Vector search source column must come from an input: {}",
         source->toString());
     VELOX_CHECK(
-        source != buildIndex_,
+        searchesEmbeddings() || source != buildIndex_,
         "Vector search cannot output its build index: {}",
         source->toString());
     VELOX_CHECK(
@@ -2695,6 +2705,8 @@ VectorSearch::Key VectorSearch::key() const {
       .buildIndex = buildIndex_,
       .metric = metric_,
       .k = k_,
+      .numProbes = numProbes_,
+      .index = index_,
       .searchOptions = searchOptions_,
       .id = id_,
       .score = score_,
@@ -2714,6 +2726,8 @@ size_t VectorSearch::KeyHash::operator()(const VectorSearch* node) const {
       node->buildIndex(),
       node->metric(),
       node->k(),
+      node->numProbes(),
+      node->index(),
       node->id(),
       node->score(),
       node->outputColumns(),
@@ -2731,6 +2745,8 @@ size_t VectorSearch::KeyHash::operator()(const Key& key) const {
       key.buildIndex,
       key.metric,
       key.k,
+      key.numProbes,
+      key.index,
       key.id,
       key.score,
       key.outputColumns,
@@ -2747,6 +2763,7 @@ bool VectorSearch::KeyEq::operator()(
       lhs->probeEmbedding() == rhs->probeEmbedding() &&
       lhs->buildIndex() == rhs->buildIndex() &&
       lhs->metric() == rhs->metric() && lhs->k() == rhs->k() &&
+      lhs->numProbes() == rhs->numProbes() && lhs->index() == rhs->index() &&
       lhs->searchOptions() == rhs->searchOptions() && lhs->id() == rhs->id() &&
       lhs->score() == rhs->score() &&
       lhs->outputColumns() == rhs->outputColumns() &&
@@ -2760,8 +2777,10 @@ bool VectorSearch::KeyEq::operator()(const Key& key, const VectorSearch* node)
       key.buildKeys == node->buildKeys() &&
       key.probeEmbedding == node->probeEmbedding() &&
       key.buildIndex == node->buildIndex() && key.metric == node->metric() &&
-      key.k == node->k() && key.searchOptions == node->searchOptions() &&
-      key.id == node->id() && key.score == node->score() &&
+      key.k == node->k() && key.numProbes == node->numProbes() &&
+      key.index == node->index() &&
+      key.searchOptions == node->searchOptions() && key.id == node->id() &&
+      key.score == node->score() &&
       key.outputColumns == node->outputColumns() &&
       key.sourceColumns == node->sourceColumns();
 }

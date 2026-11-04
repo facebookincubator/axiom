@@ -798,6 +798,27 @@ class TableLayout {
     co_return std::nullopt;
   }
 
+  /// Checks that 'index', a vector index of this layout's table, covers every
+  /// partition of the table that the filters pushed into 'tableHandle' select,
+  /// and throws a user error naming a partition it does not cover. A partition
+  /// is covered when the index's local-index table has it; a table without
+  /// partition columns is covered when the local-index table has rows. The
+  /// engine calls it when it plans a search through 'index'. A connector that
+  /// supports vector indexes implements it.
+  ///
+  /// @param tableHandle Table handle of this layout, carrying the search's
+  /// partition filters (see createTableHandle).
+  /// @param evaluator As for co_metadataCounts.
+  virtual folly::coro::Task<void> co_checkVectorIndexCoverage(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] velox::connector::ConnectorTableHandlePtr tableHandle,
+      [[maybe_unused]] velox::core::ExpressionEvaluator& evaluator,
+      [[maybe_unused]] VectorIndexPtr index) const {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement co_checkVectorIndexCoverage");
+    co_return;
+  }
+
   /// Return a column with the matching name. Returns nullptr if not found.
   const Column* FOLLY_NULLABLE findColumn(std::string_view name) const;
 
@@ -971,6 +992,14 @@ class Table : public std::enable_shared_from_this<Table> {
 
   /// The ID of the connector the table belongs to.
   const std::string& connectorId() const;
+
+  /// Returns the table's vector indexes (see VectorIndex): metadata the
+  /// connector records for the table. Defaults to none.
+  virtual const std::vector<VectorIndexPtr>& vectorIndexes() const;
+
+  /// Returns the vector index 'name' of this table (see vectorIndexes()), or
+  /// nullptr if it has none of that name.
+  VectorIndexPtr findVectorIndex(std::string_view name) const;
 
   /// Returns an estimate of the number of rows in 'this'. `nullopt`
   /// if the connector has no estimate; downstream cost-based decisions
@@ -1655,48 +1684,51 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  /// Creates a vector index named 'indexName' (see VectorIndex) with its codec
-  /// table and index table, using 'tableProperties' for both tables. Creates
-  /// all of it or none of it. 'columns' are the columns an insert into the
-  /// index provides: the partition columns, which the connector tells from
-  /// 'tableProperties', and exactly two more, a BIGINT id and an ARRAY(REAL)
-  /// embedding. Fails for other columns and for a table property that does
-  /// not apply to the index's tables.
+  /// Adds a vector index to the table 'tableName', as 'definition' declares it
+  /// (see VectorIndex), with its storage tables. Checks that the connector
+  /// supports vector indexes (see TableDefinitionSupport::check()) and the
+  /// definition against the table:
+  ///   - 'definition.column' is an ARRAY(REAL) column of the table.
+  ///   - The key is columns of the table. Without KEY, it is the table's
+  ///     primary key; with KEY, it must be the primary key of a table that has
+  ///     one, and is required for a table that has none. A key of more than
+  ///     one column, or of another type than BIGINT, is not supported yet.
+  ///   - The properties include the index's own (see
+  ///     VectorIndexProperties::extract()).
+  /// Then calls co_doAddVectorIndex with the index resolved against the table
+  /// (see ResolvedVectorIndex).
   ///
-  /// When the index exists, returns false if 'ifNotExists' is true and fails
-  /// otherwise. Returns true when it creates the index. When 'explain' is
-  /// true, performs the same checks but creates nothing.
-  virtual folly::coro::Task<bool> co_createVectorIndex(
-      [[maybe_unused]] ConnectorSessionPtr session,
-      [[maybe_unused]] SchemaTableName indexName,
-      [[maybe_unused]] velox::RowTypePtr columns,
-      [[maybe_unused]] VectorIndexProperties properties,
-      [[maybe_unused]] folly::F14FastMap<std::string, velox::Variant>
-          tableProperties,
-      [[maybe_unused]] bool ifNotExists,
-      [[maybe_unused]] bool explain) {
-    VELOX_USER_FAIL("Vector indexes are not supported by this connector");
-    co_return false;
-  }
+  /// Outcomes:
+  ///   - Table missing, ifTableExists=false: throws "table missing".
+  ///   - Table missing, ifTableExists=true:  returns std::nullopt (no-op).
+  ///   - Index missing, any flags:           adds the index, returns true.
+  ///   - Index exists, ifNotExists=false:    throws "index exists".
+  ///   - Index exists, ifNotExists=true:     returns false (no-op).
+  ///
+  /// When 'explain' is true, the connector performs the same checks but adds
+  /// nothing.
+  folly::coro::Task<std::optional<bool>> co_addVectorIndex(
+      ConnectorSessionPtr session,
+      SchemaTableName tableName,
+      VectorIndexDefinition definition,
+      bool ifTableExists,
+      bool ifNotExists,
+      bool explain);
 
-  /// Returns the vector index named 'indexName', or nullptr if there is none.
-  virtual VectorIndexPtr findVectorIndex(
-      [[maybe_unused]] const ConnectorSessionPtr& session,
-      [[maybe_unused]] const SchemaTableName& indexName) {
-    return nullptr;
-  }
-
-  /// Drops a vector index with its codec table and index table. If the index
-  /// doesn't exist and 'ifExists' is false, raises an error. Otherwise,
-  /// returns true if the index was dropped and false if it didn't exist. When
-  /// 'explain' is true, performs the same existence check but drops nothing.
-  virtual bool dropVectorIndex(
-      [[maybe_unused]] const ConnectorSessionPtr& session,
-      [[maybe_unused]] const SchemaTableName& indexName,
-      [[maybe_unused]] bool ifExists,
-      [[maybe_unused]] bool explain) {
-    VELOX_USER_FAIL("Vector indexes are not supported by this connector");
-  }
+  /// Drops the vector index 'name' of the table 'tableName' with its storage
+  /// tables: checks that the table exists, then calls doDropVectorIndex, which
+  /// checks whether the index exists as part of dropping it. Outcomes are as
+  /// for co_addVectorIndex: std::nullopt for a missing table with
+  /// 'ifTableExists', false for a missing index with 'ifExists', true when the
+  /// index is dropped, and an error otherwise. When 'explain' is true,
+  /// performs the same checks but drops nothing.
+  std::optional<bool> dropVectorIndex(
+      const ConnectorSessionPtr& session,
+      const SchemaTableName& tableName,
+      std::string_view name,
+      bool ifTableExists,
+      bool ifExists,
+      bool explain);
 
   /// Adds 'column' to an existing table. Checks that the connector creates
   /// tables and supports every part of 'column' (see supportsCreateTable()),
@@ -1787,16 +1819,18 @@ class ConnectorMetadata {
 
  protected:
   /// Creates 'tableName' as co_createTable describes. 'definition' holds only
-  /// parts supportsCreateTable() includes. All table properties must be
-  /// understood by the connector. When 'explain' is true, interprets the
-  /// properties and returns a valid Table with correct layout metadata, but
-  /// creates no directories, writes no files and registers nothing, so no
-  /// cleanup is needed. A connector that sets supportsCreateTable() implements
-  /// it.
+  /// parts supportsCreateTable() includes, and no vector indexes:
+  /// 'vectorIndexes' are the indexes it declared, resolved against its
+  /// columns. All table properties must be understood by the connector. When
+  /// 'explain' is true, interprets the properties and returns a valid Table
+  /// with correct layout metadata, but creates no directories, writes no files
+  /// and registers nothing, so no cleanup is needed. A connector that sets
+  /// supportsCreateTable() implements it.
   virtual folly::coro::Task<TablePtr> co_doCreateTable(
       [[maybe_unused]] ConnectorSessionPtr session,
       [[maybe_unused]] SchemaTableName tableName,
       [[maybe_unused]] TableDefinition definition,
+      [[maybe_unused]] std::vector<ResolvedVectorIndex> vectorIndexes,
       [[maybe_unused]] bool ifNotExists,
       [[maybe_unused]] bool explain) {
     VELOX_FAIL(
@@ -1815,6 +1849,36 @@ class ConnectorMetadata {
       [[maybe_unused]] bool explain) {
     VELOX_UNSUPPORTED("Connector does not support ADD COLUMN");
     co_return std::nullopt;
+  }
+
+  /// Adds 'index' to 'table' as co_addVectorIndex describes. A connector whose
+  /// supportsCreateTable() includes vector indexes implements it.
+  virtual folly::coro::Task<bool> co_doAddVectorIndex(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] TablePtr table,
+      [[maybe_unused]] ResolvedVectorIndex index,
+      [[maybe_unused]] bool ifNotExists,
+      [[maybe_unused]] bool explain) {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement co_doAddVectorIndex");
+    co_return false;
+  }
+
+  /// Drops the index 'name' of 'table' with its storage tables, as
+  /// dropVectorIndex describes. Checks whether 'table' has the index as part
+  /// of dropping it: returns false if it has none and 'ifExists', fails if it
+  /// has none otherwise, and returns true when it drops the index. When
+  /// 'explain' is true, performs the same checks but drops nothing. A
+  /// connector whose supportsCreateTable() includes vector indexes implements
+  /// it.
+  virtual bool doDropVectorIndex(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const TablePtr& table,
+      [[maybe_unused]] std::string_view name,
+      [[maybe_unused]] bool ifExists,
+      [[maybe_unused]] bool explain) {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement doDropVectorIndex");
   }
 };
 

@@ -28,6 +28,7 @@ class QualifiedName;
 class TableElement;
 class Property;
 class ColumnDefinition;
+class VectorIndexDefinition;
 class Expression;
 class Relation;
 class PrincipalSpecification;
@@ -486,59 +487,71 @@ class DropTable : public Statement {
   bool exists_;
 };
 
-/// CREATE VECTOR INDEX name (columns) WITH (properties).
-class CreateVectorIndex : public Statement {
+/// ALTER TABLE tableName ADD VECTOR INDEX definition.
+class AddVectorIndex : public Statement {
  public:
-  CreateVectorIndex(
+  AddVectorIndex(
       NodeLocation location,
-      const std::shared_ptr<QualifiedName>& name,
-      const std::vector<std::shared_ptr<ColumnDefinition>>& columns,
-      bool notExists,
-      const std::vector<std::shared_ptr<Property>>& properties)
-      : Statement(NodeType::kCreateVectorIndex, location),
-        name_(name),
-        columns_(columns),
-        notExists_(notExists),
-        properties_(properties) {}
+      const std::shared_ptr<QualifiedName>& tableName,
+      const std::shared_ptr<VectorIndexDefinition>& definition,
+      bool ifTableExists,
+      bool ifNotExists)
+      : Statement(NodeType::kAddVectorIndex, location),
+        tableName_(tableName),
+        definition_(definition),
+        ifTableExists_(ifTableExists),
+        ifNotExists_(ifNotExists) {}
 
-  const std::shared_ptr<QualifiedName>& name() const {
-    return name_;
+  const std::shared_ptr<QualifiedName>& tableName() const {
+    return tableName_;
   }
 
-  const std::vector<std::shared_ptr<ColumnDefinition>>& columns() const {
-    return columns_;
+  const std::shared_ptr<VectorIndexDefinition>& definition() const {
+    return definition_;
+  }
+
+  bool isTableExists() const {
+    return ifTableExists_;
   }
 
   bool isNotExists() const {
-    return notExists_;
-  }
-
-  const std::vector<std::shared_ptr<Property>>& properties() const {
-    return properties_;
+    return ifNotExists_;
   }
 
   void accept(AstVisitor* visitor) override;
 
  private:
-  std::shared_ptr<QualifiedName> name_;
-  std::vector<std::shared_ptr<ColumnDefinition>> columns_;
-  bool notExists_;
-  std::vector<std::shared_ptr<Property>> properties_;
+  std::shared_ptr<QualifiedName> tableName_;
+  std::shared_ptr<VectorIndexDefinition> definition_;
+  bool ifTableExists_;
+  bool ifNotExists_;
 };
 
-/// DROP VECTOR INDEX name.
+/// ALTER TABLE tableName DROP VECTOR INDEX name.
 class DropVectorIndex : public Statement {
  public:
   DropVectorIndex(
       NodeLocation location,
-      const std::shared_ptr<QualifiedName>& name,
+      const std::shared_ptr<QualifiedName>& tableName,
+      const std::shared_ptr<Identifier>& name,
+      bool ifTableExists,
       bool exists)
       : Statement(NodeType::kDropVectorIndex, location),
+        tableName_(tableName),
         name_(name),
+        ifTableExists_(ifTableExists),
         exists_(exists) {}
 
-  const std::shared_ptr<QualifiedName>& name() const {
+  const std::shared_ptr<QualifiedName>& tableName() const {
+    return tableName_;
+  }
+
+  const std::shared_ptr<Identifier>& name() const {
     return name_;
+  }
+
+  bool isTableExists() const {
+    return ifTableExists_;
   }
 
   bool isExists() const {
@@ -548,8 +561,43 @@ class DropVectorIndex : public Statement {
   void accept(AstVisitor* visitor) override;
 
  private:
-  std::shared_ptr<QualifiedName> name_;
+  std::shared_ptr<QualifiedName> tableName_;
+  std::shared_ptr<Identifier> name_;
+  bool ifTableExists_;
   bool exists_;
+};
+
+/// REFRESH VECTOR INDEX name ON tableName WHERE where.
+class RefreshVectorIndex : public Statement {
+ public:
+  RefreshVectorIndex(
+      NodeLocation location,
+      const std::shared_ptr<Identifier>& name,
+      const std::shared_ptr<QualifiedName>& tableName,
+      const ExpressionPtr& where)
+      : Statement(NodeType::kRefreshVectorIndex, location),
+        name_(name),
+        tableName_(tableName),
+        where_(where) {}
+
+  const std::shared_ptr<Identifier>& name() const {
+    return name_;
+  }
+
+  const std::shared_ptr<QualifiedName>& tableName() const {
+    return tableName_;
+  }
+
+  const ExpressionPtr& where() const {
+    return where_;
+  }
+
+  void accept(AstVisitor* visitor) override;
+
+ private:
+  std::shared_ptr<Identifier> name_;
+  std::shared_ptr<QualifiedName> tableName_;
+  ExpressionPtr where_;
 };
 
 class DropView : public Statement {

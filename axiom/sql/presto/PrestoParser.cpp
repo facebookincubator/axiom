@@ -19,6 +19,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/container/small_vector.h>
 #include <folly/hash/Hash.h>
 #include <cctype>
@@ -40,6 +41,7 @@
 #include "axiom/sql/presto/RecursiveCteValidator.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
+#include "axiom/sql/presto/VectorSearchPlanner.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
 #include "axiom/sql/presto/grammar/SyntaxParser.h"
@@ -457,6 +459,14 @@ class RelationPlanner : public AstVisitor {
     return guard;
   }
 
+  // Replaces builder_ with 'builder' until the guard dies, then restores it.
+  [[nodiscard]] auto scopedBuilder(std::shared_ptr<lp::PlanBuilder> builder) {
+    auto guard = folly::makeGuard(
+        [this, saved = builder_]() mutable { builder_ = std::move(saved); });
+    builder_ = std::move(builder);
+    return guard;
+  }
+
   // Restores the relations in scope when the guard dies. 'from' replaces them
   // for the guard's lifetime; without it they only need restoring, which is
   // what a nested query that adds its own relations wants.
@@ -545,14 +555,8 @@ class RelationPlanner : public AstVisitor {
         return processJoin(*relation->as<Join>());
       case NodeType::kGraphTable:
         return processGraphTable(*relation->as<GraphTable>());
-      case NodeType::kTableFunctionInvocation: {
-        const auto& name = *relation->as<TableFunctionInvocation>()->name();
-        AXIOM_PRESTO_SEMANTIC_FAIL(
-            relation->location(),
-            name.suffix(),
-            "Table function not found: {}",
-            name.fullyQualifiedName());
-      }
+      case NodeType::kTableFunctionInvocation:
+        return processTableFunction(*relation->as<TableFunctionInvocation>());
       default:
         AXIOM_PRESTO_SYNTAX_FAIL(
             relation->location(),
@@ -711,6 +715,45 @@ class RelationPlanner : public AstVisitor {
     }
   }
 
+  // Plans a call of a table function. vector_search is the only one.
+  void processTableFunction(const TableFunctionInvocation& call) {
+    const auto& name = *call.name();
+    AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+        name.parts().size(),
+        size_t{1},
+        call.location(),
+        name.suffix(),
+        "Qualified table function names are not supported yet: {}",
+        name.fullyQualifiedName());
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        canonicalizeName(name.suffix()) == "vector_search",
+        call.location(),
+        name.suffix(),
+        "Table function not found: {}",
+        name.fullyQualifiedName());
+
+    // Arguments are planned on their own, in the enclosing query's outer scope.
+    const auto outerScope = builder_->outerScope();
+    const auto planTable = [&](const RelationPtr& table) {
+      auto builderGuard = scopedBuilder(newBuilder(outerScope));
+      auto relationsGuard = scopedRelations();
+      auto namesGuard = scopedResetLastNames();
+      processFrom(table);
+      return *builder_;
+    };
+    const auto planRow = [&](const ExpressionPtr& expression,
+                             std::string_view name) {
+      auto builderGuard = scopedBuilder(newBuilder(outerScope));
+      builder_->values(
+          std::vector<std::string>{std::string(name)},
+          std::vector<std::vector<lp::ExprApi>>{{toExpr(expression)}});
+      return *builder_;
+    };
+    displayNames_.lastNames.clear();
+    builder_ = std::make_shared<lp::PlanBuilder>(
+        VectorSearchPlanner::plan(call, planTable, planRow));
+  }
+
   // Adds the GraphMatch node 'graphTable' describes, over a graph a WITH
   // clause in scope defines.
   void processGraphTable(const GraphTable& graphTable) {
@@ -733,11 +776,7 @@ class RelationPlanner : public AstVisitor {
   void addGraphs(const With& with) {
     auto planTable = [&](const GraphElementTable& table) {
       auto relationsGuard = scopedRelations();
-      auto saved = builder_;
-      SCOPE_EXIT {
-        builder_ = std::move(saved);
-      };
-      builder_ = newBuilder();
+      auto builderGuard = scopedBuilder(newBuilder());
       processTable(table.location(), *table.table());
       return *builder_;
     };
@@ -3036,6 +3075,26 @@ ColumnDeclaration parseColumnDefinition(
   };
 }
 
+// Returns the vector index 'index' declares, its properties unevaluated.
+VectorIndexDeclaration parseVectorIndexDefinition(
+    const ParserSessionPtr& session,
+    const std::string& connectorId,
+    const VectorIndexDefinition& index) {
+  const auto normalize = [&](const std::shared_ptr<Identifier>& identifier) {
+    return normalizeIdentifier(session, connectorId, identifier->value());
+  };
+  std::vector<std::string> key;
+  for (const auto& column : index.key()) {
+    key.push_back(normalize(column));
+  }
+  return {
+      .name = normalize(index.name()),
+      .column = normalize(index.column()),
+      .key = std::move(key),
+      .properties = parseTableProperties(session, index.properties()),
+  };
+}
+
 SqlStatementPtr parseCreateTable(
     const ParserSessionPtr& session,
     const CreateTable& createTable,
@@ -3048,6 +3107,7 @@ SqlStatementPtr parseCreateTable(
 
   std::vector<ColumnDeclaration> columns;
   std::vector<std::string> primaryKey;
+  std::vector<VectorIndexDeclaration> vectorIndexes;
 
   for (const auto& element : createTable.elements()) {
     switch (element->type()) {
@@ -3115,6 +3175,23 @@ SqlStatementPtr parseCreateTable(
         }
         break;
       }
+      case NodeType::kVectorIndexDefinition: {
+        const auto* index = element->as<VectorIndexDefinition>();
+        auto declaration =
+            parseVectorIndexDefinition(session, connectorId, *index);
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            std::ranges::none_of(
+                vectorIndexes,
+                [&](const auto& other) {
+                  return other.name == declaration.name;
+                }),
+            index->location(),
+            index->name()->value(),
+            "Duplicate vector index name: {}",
+            declaration.name);
+        vectorIndexes.push_back(std::move(declaration));
+        break;
+      }
       default:
         VELOX_UNREACHABLE(
             "Unexpected table element type: {}",
@@ -3129,6 +3206,7 @@ SqlStatementPtr parseCreateTable(
       createTable.comment(),
       std::move(properties),
       std::move(primaryKey),
+      std::move(vectorIndexes),
       createTable.isNotExists());
 }
 
@@ -3144,28 +3222,21 @@ SqlStatementPtr parseDropTable(
       std::move(connectorId), std::move(connectorTable), dropTable.isExists());
 }
 
-SqlStatementPtr parseCreateVectorIndex(
+SqlStatementPtr parseAddVectorIndex(
     const ParserSessionPtr& session,
-    const CreateVectorIndex& createIndex,
+    const AddVectorIndex& addIndex,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, indexName] = toConnectorTable(
-      session, *createIndex.name(), defaultConnectorId, defaultSchema);
-
-  std::vector<std::string> names;
-  std::vector<TypePtr> types;
-  for (const auto& column : createIndex.columns()) {
-    auto definition = parseColumnDefinition(session, connectorId, *column);
-    names.push_back(std::move(definition.name));
-    types.push_back(std::move(definition.type));
-  }
-
-  return std::make_shared<CreateVectorIndexStatement>(
+  auto [connectorId, tableName] = toConnectorTable(
+      session, *addIndex.tableName(), defaultConnectorId, defaultSchema);
+  auto index =
+      parseVectorIndexDefinition(session, connectorId, *addIndex.definition());
+  return std::make_shared<AddVectorIndexStatement>(
       std::move(connectorId),
-      std::move(indexName),
-      ROW(std::move(names), std::move(types)),
-      parseTableProperties(session, createIndex.properties()),
-      createIndex.isNotExists());
+      std::move(tableName),
+      std::move(index),
+      addIndex.isTableExists(),
+      addIndex.isNotExists());
 }
 
 SqlStatementPtr parseDropVectorIndex(
@@ -3173,11 +3244,17 @@ SqlStatementPtr parseDropVectorIndex(
     const DropVectorIndex& dropIndex,
     const std::string& defaultConnectorId,
     const std::string& defaultSchema) {
-  auto [connectorId, indexName] = toConnectorTable(
-      session, *dropIndex.name(), defaultConnectorId, defaultSchema);
+  auto [connectorId, tableName] = toConnectorTable(
+      session, *dropIndex.tableName(), defaultConnectorId, defaultSchema);
+  auto name =
+      normalizeIdentifier(session, connectorId, dropIndex.name()->value());
 
   return std::make_shared<DropVectorIndexStatement>(
-      std::move(connectorId), std::move(indexName), dropIndex.isExists());
+      std::move(connectorId),
+      std::move(tableName),
+      std::move(name),
+      dropIndex.isTableExists(),
+      dropIndex.isExists());
 }
 
 SqlStatementPtr parseAddColumn(
@@ -3624,12 +3701,21 @@ SqlStatementPtr doPlan(
         defaultSchema);
   }
 
-  if (query->is(NodeType::kCreateVectorIndex)) {
-    return parseCreateVectorIndex(
+  if (query->is(NodeType::kAddVectorIndex)) {
+    return parseAddVectorIndex(
         parserSession,
-        *query->as<CreateVectorIndex>(),
+        *query->as<AddVectorIndex>(),
         defaultConnectorId,
         defaultSchema);
+  }
+
+  if (query->is(NodeType::kRefreshVectorIndex)) {
+    const auto* refresh = query->as<RefreshVectorIndex>();
+    AXIOM_PRESTO_SEMANTIC_FAIL(
+        refresh->location(),
+        "REFRESH",
+        "REFRESH VECTOR INDEX is not supported yet: {}",
+        refresh->name()->value());
   }
 
   if (query->is(NodeType::kDropVectorIndex)) {

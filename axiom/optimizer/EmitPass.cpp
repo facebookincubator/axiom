@@ -1651,6 +1651,9 @@ velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
 }
 
 velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
+  VELOX_CHECK(
+      !search.searchesEmbeddings(),
+      "Pushdown and pruning plans a search of embeddings");
   velox::core::PlanNodePtr probe = emit(search.probe());
   velox::core::PlanNodePtr build = emit(search.build());
 
@@ -1664,6 +1667,11 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
     }
   }
 
+  std::vector<std::pair<std::string, std::string>> searchOptions;
+  for (const auto& [name, value] : search.searchOptions()) {
+    searchOptions.emplace_back(name, value);
+  }
+
   auto result = std::make_shared<velox::core::VectorSearchJoinNode>(
       nextId(),
       search.joinType(),
@@ -1673,19 +1681,19 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
       toFieldAccess(search.buildIndex()),
       search.metric(),
       search.k(),
-      search.searchOptions(),
+      std::move(searchOptions),
       std::move(idName),
       std::move(scoreName),
       std::move(probe),
       std::move(build),
       ExprEmitter::toRowType(search.sourceColumns()));
 
-  return search.sourceColumns() == search.outputColumns()
+  // A null-extended output has a fresh identity under its source's name.
+  const auto outputNames = namesOf(search.outputColumns());
+  return namesOf(search.sourceColumns()) == outputNames
       ? std::move(result)
       : wrapWithRenameProject(
-            std::move(result),
-            search.sourceColumns(),
-            namesOf(search.outputColumns()));
+            std::move(result), search.sourceColumns(), outputNames);
 }
 
 velox::core::PlanNodePtr Emitter::emitSemiAntiViaLeftSemiProject(

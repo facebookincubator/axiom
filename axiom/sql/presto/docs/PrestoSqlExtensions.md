@@ -457,6 +457,105 @@ EXPLAIN (TYPE OPTIMIZED WITH (last_pass = 'pass_name')) query
 
 See `axiom/optimizer/docs/OptimizerPasses.md` for the passes.
 
+## Vector Search
+
+A vector index belongs to a table and indexes one of its `ARRAY(REAL)` columns.
+`CREATE TABLE` declares indexes as elements, and `ALTER TABLE` adds and drops
+them:
+
+```sql
+CREATE TABLE products (
+    id BIGINT,
+    embedding ARRAY(REAL),
+    ds VARCHAR,
+    PRIMARY KEY (id),
+    VECTOR INDEX product_index (embedding) WITH (
+        distance_metric = 'cosine',
+        index_type = 'flat',
+        num_clusters = 1000))
+WITH (partitioned_by = ARRAY['ds'])
+
+ALTER TABLE products ADD VECTOR INDEX product_ivf (embedding) KEY (id)
+WITH (distance_metric = 'cosine', index_type = 'ivf_flat', num_clusters = 1000)
+
+ALTER TABLE products DROP VECTOR INDEX product_ivf
+```
+
+The syntax:
+
+```
+VECTOR INDEX name (column) [KEY (column, ...)] [WITH (property = value, ...)]
+
+ALTER TABLE [IF EXISTS] table ADD VECTOR INDEX [IF NOT EXISTS]
+    name (column) [KEY (column, ...)] [WITH (property = value, ...)]
+
+ALTER TABLE [IF EXISTS] table DROP VECTOR INDEX [IF EXISTS] name
+```
+
+The first is an element of `CREATE TABLE`, alongside the columns.
+
+- `KEY` names the columns a search returns for each match, which find the row
+  it came from. It defaults to the table's primary key, must name the primary
+  key when the table has one, and is required when the table has none. For
+  now, the key must be one `BIGINT` column.
+- A table may have several indexes, on the same column too. Index names are
+  unique within the table.
+- The index's partitions are the table's.
+- `WITH` holds the index's own properties, `distance_metric`, `index_type`,
+  `num_clusters`, `codec_policy` and `index_options`, and properties of the
+  tables that store the index, which the connector defines.
+
+`REFRESH VECTOR INDEX name ON table WHERE <predicate>` builds the index for the
+partitions the predicate selects. It is not supported yet.
+
+The `vector_search` table function finds the rows of a table nearest to each
+query embedding, through one of its vector indexes.
+
+```sql
+SELECT q.name, p.id, similarity
+FROM TABLE(vector_search(
+    queries => TABLE(SELECT name, embedding FROM new_products) AS q,
+    corpus => TABLE(SELECT * FROM products WHERE ds = '2026-09-30') AS p,
+    embeddings => DESCRIPTOR(embedding),
+    metric => 'cosine',
+    k => 10,
+    score => DESCRIPTOR(similarity),
+    hints => MAP(ARRAY['num_probes'], ARRAY['50'])))
+```
+
+Its arguments are named:
+
+- `queries`: a table of the embeddings to search for. Or `query`: one
+  `ARRAY(REAL)` expression.
+- `corpus`: the table to search, `TABLE(name)`, or
+  `TABLE(SELECT * FROM name WHERE <predicate>)` to search only the partitions
+  the predicate selects. The predicate may use only partition columns.
+- `embeddings`: the columns to compare, `DESCRIPTOR(query column, corpus
+  column)`. `DESCRIPTOR(column)` names a column both sides have, or only the
+  corpus's column with `query`.
+- `metric`: how to compare embeddings, such as `'cosine'`. The search reads an
+  index on the corpus's column with this metric.
+- `k`: a positive integer literal, the number of matches per query.
+- `score`, optional: `DESCRIPTOR(column)` adds a `REAL` column with each match's
+  score under that name. A larger score is nearer.
+- `hints`, optional: how the search runs, a `MAP(ARRAY[...], ARRAY[...])` of
+  `VARCHAR` literals:
+  - `index`: the index to search. Without it, the first by name of the corpus's
+    indexes on the column with the metric.
+  - `num_probes`: the number of clusters nearest to each query to search in
+    each partition. Defaults to a tenth of the clusters.
+  - the search settings of the index's local indexes, such as `ivf.nprobe`.
+
+The result has the score, if requested, then the queries' columns and the
+corpus's columns: up to `k` rows per query. The columns of a table argument
+keep its alias as their qualifier, so a name both sides have resolves as in a
+join: `q.ds` and `p.ds`. A query may read only the corpus's key and partition
+columns, which the index returns; reading other columns is not supported yet.
+The search is approximate: larger hint values read more of the index and return
+results closer to the exact nearest rows. A query with a `NULL` embedding
+matches nothing. A search fails if it reads a partition the index does not
+cover yet.
+
 ## Graph Queries
 
 Axiom parses SQL/PGQ graph queries: `GRAPH_TABLE` in `FROM`, which matches a

@@ -157,7 +157,6 @@ const auto& nodeTypeNames() {
       // DDL Statements
       {NodeType::kCreateTable, "CreateTable"},
       {NodeType::kCreateTableAsSelect, "CreateTableAsSelect"},
-      {NodeType::kCreateVectorIndex, "CreateVectorIndex"},
       {NodeType::kCreateView, "CreateView"},
       {NodeType::kCreateMaterializedView, "CreateMaterializedView"},
       {NodeType::kCreateSchema, "CreateSchema"},
@@ -173,6 +172,8 @@ const auto& nodeTypeNames() {
       {NodeType::kDropRole, "DropRole"},
       {NodeType::kAlterFunction, "AlterFunction"},
       {NodeType::kAddColumn, "AddColumn"},
+      {NodeType::kAddVectorIndex, "AddVectorIndex"},
+      {NodeType::kRefreshVectorIndex, "RefreshVectorIndex"},
       {NodeType::kDropColumn, "DropColumn"},
       {NodeType::kRenameColumn, "RenameColumn"},
       {NodeType::kRenameTable, "RenameTable"},
@@ -232,6 +233,7 @@ const auto& nodeTypeNames() {
 
       // Table Elements
       {NodeType::kColumnDefinition, "ColumnDefinition"},
+      {NodeType::kVectorIndexDefinition, "VectorIndexDefinition"},
       {NodeType::kLikeClause, "LikeClause"},
       {NodeType::kConstraintSpecification, "ConstraintSpecification"},
 
@@ -748,8 +750,12 @@ void DropTable::accept(AstVisitor* visitor) {
   visitor->visitDropTable(this);
 }
 
-void CreateVectorIndex::accept(AstVisitor* visitor) {
-  visitor->visitCreateVectorIndex(this);
+void AddVectorIndex::accept(AstVisitor* visitor) {
+  visitor->visitAddVectorIndex(this);
+}
+
+void RefreshVectorIndex::accept(AstVisitor* visitor) {
+  visitor->visitRefreshVectorIndex(this);
 }
 
 void DropVectorIndex::accept(AstVisitor* visitor) {
@@ -824,6 +830,10 @@ void Rollback::accept(AstVisitor* visitor) {
 // Table Element implementations
 void ColumnDefinition::accept(AstVisitor* visitor) {
   visitor->visitColumnDefinition(this);
+}
+
+void VectorIndexDefinition::accept(AstVisitor* visitor) {
+  visitor->visitVectorIndexDefinition(this);
 }
 
 void LikeClause::accept(AstVisitor* visitor) {

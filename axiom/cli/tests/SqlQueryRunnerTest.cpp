@@ -1565,6 +1565,73 @@ TEST_F(SqlQueryRunnerTest, addColumn) {
       "Table does not exist");
 }
 
+// A vector index belongs to its table: CREATE TABLE declares it, and ALTER
+// TABLE adds and drops it, with its storage tables.
+TEST_F(SqlQueryRunnerTest, vectorIndex) {
+  const auto findTable = [&](const std::string& name) {
+    return testConnector_->metadata()->findTable({"default", name});
+  };
+
+  run("CREATE TABLE t (id BIGINT, e ARRAY(REAL), PRIMARY KEY (id), "
+      "VECTOR INDEX i (e) WITH (distance_metric = 'cosine', "
+      "index_type = 'flat', num_clusters = 4))");
+  ASSERT_NE(findTable("t")->findVectorIndex("i"), nullptr);
+  EXPECT_EQ("id", findTable("t")->findVectorIndex("i")->keyColumn);
+  EXPECT_NE(findTable("t__i__codecs"), nullptr);
+  EXPECT_NE(findTable("t__i__index"), nullptr);
+
+  // A storage table goes only with its index.
+  VELOX_ASSERT_THROW(
+      run("DROP TABLE t__i__index"),
+      "A vector index's storage table must be dropped with its index");
+
+  VELOX_ASSERT_THROW(
+      run("ALTER TABLE t ADD VECTOR INDEX j (e) WITH (distance_metric = "
+          "'cosine', index_type = 'flat', num_clusters = 4, format = 'x')"),
+      "TestConnector does not support vector index property: format");
+  EXPECT_EQ(findTable("t")->findVectorIndex("j"), nullptr);
+  EXPECT_EQ(findTable("t__j__codecs"), nullptr);
+
+  auto result =
+      run("ALTER TABLE t ADD VECTOR INDEX j (e) WITH (distance_metric = "
+          "'cosine', index_type = 'flat', num_clusters = 4)");
+  EXPECT_EQ(
+      result.message.value(), R"(Added vector index 'j' to "default"."t")");
+
+  result = run("ALTER TABLE t DROP VECTOR INDEX i");
+  EXPECT_EQ(
+      result.message.value(), R"(Dropped vector index 'i' from "default"."t")");
+  EXPECT_EQ(findTable("t")->findVectorIndex("i"), nullptr);
+  EXPECT_EQ(findTable("t__i__codecs"), nullptr);
+  EXPECT_EQ(findTable("t__i__index"), nullptr);
+  EXPECT_NE(findTable("t")->findVectorIndex("j"), nullptr);
+
+  // EXPLAIN shows the statement and changes nothing.
+  constexpr std::string_view kAddK{
+      "ADD VECTOR INDEX k (e) WITH (distance_metric = 'cosine', "
+      "index_type = 'flat', num_clusters = 4)"};
+  result = run(fmt::format("EXPLAIN ALTER TABLE t {}", kAddK));
+  EXPECT_EQ(
+      result.message.value(),
+      R"(ALTER TABLE test."default"."t" ADD VECTOR INDEX k)");
+  EXPECT_EQ(findTable("t")->findVectorIndex("k"), nullptr);
+  result = run("EXPLAIN ALTER TABLE t DROP VECTOR INDEX j");
+  EXPECT_EQ(
+      result.message.value(),
+      R"(ALTER TABLE test."default"."t" DROP VECTOR INDEX j)");
+  EXPECT_NE(findTable("t")->findVectorIndex("j"), nullptr);
+
+  // IF EXISTS on a missing table is a no-op.
+  for (const auto& alter :
+       {std::string(kAddK), std::string("DROP VECTOR INDEX j")}) {
+    SCOPED_TRACE(alter);
+    result = run(fmt::format("ALTER TABLE IF EXISTS no_such_table {}", alter));
+    EXPECT_EQ(
+        result.message.value(),
+        R"(Table does not exist: test."default"."no_such_table")");
+  }
+}
+
 TEST_F(SqlQueryRunnerTest, call) {
   // increment(name, step = 1) adds 'step' to the named counter, exercising the
   // full CALL path: parse, bind, constant-fold arguments, and execute.

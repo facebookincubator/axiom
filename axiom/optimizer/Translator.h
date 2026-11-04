@@ -168,6 +168,13 @@ class Translator {
   // read all of them.
   Translated translateNode(const logical_plan::LogicalPlanNode& node);
 
+  // Translates 'input', an input of a node with two inputs, keeping its
+  // outputs in 'required' or in 'read', the names the node itself reads.
+  Translated translateInput(
+      const logical_plan::LogicalPlanNode& input,
+      const LpNameSet& required,
+      const LpNameSet& read);
+
   // The scan a delete removes rows from, and the columns that scan must
   // produce to identify them. The columns are empty when the connector cannot
   // delete row by row; the scan is set for every delete.
@@ -261,8 +268,10 @@ class Translator {
       const ColumnVector& sources,
       const ColumnVector& outputs);
 
-  ColumnCP
-  columnInScope(NodeCP* node, const Scope& scope, const std::string& name);
+  // The Column 'input.scope' binds 'name' to, materialized onto 'input.node'
+  // when 'name' binds an expression. A scope covers every name of its LP
+  // node's outputType, so a miss is a translation bug.
+  ColumnCP columnInScope(Translated& input, const std::string& name);
 
   ExprCP materializeInto(
       PrecomputeProjections& precompute,
@@ -348,6 +357,17 @@ class Translator {
   Translated translateVectorSearch(
       const logical_plan::VectorSearchNode& search,
       const LpNameSet& required);
+
+  // Translates the condition of a vector search of 'joinType' over 'probe' and
+  // 'build'. Filters each input on the conjuncts that read only its columns,
+  // and returns the probe and build keys of the equalities between them,
+  // materialized as columns of the inputs.
+  std::pair<ExprVector, ExprVector> translateVectorSearchCondition(
+      const logical_plan::Expr& condition,
+      velox::core::JoinType joinType,
+      Translated& probe,
+      Translated& build);
+
   Translated translateTableWrite(
       const logical_plan::TableWriteNode& tableWrite,
       const LpNameSet& required);

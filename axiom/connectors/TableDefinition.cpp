@@ -76,6 +76,13 @@ void TableDefinitionSupport::check(const ColumnDefinition& column) const {
   }
 }
 
+void TableDefinitionSupport::check(const VectorIndexDefinition& index) const {
+  VELOX_USER_CHECK(
+      vectorIndexes,
+      "Vector indexes are not supported by this connector: {}",
+      index.name);
+}
+
 void TableDefinitionSupport::check(const TableDefinition& definition) const {
   for (const auto& column : definition.columns) {
     check(column);
@@ -87,6 +94,9 @@ void TableDefinitionSupport::check(const TableDefinition& definition) const {
   if (!definition.primaryKey.empty()) {
     VELOX_USER_CHECK(
         primaryKey, "PRIMARY KEY is not supported by this connector");
+  }
+  for (const auto& index : definition.vectorIndexes) {
+    check(index);
   }
 }
 

@@ -290,10 +290,24 @@ class Printer : public NodeVisitor {
     ctx.out << pad << "nearest: " << node.buildIndex()->name() << " to "
             << node.probeEmbedding()->name() << ", k = " << node.k() << ", "
             << velox::common::vectorindex::VectorIndexMetricName::toName(
-                   node.metric())
-            << '\n';
-    ctx.out << pad << "id: " << node.id()->name()
-            << ", score: " << node.score()->name() << '\n';
+                   node.metric());
+    if (node.numProbes().has_value()) {
+      ctx.out << ", num_probes = " << node.numProbes().value();
+    }
+    if (node.index().has_value()) {
+      ctx.out << ", index = " << node.index().value();
+    }
+    std::vector<std::string> generated;
+    if (node.id() != nullptr) {
+      generated.push_back(fmt::format("id: {}", node.id()->name()));
+    }
+    if (node.score() != nullptr) {
+      generated.push_back(fmt::format("score: {}", node.score()->name()));
+    }
+    if (!generated.empty()) {
+      ctx.out << '\n' << pad << fmt::format("{}", fmt::join(generated, ", "));
+    }
+    ctx.out << '\n';
     visitInputs(node, ctx);
   }
 

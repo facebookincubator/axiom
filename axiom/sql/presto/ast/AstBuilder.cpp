@@ -794,37 +794,83 @@ std::any AstBuilder::visitDropTable(PrestoSqlParser::DropTableContext* ctx) {
       ctx->EXISTS() != nullptr));
 }
 
-std::any AstBuilder::visitCreateVectorIndex(
-    PrestoSqlParser::CreateVectorIndexContext* ctx) {
-  trace("visitCreateVectorIndex");
+namespace {
+
+// Returns whether IF EXISTS, or IF NOT EXISTS, precedes and follows 'token' in
+// 'existsTokens': ALTER TABLE (IF EXISTS)? t ... token (IF (NOT)? EXISTS)?.
+std::pair<bool, bool> existsAround(
+    antlr4::tree::TerminalNode* token,
+    const std::vector<antlr4::tree::TerminalNode*>& existsTokens) {
+  const auto tokenIndex = token->getSymbol()->getTokenIndex();
+  bool before = false;
+  bool after = false;
+  for (const auto* exists : existsTokens) {
+    if (exists->getSymbol()->getTokenIndex() < tokenIndex) {
+      before = true;
+    } else {
+      after = true;
+    }
+  }
+  return {before, after};
+}
+
+} // namespace
+
+std::any AstBuilder::visitAddVectorIndex(
+    PrestoSqlParser::AddVectorIndexContext* ctx) {
+  trace("visitAddVectorIndex");
+  const auto [ifTableExists, ifNotExists] =
+      existsAround(ctx->VECTOR(), ctx->EXISTS());
+  return std::static_pointer_cast<Statement>(std::make_shared<AddVectorIndex>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      std::static_pointer_cast<VectorIndexDefinition>(
+          std::any_cast<std::shared_ptr<TableElement>>(
+              visit(ctx->vectorIndexDefinition()))),
+      ifTableExists,
+      ifNotExists));
+}
+
+std::any AstBuilder::visitDropVectorIndex(
+    PrestoSqlParser::DropVectorIndexContext* ctx) {
+  trace("visitDropVectorIndex");
+  const auto [ifTableExists, ifExists] =
+      existsAround(ctx->VECTOR(), ctx->EXISTS());
+  return std::static_pointer_cast<Statement>(std::make_shared<DropVectorIndex>(
+      getLocation(ctx),
+      getQualifiedName(ctx->qualifiedName()),
+      visitIdentifier(ctx->index),
+      ifTableExists,
+      ifExists));
+}
+
+std::any AstBuilder::visitRefreshVectorIndex(
+    PrestoSqlParser::RefreshVectorIndexContext* ctx) {
+  trace("visitRefreshVectorIndex");
+  return std::static_pointer_cast<Statement>(
+      std::make_shared<RefreshVectorIndex>(
+          getLocation(ctx),
+          visitIdentifier(ctx->index),
+          getQualifiedName(ctx->qualifiedName()),
+          visitExpression(ctx->booleanExpression())));
+}
+
+std::any AstBuilder::visitVectorIndexDefinition(
+    PrestoSqlParser::VectorIndexDefinitionContext* ctx) {
+  trace("visitVectorIndexDefinition");
 
   std::vector<std::shared_ptr<Property>> properties;
   if (ctx->properties() != nullptr) {
     properties = visitTyped<Property>(ctx->properties()->property());
   }
 
-  std::vector<std::shared_ptr<ColumnDefinition>> columns;
-  for (const auto& column : visitTyped<TableElement>(ctx->columnDefinition())) {
-    columns.push_back(std::static_pointer_cast<ColumnDefinition>(column));
-  }
-
-  return std::static_pointer_cast<Statement>(
-      std::make_shared<CreateVectorIndex>(
+  return std::static_pointer_cast<TableElement>(
+      std::make_shared<VectorIndexDefinition>(
           getLocation(ctx),
-          getQualifiedName(ctx->qualifiedName()),
-          std::move(columns),
-          /*notExists=*/ctx->EXISTS() != nullptr,
+          visitIdentifier(ctx->name),
+          visitIdentifier(ctx->column),
+          visitTyped<Identifier>(ctx->key),
           std::move(properties)));
-}
-
-std::any AstBuilder::visitDropVectorIndex(
-    PrestoSqlParser::DropVectorIndexContext* ctx) {
-  trace("visitDropVectorIndex");
-
-  return std::static_pointer_cast<Statement>(std::make_shared<DropVectorIndex>(
-      getLocation(ctx),
-      getQualifiedName(ctx->qualifiedName()),
-      /*exists=*/ctx->EXISTS() != nullptr));
 }
 
 std::any AstBuilder::visitInsertInto(PrestoSqlParser::InsertIntoContext* ctx) {
@@ -878,23 +924,8 @@ std::any AstBuilder::visitAddColumn(PrestoSqlParser::AddColumnContext* ctx) {
   trace("visitAddColumn");
   auto column = std::any_cast<std::shared_ptr<TableElement>>(
       visit(ctx->columnDefinition()));
-  // Grammar: ALTER TABLE (IF EXISTS)? name ADD COLUMN (IF NOT EXISTS)? col
-  // Disambiguate by position relative to COLUMN: EXISTS before COLUMN belongs
-  // to the table clause, EXISTS after COLUMN belongs to the column clause.
-  auto columnIndex = ctx->COLUMN()->getSymbol()->getTokenIndex();
-  auto existsTokens = ctx->EXISTS();
-  bool ifTableExists = std::any_of(
-      existsTokens.begin(),
-      existsTokens.end(),
-      [columnIndex](antlr4::tree::TerminalNode* node) {
-        return node->getSymbol()->getTokenIndex() < columnIndex;
-      });
-  bool ifNotExists = std::any_of(
-      existsTokens.begin(),
-      existsTokens.end(),
-      [columnIndex](antlr4::tree::TerminalNode* node) {
-        return node->getSymbol()->getTokenIndex() > columnIndex;
-      });
+  const auto [ifTableExists, ifNotExists] =
+      existsAround(ctx->COLUMN(), ctx->EXISTS());
   return std::static_pointer_cast<Statement>(std::make_shared<AddColumn>(
       getLocation(ctx),
       getQualifiedName(ctx->qualifiedName()),
@@ -1312,6 +1343,9 @@ std::any AstBuilder::visitTableElement(
   }
   if (ctx->constraintSpecification() != nullptr) {
     return visitConstraintSpecification(ctx->constraintSpecification());
+  }
+  if (ctx->vectorIndexDefinition() != nullptr) {
+    return visitVectorIndexDefinition(ctx->vectorIndexDefinition());
   }
   return visitChildren("visitTableElement", ctx);
 }

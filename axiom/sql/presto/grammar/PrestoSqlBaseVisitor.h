@@ -82,16 +82,6 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitDropVectorIndex(
-      PrestoSqlParser::DropVectorIndexContext* ctx) override {
-    return visitChildren(ctx);
-  }
-
   virtual std::any visitInsertInto(
       PrestoSqlParser::InsertIntoContext* ctx) override {
     return visitChildren(ctx);
@@ -123,6 +113,16 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
 
   virtual std::any visitAddColumn(
       PrestoSqlParser::AddColumnContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitDropVectorIndex(
+      PrestoSqlParser::DropVectorIndexContext* ctx) override {
     return visitChildren(ctx);
   }
 
@@ -187,6 +187,11 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
 
   virtual std::any visitRefreshMaterializedView(
       PrestoSqlParser::RefreshMaterializedViewContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* ctx) override {
     return visitChildren(ctx);
   }
 
@@ -386,6 +391,11 @@ class PrestoSqlBaseVisitor : public PrestoSqlVisitor {
 
   virtual std::any visitTableElement(
       PrestoSqlParser::TableElementContext* ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* ctx) override {
     return visitChildren(ctx);
   }
 

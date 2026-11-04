@@ -43,7 +43,7 @@ enum class SqlStatementKind {
   kInsert,
   kDelete,
   kDropTable,
-  kCreateVectorIndex,
+  kAddVectorIndex,
   kDropVectorIndex,
   kCreateSchema,
   kDropSchema,
@@ -93,8 +93,8 @@ class SqlStatement {
     return kind_ == SqlStatementKind::kDropTable;
   }
 
-  bool isCreateVectorIndex() const {
-    return kind_ == SqlStatementKind::kCreateVectorIndex;
+  bool isAddVectorIndex() const {
+    return kind_ == SqlStatementKind::kAddVectorIndex;
   }
 
   bool isDropVectorIndex() const {
@@ -276,10 +276,35 @@ struct ColumnDeclaration {
       const PropertyEvaluator& evaluate) const;
 };
 
+/// A vector index CREATE TABLE or ALTER TABLE ADD VECTOR INDEX declares. Its
+/// properties are unevaluated, as a table's are (see
+/// CreateTableStatement::properties()).
+struct VectorIndexDeclaration {
+  /// The index's name.
+  std::string name;
+
+  /// The column the index indexes.
+  std::string column;
+
+  /// The KEY columns. Empty without KEY.
+  std::vector<std::string> key;
+
+  /// The index's WITH properties, by name, as constant expressions.
+  folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
+      properties;
+
+  /// Returns the definition to add the index with, its properties evaluated by
+  /// 'evaluate'.
+  facebook::axiom::connector::VectorIndexDefinition definition(
+      const PropertyEvaluator& evaluate) const;
+};
+
 class CreateTableStatement : public SqlStatement {
  public:
   /// @param primaryKey The columns of PRIMARY KEY, each a column of 'columns'
   /// once. Empty without PRIMARY KEY.
+  /// @param vectorIndexes The VECTOR INDEX elements, with names unique among
+  /// them.
   CreateTableStatement(
       std::string connectorId,
       facebook::axiom::SchemaTableName tableName,
@@ -288,6 +313,7 @@ class CreateTableStatement : public SqlStatement {
       folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
           properties,
       std::vector<std::string> primaryKey,
+      std::vector<VectorIndexDeclaration> vectorIndexes,
       bool ifNotExists);
 
   const std::string& connectorId() const {
@@ -329,6 +355,10 @@ class CreateTableStatement : public SqlStatement {
     return primaryKey_;
   }
 
+  const std::vector<VectorIndexDeclaration>& vectorIndexes() const {
+    return vectorIndexes_;
+  }
+
   /// Create the table only if a table of the same name does not exist.
   bool ifNotExists() const {
     return ifNotExists_;
@@ -348,6 +378,7 @@ class CreateTableStatement : public SqlStatement {
   folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
       properties_;
   const std::vector<std::string> primaryKey_;
+  const std::vector<VectorIndexDeclaration> vectorIndexes_;
   const bool ifNotExists_;
 };
 
@@ -442,35 +473,30 @@ class DropTableStatement : public SqlStatement {
   const bool ifExists_;
 };
 
-/// CREATE VECTOR INDEX. 'columns' are the columns an INSERT into the index
-/// provides (see ConnectorMetadata::co_createVectorIndex).
-class CreateVectorIndexStatement : public SqlStatement {
+/// ALTER TABLE ADD VECTOR INDEX.
+class AddVectorIndexStatement : public SqlStatement {
  public:
-  CreateVectorIndexStatement(
+  AddVectorIndexStatement(
       std::string connectorId,
-      facebook::axiom::SchemaTableName indexName,
-      facebook::velox::RowTypePtr columns,
-      folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
-          properties,
+      facebook::axiom::SchemaTableName tableName,
+      VectorIndexDeclaration index,
+      bool ifTableExists,
       bool ifNotExists);
 
   const std::string& connectorId() const {
     return connectorId_;
   }
 
-  const facebook::axiom::SchemaTableName& indexName() const {
-    return indexName_;
+  const facebook::axiom::SchemaTableName& tableName() const {
+    return tableName_;
   }
 
-  const facebook::velox::RowTypePtr& columns() const {
-    return columns_;
+  const VectorIndexDeclaration& index() const {
+    return index_;
   }
 
-  /// Properties of the index and of its tables, unevaluated. See
-  /// CreateTableStatement::properties().
-  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>&
-  properties() const {
-    return properties_;
+  bool ifTableExists() const {
+    return ifTableExists_;
   }
 
   bool ifNotExists() const {
@@ -479,19 +505,20 @@ class CreateVectorIndexStatement : public SqlStatement {
 
  private:
   const std::string connectorId_;
-  const facebook::axiom::SchemaTableName indexName_;
-  const facebook::velox::RowTypePtr columns_;
-  const folly::F14FastMap<std::string, facebook::axiom::logical_plan::ExprPtr>
-      properties_;
+  const facebook::axiom::SchemaTableName tableName_;
+  const VectorIndexDeclaration index_;
+  const bool ifTableExists_;
   const bool ifNotExists_;
 };
 
-/// DROP VECTOR INDEX.
+/// ALTER TABLE DROP VECTOR INDEX.
 class DropVectorIndexStatement : public SqlStatement {
  public:
   DropVectorIndexStatement(
       std::string connectorId,
-      facebook::axiom::SchemaTableName indexName,
+      facebook::axiom::SchemaTableName tableName,
+      std::string name,
+      bool ifTableExists,
       bool ifExists)
       : SqlStatement(
             SqlStatementKind::kDropVectorIndex,
@@ -500,17 +527,28 @@ class DropVectorIndexStatement : public SqlStatement {
                 /*inputTables=*/{},
                 facebook::axiom::CatalogSchemaTableName{
                     connectorId,
-                    indexName}}),
+                    tableName}}),
         connectorId_{std::move(connectorId)},
-        indexName_{std::move(indexName)},
+        tableName_{std::move(tableName)},
+        name_{std::move(name)},
+        ifTableExists_{ifTableExists},
         ifExists_{ifExists} {}
 
   const std::string& connectorId() const {
     return connectorId_;
   }
 
-  const facebook::axiom::SchemaTableName& indexName() const {
-    return indexName_;
+  const facebook::axiom::SchemaTableName& tableName() const {
+    return tableName_;
+  }
+
+  /// The index's name.
+  const std::string& name() const {
+    return name_;
+  }
+
+  bool ifTableExists() const {
+    return ifTableExists_;
   }
 
   bool ifExists() const {
@@ -519,7 +557,9 @@ class DropVectorIndexStatement : public SqlStatement {
 
  private:
   const std::string connectorId_;
-  const facebook::axiom::SchemaTableName indexName_;
+  const facebook::axiom::SchemaTableName tableName_;
+  const std::string name_;
+  const bool ifTableExists_;
   const bool ifExists_;
 };
 

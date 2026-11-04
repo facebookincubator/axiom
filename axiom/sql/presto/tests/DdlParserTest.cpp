@@ -425,56 +425,96 @@ TEST_F(DdlParserTest, dropTable) {
 TEST_F(DdlParserTest, vectorIndex) {
   {
     auto statement = parseSql(
-        "CREATE VECTOR INDEX t (id BIGINT, embedding ARRAY(REAL), ds VARCHAR) "
-        "WITH (distance_metric = 'cosine', num_clusters = 10, "
-        "partitioned_by = ARRAY['ds'])");
-    ASSERT_TRUE(statement->isCreateVectorIndex());
+        "ALTER TABLE t ADD VECTOR INDEX i (embedding) KEY (id) "
+        "WITH (distance_metric = 'cosine', num_clusters = 10)");
+    ASSERT_TRUE(statement->isAddVectorIndex());
 
-    const auto* create = statement->as<CreateVectorIndexStatement>();
-    ASSERT_EQ("t", create->indexName().table);
-    VELOX_ASSERT_EQ_TYPES(
-        create->columns(),
-        ROW({
-            {"id", BIGINT()},
-            {"embedding", ARRAY(REAL())},
-            {"ds", VARCHAR()},
-        }));
-    ASSERT_FALSE(create->ifNotExists());
-
+    const auto* add = statement->as<AddVectorIndexStatement>();
+    ASSERT_EQ("t", add->tableName().table);
+    ASSERT_FALSE(add->ifTableExists());
+    ASSERT_FALSE(add->ifNotExists());
+    const auto& index = add->index();
+    ASSERT_EQ("i", index.name);
+    ASSERT_EQ("embedding", index.column);
+    ASSERT_THAT(index.key, testing::ElementsAre("id"));
     assertProperties(
-        create->properties(),
+        index.properties,
         {
             {"distance_metric", "cosine"},
             {"num_clusters", "10"},
-            {"partitioned_by", "array_constructor(ds)"},
         });
   }
 
   {
     auto statement = parseSql(
-        "CREATE VECTOR INDEX IF NOT EXISTS t (id BIGINT, e ARRAY(REAL))");
-    ASSERT_TRUE(statement->as<CreateVectorIndexStatement>()->ifNotExists());
+        "ALTER TABLE IF EXISTS t ADD VECTOR INDEX IF NOT EXISTS i (e)");
+    const auto* add = statement->as<AddVectorIndexStatement>();
+    ASSERT_TRUE(add->ifTableExists());
+    ASSERT_TRUE(add->ifNotExists());
+    ASSERT_TRUE(add->index().key.empty());
+    ASSERT_TRUE(add->index().properties.empty());
   }
 
   {
-    auto statement = parseSql("DROP VECTOR INDEX t");
+    auto statement = parseSql("ALTER TABLE t DROP VECTOR INDEX i");
     ASSERT_TRUE(statement->isDropVectorIndex());
 
     const auto* drop = statement->as<DropVectorIndexStatement>();
-    ASSERT_EQ("t", drop->indexName().table);
+    ASSERT_EQ("t", drop->tableName().table);
+    ASSERT_EQ("i", drop->name());
+    ASSERT_FALSE(drop->ifTableExists());
     ASSERT_FALSE(drop->ifExists());
 
-    ASSERT_TRUE(parseSql("DROP VECTOR INDEX IF EXISTS t")
-                    ->as<DropVectorIndexStatement>()
-                    ->ifExists());
+    statement =
+        parseSql("ALTER TABLE IF EXISTS t DROP VECTOR INDEX IF EXISTS i");
+    drop = statement->as<DropVectorIndexStatement>();
+    ASSERT_TRUE(drop->ifTableExists());
+    ASSERT_TRUE(drop->ifExists());
   }
+
+  // An index, its column and its key are named as the connector stores them:
+  // lowercase.
+  {
+    auto statement = parseSql(
+        "ALTER TABLE nation ADD VECTOR INDEX MyIndex (N_NAME) KEY (N_NATIONKEY)");
+    const auto& index = statement->as<AddVectorIndexStatement>()->index();
+    ASSERT_EQ("myindex", index.name);
+    ASSERT_EQ("n_name", index.column);
+    ASSERT_THAT(index.key, testing::ElementsAre("n_nationkey"));
+
+    statement = parseSql("ALTER TABLE nation DROP VECTOR INDEX MyIndex");
+    ASSERT_EQ("myindex", statement->as<DropVectorIndexStatement>()->name());
+  }
+
+  // CREATE TABLE declares indexes as elements.
+  {
+    auto statement = parseSql(
+        "CREATE TABLE t (Id BIGINT, Embedding ARRAY(REAL), ds VARCHAR, "
+        "VECTOR INDEX i (embedding) WITH (num_clusters = 10), "
+        "VECTOR INDEX j (EMBEDDING) KEY (id, DS))");
+    const auto& indexes =
+        statement->as<CreateTableStatement>()->vectorIndexes();
+    ASSERT_EQ(2, indexes.size());
+    ASSERT_EQ("i", indexes[0].name);
+    ASSERT_EQ("embedding", indexes[0].column);
+    ASSERT_TRUE(indexes[0].key.empty());
+    assertProperties(indexes[0].properties, {{"num_clusters", "10"}});
+    ASSERT_EQ("j", indexes[1].name);
+    ASSERT_EQ("embedding", indexes[1].column);
+    ASSERT_THAT(indexes[1].key, testing::ElementsAre("id", "ds"));
+  }
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "CREATE TABLE t (e ARRAY(REAL), VECTOR INDEX i (e), "
+          "VECTOR INDEX I (e))"),
+      "Duplicate vector index name: i");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX i ON t WHERE ds = 'x'"),
+      "REFRESH VECTOR INDEX is not supported yet: i");
 
   // 'vector' and 'index' remain usable as names.
   ASSERT_TRUE(parseSql("SELECT 1 AS vector, 2 AS index")->isSelect());
-
-  VELOX_ASSERT_THROW(
-      parseSql("CREATE VECTOR INDEX t (id BIGINT, ID ARRAY(REAL))"),
-      "Duplicate column name: id");
 }
 
 TEST_F(DdlParserTest, view) {
