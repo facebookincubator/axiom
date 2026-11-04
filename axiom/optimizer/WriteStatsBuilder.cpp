@@ -215,7 +215,6 @@ WriteStatsBuilder::WriteStatsBuilder(
       static_cast<uint32_t>(groupingKeyNames.size());
   statsMapping_.groupingKeyNames = groupingKeyNames;
   statsMapping_.hasRowCount = hasRowCount;
-  statsMapping_.setsNullPct = analyze;
 
   hasStats_ = true;
 }

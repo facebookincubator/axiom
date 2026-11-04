@@ -246,18 +246,6 @@ std::vector<std::vector<connector::ColumnStatistics>> extractPerGroupStats(
     }
   }
 
-  if (statsMapping.setsNullPct) {
-    for (size_t group = 0; group < result.size(); ++group) {
-      const auto numGroupRows = rowCounts[group];
-      for (auto& stats : result[group]) {
-        stats.nullPct = numGroupRows == 0
-            ? 0
-            : 100.0f * static_cast<float>(numGroupRows - stats.numValues) /
-                static_cast<float>(numGroupRows);
-      }
-    }
-  }
-
   return result;
 }
 

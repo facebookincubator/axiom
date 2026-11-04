@@ -1613,10 +1613,12 @@ class ConnectorMetadata {
   /// state allocated, reserved or recorded outside the handle, and nothing
   /// that needs cleanup. The handle's location is not read on this path.
   virtual ConnectorWriteHandlePtr beginWrite(
-      const ConnectorSessionPtr& session,
-      const TablePtr& table,
-      WriteKind kind,
-      bool explain);
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      [[maybe_unused]] const TablePtr& table,
+      [[maybe_unused]] WriteKind kind,
+      [[maybe_unused]] bool explain) {
+    VELOX_UNSUPPORTED();
+  }
 
   /// Describes how to delete rows selected by 'scanHandle'. 'exact' is true
   /// when the DELETE reads that scan directly, with no operator above it. This
@@ -1668,10 +1670,12 @@ class ConnectorMetadata {
   /// Empty if no stats were collected. Each ColumnStatistics has a 'name'
   /// field identifying the table column it describes. Use
   /// Table::findColumn(stats.name) to match stats to columns. ANALYZE
-  /// replaces the stored row count and the stored statistics of these
-  /// columns, and the other columns keep theirs. When an ANALYZE returns, the
-  /// next query must see the new statistics through findTable and
-  /// co_estimateStats.
+  /// replaces each group's stored row count and column statistics. Discard
+  /// statistics for columns absent from groupStats, even if the row count is
+  /// unchanged. An empty column list refreshes only row counts and grouping
+  /// columns. Derive nullPct from numValues and the group's row count, as for
+  /// writes. When an ANALYZE returns, the next query must see the new
+  /// statistics through findTable and co_estimateStats.
   virtual RowsFuture finishWrite(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorWriteHandlePtr& handle,

@@ -17,9 +17,7 @@
 #include <map>
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
-#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace axiom::sql {
@@ -29,19 +27,8 @@ using namespace facebook::axiom::connector;
 
 class AnalyzeTest : public SqlQueryRunnerTestBase {
  protected:
-  void TearDown() override {
-    SqlQueryRunnerTestBase::TearDown();
-    ConnectorMetadataRegistry::global().erase("tpch");
-    facebook::velox::connector::ConnectorRegistry::global().erase("tpch");
-  }
-
-  // Registers the tpch catalog where the runner looks catalogs up. TearDown
-  // removes it.
   void registerTpch() {
-    facebook::axiom::Connectors connectors{
-        facebook::velox::connector::ConnectorRegistry::global(),
-        ConnectorMetadataRegistry::global()};
-    connectors.registerTpchConnector("tpch");
+    runner_.connectors().registerTpchConnector("tpch");
   }
 
   TestConnectorMetadata& metadata() {
@@ -131,7 +118,7 @@ TEST_F(AnalyzeTest, publishStatisticsWithoutChangingData) {
   metadata().onFinishWrite = nullptr;
   run("ANALYZE t WITH (columns = ARRAY['b'])");
   auto second = metadata().findTable({"default", "t"});
-  EXPECT_EQ(second->findColumn("x")->stats()->numDistinct, 2);
+  EXPECT_FALSE(second->findColumn("x")->stats());
   EXPECT_EQ(second->findColumn("b")->stats()->numValues, 2);
   EXPECT_FLOAT_EQ(second->findColumn("b")->stats()->nullPct, 100.0 / 3);
   EXPECT_EQ(
@@ -189,6 +176,10 @@ TEST_F(AnalyzeTest, columns) {
       metadata().analyzedStatistics->groupStats,
       testing::ElementsAre(testing::IsEmpty()));
   EXPECT_EQ(metadata().analyzedStatistics->numRows(), 4);
+  const auto table = metadata().findTable({"default", "t"});
+  EXPECT_FALSE(table->findColumn("x")->stats());
+  EXPECT_FALSE(table->findColumn("b")->stats());
+  EXPECT_FALSE(table->findColumn("s")->stats());
 }
 
 // ANALYZE of a bucketed table reads the chosen columns where the scan produces
@@ -391,10 +382,12 @@ TEST_F(AnalyzeTest, refusedBeforeRunning) {
         Variant(false)}});
   testConnector_->addTable("v", ROW({"a"}, BIGINT()))
       ->setStats(100, {{"a", {.numDistinct = 50}}});
+  VELOX_ASSERT_USER_THROW_CODE(
+      run("ANALYZE tpch.sf1.nation"), error_code::kUnsupported, "");
+  VELOX_ASSERT_USER_THROW_CODE(
+      run("EXPLAIN ANALYZE tpch.sf1.nation"), error_code::kUnsupported, "");
   for (const auto& [table, error] :
        std::vector<std::pair<std::string, std::string>>{
-           {"tpch.sf1.nation",
-            "Unsupported write kind for connector tpch: ANALYZE"},
            {"u", "Cannot ANALYZE a table that reports no statistics: u"},
            {"v",
             "Cannot ANALYZE a table whose statistics were set without data: v"},

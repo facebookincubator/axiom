@@ -108,6 +108,9 @@ struct PartitionStats {
   // TODO: Store HLL sketches instead of NDV counts to allow for more
   // accurate aggregation across partitions.
   std::vector<ColumnStatistics> columnStats;
+
+  // Columns whose statistics do not cover this partition.
+  std::vector<std::string> unknownColumns;
 };
 
 /// A HiveTableLayout backed by local files. Implements sampling by reading

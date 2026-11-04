@@ -2799,8 +2799,8 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
   if (statsBuilder.needsMerge()) {
     result = velox::core::LocalPartitionNode::gather(
         nextId(), std::vector<velox::core::PlanNodePtr>{result});
-    result = mergeStats(
-        statsBuilder.localMergeSpec(result->outputType()), std::move(result));
+    auto spec = statsBuilder.localMergeSpec(result->outputType());
+    result = mergeStats(std::move(spec), std::move(result));
   }
 
   result =
@@ -2816,8 +2816,8 @@ velox::core::PlanNodePtr Emitter::emitInsert(const TableWrite& tableWrite) {
     result = velox::core::LocalPartitionNode::gather(
         nextId(), std::vector<velox::core::PlanNodePtr>{std::move(result)});
   }
-  return mergeStats(
-      statsBuilder.finalMergeSpec(result->outputType()), std::move(result));
+  auto spec = statsBuilder.finalMergeSpec(result->outputType());
+  return mergeStats(std::move(spec), std::move(result));
 }
 
 velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {

@@ -201,7 +201,8 @@ FilteredTableStats estimateStatsFromPartitionStats(
     }
 
     ++numMatchingPartitions;
-    merged.merge(partition.numRows, partition.columnStats);
+    merged.merge(
+        partition.numRows, partition.columnStats, partition.unknownColumns);
   }
 
   // Filter to only the requested columns and fill in missing ones.
@@ -217,6 +218,16 @@ FilteredTableStats estimateStatsFromPartitionStats(
       columnStats.push_back(
           HiveTableLayout::bucketColumnStats(numBuckets, merged.numRows));
       continue;
+    }
+    if (std::find(
+            merged.unknownColumns.begin(),
+            merged.unknownColumns.end(),
+            column->name()) != merged.unknownColumns.end()) {
+      // The API requires an aligned vector or none. Retain the row count,
+      // but do not turn an unknown column into an all-null estimate.
+      return FilteredTableStats{
+          .isKnownEmpty = !partitionStats.empty() && numMatchingPartitions == 0,
+          .numRows = merged.numRows};
     }
     auto it = statsNameToIndex.find(column->name());
     if (it != statsNameToIndex.end()) {
@@ -759,6 +770,15 @@ LocalHiveTableLayout::co_metadataCounts(
     }
     if (!matched) {
       continue;
+    }
+
+    if (partition.numRows > 0) {
+      for (const auto& name : partition.unknownColumns) {
+        if (nullCountColumnIndex.contains(name)) {
+          // Missing statistics after ANALYZE are unknown, not all-null.
+          co_return std::nullopt;
+        }
+      }
     }
 
     // Group key: partition values joined with a NUL separator. Hive partition
@@ -1574,6 +1594,7 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
     PartitionStats partitionEntry;
     partitionEntry.numRows = persistedStats->numRows;
     partitionEntry.columnStats = std::move(persistedStats->columns);
+    partitionEntry.unknownColumns = std::move(persistedStats->unknownColumns);
 
     table->incrementNumRows(partitionEntry.numRows);
 
@@ -1609,7 +1630,8 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
               PartitionStats{
                   .partitionKeys = std::move(keys),
                   .numRows = persisted.numRows,
-                  .columnStats = std::move(persisted.columns)});
+                  .columnStats = std::move(persisted.columns),
+                  .unknownColumns = std::move(persisted.unknownColumns)});
         });
   }
   // Otherwise the table is unpartitioned and has no persisted stats yet (e.g.
@@ -2172,7 +2194,10 @@ int64_t LocalHiveConnectorMetadata::replaceStatistics(
   for (size_t i = 0; i < groups.size(); ++i) {
     numRows += groups[i].numRows;
     PersistedStats::replace(
-        groups[i].directory, groups[i].numRows, std::move(groupStats[i]));
+        groups[i].directory,
+        groups[i].numRows,
+        std::move(groupStats[i]),
+        table->type()->names());
   }
 
   loadTable(table->name().table, path);

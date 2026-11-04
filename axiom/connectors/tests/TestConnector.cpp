@@ -364,11 +364,8 @@ std::shared_ptr<TestTable> TestTable::withAnalyzedStatistics(
   replacement->columnTrackers_ = columnTrackers_;
   replacement->tracksAllRows_ = tracksAllRows_;
   replacement->statsGroupingKeys_ = statsGroupingKeys_;
-  for (const auto* column : allColumns()) {
-    if (column->stats()) {
-      const_cast<Column*>(replacement->findColumn(column->name()))
-          ->setStats(std::make_unique<ColumnStatistics>(*column->stats()));
-    }
+  for (const auto* column : replacement->allColumns()) {
+    const_cast<Column*>(column)->setStats(nullptr);
   }
   for (const auto& stats : statistics) {
     auto* column = replacement->findColumn(stats.name);
@@ -1430,6 +1427,20 @@ RowsFuture TestConnectorMetadata::finishWrite(
   // ANALYZE without grouping keys has one group, with only $row_count.
   const bool ungrouped =
       groupingKeys != nullptr && groupingKeys->childrenSize() == 1;
+  if (analyze != nullptr && groupingKeys != nullptr) {
+    velox::DecodedVector rowCounts(
+        *groupingKeys->childAt(groupingKeys->childrenSize() - 1));
+    VELOX_CHECK_EQ(groupStats.size(), groupingKeys->size());
+    for (size_t i = 0; i < groupStats.size(); ++i) {
+      const auto numRows = rowCounts.valueAt<int64_t>(i);
+      for (auto& stats : groupStats[i]) {
+        stats.nullPct = numRows == 0
+            ? 0
+            : 100.0f * static_cast<float>(numRows - stats.numValues) /
+                static_cast<float>(numRows);
+      }
+    }
+  }
   if (analyze != nullptr && ungrouped) {
     const auto& name = analyze->table()->name();
     auto current = tables_.at(name);

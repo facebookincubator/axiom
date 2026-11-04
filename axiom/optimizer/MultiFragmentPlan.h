@@ -77,10 +77,6 @@ struct WriteStatsMapping {
   /// grouping keys. Set when there are grouping keys, and always for ANALYZE,
   /// which has no writer to count the rows.
   bool hasRowCount{false};
-
-  /// True for ANALYZE. Its statistics replace the stored ones, so each column
-  /// carries its null percentage, computed from the group's row count.
-  bool setsNullPct{false};
 };
 
 /// Callbacks to finalize writing to a connector after the query completes.

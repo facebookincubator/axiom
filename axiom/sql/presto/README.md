@@ -117,6 +117,7 @@ The `LogicalPlanNode` tree is wrapped in a `SqlStatement` subclass:
 | SQL | Class |
 |-----|-------|
 | SELECT | `SelectStatement` |
+| ANALYZE | `AnalyzeStatement` |
 | INSERT | `InsertStatement` |
 | CREATE TABLE | `CreateTableStatement` |
 | CREATE TABLE AS SELECT | `CreateTableAsSelectStatement` |
@@ -128,6 +129,14 @@ The `LogicalPlanNode` tree is wrapped in a `SqlStatement` subclass:
 | USE | `UseStatement` |
 
 ## Differences from Presto Java
+
+`ANALYZE table [WITH (columns = ARRAY['a', 'b'])]` scans the table and
+replaces its stored row count and column statistics. Without `columns`, it
+analyzes all visible columns; an empty array refreshes only row counts and
+statistics grouping columns. Grouping columns are always included. Statistics
+for omitted columns are discarded, even if the row count is unchanged. The
+statement returns one BIGINT column, `rows`, containing the number of rows
+analyzed. Connectors that cannot store statistics reject it before execution.
 
 ### No Separate Analysis Phase
 

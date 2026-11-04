@@ -37,6 +37,22 @@ using namespace facebook::axiom::connector;
 namespace facebook::axiom::connector::hive {
 namespace {
 
+TEST(PersistedStatsTest, legacyMissingColumnIsAllNull) {
+  const auto directory = velox::common::testutil::TempDirectoryPath::create();
+  // Older files omit unknownColumns. Missing columns there represent schema
+  // additions, so the old rows have null values for those columns.
+  std::ofstream(directory->getPath() + "/.stats")
+      << R"({"numRows":3,"columns":[]})";
+  auto stats = PersistedStats::read(directory->getPath());
+  ASSERT_TRUE(stats);
+  EXPECT_TRUE(stats->unknownColumns.empty());
+  stats->merge(2, {{.name = "added", .numValues = 2}});
+  EXPECT_EQ(stats->numRows, 5);
+  ASSERT_EQ(stats->columns.size(), 1);
+  EXPECT_EQ(stats->columns.front().numValues, 2);
+  EXPECT_TRUE(stats->unknownColumns.empty());
+}
+
 class LocalHiveConnectorMetadataTest
     : public runner::test::LocalRunnerTestBase {
  protected:
@@ -971,19 +987,18 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
         name, insertData, partitionKeys, dwio::common::FileFormat::DWRF);
   }
 
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_USER_THROW_CODE(
       metadata_->beginWrite(
-          session,
-          created,
-          WriteKind::kUpdate,
-          /*explain=*/false),
-      "Unsupported write kind for connector test-hive: UPDATE");
+          session, created, WriteKind::kUpdate, /*explain=*/false),
+      error_code::kUnsupported,
+      "");
   // Local Hive adds ANALYZE in its own beginWrite. The generic Hive metadata
   // that other Hive connectors build on refuses it.
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_USER_THROW_CODE(
       metadata_->HiveConnectorMetadata::beginWrite(
           session, created, WriteKind::kAnalyze, /*explain=*/false),
-      "Unsupported write kind for connector test-hive: ANALYZE");
+      error_code::kUnsupported,
+      "");
   VELOX_ASSERT_THROW(
       metadata_->deleteLayout(session, /*scanHandle=*/nullptr, /*exact=*/true),
       "DELETE requires a scan of the table");

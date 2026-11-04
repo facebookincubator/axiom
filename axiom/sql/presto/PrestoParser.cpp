@@ -3180,8 +3180,8 @@ SqlStatementPtr parseAnalyze(
     const std::string& defaultSchema,
     const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
         std::string_view /*sql*/)>& parseSql) {
-  const auto [connectorId, connectorTable] =
-      toConnectorTable(*analyze.tableName(), defaultConnectorId, defaultSchema);
+  const auto [connectorId, connectorTable] = toConnectorTable(
+      session, *analyze.tableName(), defaultConnectorId, defaultSchema);
 
   // Reject a missing target before planning the scan, which would otherwise
   // resolve a view of that name.

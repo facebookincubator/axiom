@@ -327,8 +327,9 @@ class TestTable : public Table {
   }
 
   /// Returns a copy of this table that shares its data and replaces the
-  /// statistics of the given columns. Code that still holds this table keeps
-  /// seeing the old statistics. No data is copied.
+  /// statistics with those of the given columns, discarding the others. Code
+  /// that still holds this table keeps seeing the old statistics. No data is
+  /// copied.
   std::shared_ptr<TestTable> withAnalyzedStatistics(
       const std::vector<ColumnStatistics>& statistics) const;
 

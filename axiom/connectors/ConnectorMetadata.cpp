@@ -165,17 +165,6 @@ ConnectorDeleteHandle::ConnectorDeleteHandle(
   VELOX_CHECK_NOT_NULL(resultType_, "Delete result type must not be null");
 }
 
-ConnectorWriteHandlePtr ConnectorMetadata::beginWrite(
-    const ConnectorSessionPtr& /*session*/,
-    const TablePtr& table,
-    WriteKind kind,
-    bool /*explain*/) {
-  VELOX_UNSUPPORTED(
-      "Unsupported write kind for connector {}: {}",
-      table->layouts().front()->connectorId(),
-      kind);
-}
-
 void MetadataCountGroup::checkConsistency() const {
   VELOX_CHECK_GE(numRows, 0, "Row count must be non-negative");
   for (const auto nulls : numNulls) {

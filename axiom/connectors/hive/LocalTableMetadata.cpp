@@ -21,6 +21,7 @@
 #include <fstream>
 
 #include <folly/Conv.h>
+#include <folly/container/F14Set.h>
 #include <folly/json.h>
 
 #include "velox/common/base/Fs.h"
@@ -76,6 +77,12 @@ folly::dynamic persistedStatsToJson(const PersistedStats& stats) {
   folly::dynamic json = folly::dynamic::object;
   json["numRows"] = stats.numRows;
   json["columns"] = std::move(columns);
+  if (!stats.unknownColumns.empty()) {
+    json["unknownColumns"] = folly::dynamic::array;
+    for (const auto& name : stats.unknownColumns) {
+      json["unknownColumns"].push_back(name);
+    }
+  }
   return json;
 }
 
@@ -113,6 +120,11 @@ PersistedStats persistedStatsFromJson(const folly::dynamic& json) {
   result.numRows = json["numRows"].asInt();
   for (const auto& colJson : json["columns"]) {
     result.columns.push_back(columnStatsFromJson(colJson));
+  }
+  if (json.count("unknownColumns")) {
+    for (const auto& name : json["unknownColumns"]) {
+      result.unknownColumns.push_back(name.asString());
+    }
   }
   return result;
 }
@@ -186,10 +198,26 @@ std::optional<int32_t> mergeAvgSizeInBytes(
 
 void PersistedStats::merge(
     uint64_t otherNumRows,
-    const std::vector<ColumnStatistics>& otherColumns) {
+    const std::vector<ColumnStatistics>& otherColumns,
+    const std::vector<std::string>& otherUnknownColumns) {
+  folly::F14FastSet<std::string> unknown;
+  if (numRows > 0) {
+    unknown.insert(unknownColumns.begin(), unknownColumns.end());
+  }
+  if (otherNumRows > 0) {
+    unknown.insert(otherUnknownColumns.begin(), otherUnknownColumns.end());
+  }
+  std::erase_if(columns, [&](const auto& column) {
+    return unknown.contains(column.name);
+  });
+  unknownColumns.assign(unknown.begin(), unknown.end());
+  std::sort(unknownColumns.begin(), unknownColumns.end());
+
   folly::F14FastMap<std::string_view, const ColumnStatistics*> unmatched;
   for (const auto& column : otherColumns) {
-    unmatched[column.name] = &column;
+    if (!unknown.contains(column.name)) {
+      unmatched[column.name] = &column;
+    }
   }
 
   for (auto& column : columns) {
@@ -253,7 +281,7 @@ void writeStatsFile(const std::string& directory, const PersistedStats& stats) {
 void PersistedStats::write(const std::string& directory, PersistedStats stats) {
   auto existing = PersistedStats::read(directory);
   if (existing.has_value()) {
-    existing->merge(stats.numRows, stats.columns);
+    existing->merge(stats.numRows, stats.columns, stats.unknownColumns);
     stats = std::move(existing.value());
   }
   writeStatsFile(directory, stats);
@@ -262,30 +290,21 @@ void PersistedStats::write(const std::string& directory, PersistedStats stats) {
 void PersistedStats::replace(
     const std::string& directory,
     uint64_t numRows,
-    std::vector<ColumnStatistics> columns) {
-  auto stats = PersistedStats::read(directory).value_or(PersistedStats{});
-  if (stats.numRows != numRows) {
-    for (auto& column : stats.columns) {
-      column.numValues = stats.numRows == 0
-          ? 0
-          : std::llround(
-                static_cast<double>(column.numValues) * numRows /
-                stats.numRows);
-      if (column.numDistinct.has_value()) {
-        column.numDistinct = std::min(*column.numDistinct, column.numValues);
-      }
-    }
-  }
-  stats.numRows = numRows;
+    std::vector<ColumnStatistics> columns,
+    const std::vector<std::string>& tableColumns) {
   for (auto& column : columns) {
-    auto it = std::find_if(
-        stats.columns.begin(), stats.columns.end(), [&](const auto& existing) {
-          return existing.name == column.name;
-        });
-    if (it == stats.columns.end()) {
-      stats.columns.push_back(std::move(column));
-    } else {
-      *it = std::move(column);
+    column.nullPct = numRows == 0
+        ? 0
+        : 100.0f * static_cast<float>(numRows - column.numValues) /
+            static_cast<float>(numRows);
+  }
+  PersistedStats stats{numRows, std::move(columns)};
+  for (const auto& name : tableColumns) {
+    if (std::none_of(
+            stats.columns.begin(),
+            stats.columns.end(),
+            [&](const auto& column) { return column.name == name; })) {
+      stats.unknownColumns.push_back(name);
     }
   }
   writeStatsFile(directory, stats);
