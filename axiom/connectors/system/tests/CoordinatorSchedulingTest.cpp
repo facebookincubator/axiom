@@ -27,8 +27,8 @@
 namespace facebook::axiom {
 namespace {
 
-using optimizer::FragmentType;
 using velox::core::PlanMatcherBuilder;
+using velox::core::StageType;
 
 // Empty providers: these plan-shape tests only resolve the table layout and
 // inspect the produced fragments; they never read query or session data.
@@ -96,7 +96,7 @@ TEST_F(CoordinatorSchedulingTest, scan) {
 
   auto matcher = PlanMatcherBuilder()
                      .tableScan("runtime.queries")
-                     .output(FragmentType::kCoordinator)
+                     .output(StageType::kCoordinator)
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
 }
@@ -113,7 +113,7 @@ TEST_F(CoordinatorSchedulingTest, globalAggregation) {
                      .partialAggregation()
                      .localGather()
                      .finalAggregation()
-                     .output(FragmentType::kCoordinator)
+                     .output(StageType::kCoordinator)
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
 }
@@ -130,7 +130,7 @@ TEST_F(CoordinatorSchedulingTest, unionWithValues) {
   auto matcher = PlanMatcherBuilder()
                      .tableScan("runtime.queries")
                      .localPartition(matchValues())
-                     .output(FragmentType::kCoordinator)
+                     .output(StageType::kCoordinator)
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
 }
@@ -150,8 +150,8 @@ TEST_F(CoordinatorSchedulingTest, unionWithRegular) {
                      .localPartition(
                          PlanMatcherBuilder()
                              .tableScan("runtime.queries")
-                             .arbitrary(FragmentType::kCoordinator))
-                     .gather(FragmentType::kSource)
+                             .arbitrary(StageType::kCoordinator))
+                     .gather(StageType::kSource)
                      .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(plan, matcher);
 }

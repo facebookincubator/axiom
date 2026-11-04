@@ -39,11 +39,10 @@ class TestConnectorQueryTest : public QueryTestBase,
       const MultiFragmentPlanPtr& plan,
       const RowTypePtr& schema,
       const std::string& tableName) {
-    EXPECT_EQ(plan->fragments().size(), 1);
-    auto executableFragment = plan->fragments().back();
-    auto fragment = executableFragment.fragment;
+    EXPECT_EQ(plan->stages().size(), 1);
+    const auto& stage = plan->stagePlan().root();
 
-    auto source = fragment.planNode;
+    auto source = stage.plan;
     auto handle = std::make_shared<core::InsertTableHandle>(
         kTestConnectorId,
         std::make_shared<connector::TestInsertTableHandle>(SchemaTableName{
@@ -60,15 +59,13 @@ class TestConnectorQueryTest : public QueryTestBase,
         velox::connector::CommitStrategy::kTaskCommit,
         source);
 
-    ExecutableFragment writeFragment(executableFragment);
-    writeFragment.fragment = core::PlanFragment(
-        write,
-        fragment.executionStrategy,
-        fragment.numSplitGroups,
-        fragment.groupedExecutionLeafNodeIds);
-    std::vector<ExecutableFragment> fragments = {writeFragment};
+    auto writeStage = stage;
+    writeStage.plan = std::move(write);
 
-    return std::make_shared<MultiFragmentPlan>(fragments, options_);
+    return std::make_shared<MultiFragmentPlan>(
+        std::vector<core::Stage>{std::move(writeStage)},
+        folly::F14FastMap<int32_t, FragmentScans>{},
+        options_);
   }
 
   const MultiFragmentPlan::Options options_{

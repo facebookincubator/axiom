@@ -18,7 +18,7 @@
 namespace facebook::axiom::optimizer {
 
 std::string PlanAndStats::toString() const {
-  if (plan->fragments().empty()) {
+  if (plan->empty()) {
     // The connector carries out the write itself, so the handle's description
     // is all there is to show.
     return finishWrite.toString();

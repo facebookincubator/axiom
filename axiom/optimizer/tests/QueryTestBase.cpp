@@ -220,12 +220,10 @@ TestResult QueryTestBase::runVelox(const core::PlanNodePtr& plan) {
   options.maxLocalPartitions = 1;
   options.queryId = fmt::format("q{}", ++gQueryCounter);
 
-  ExecutableFragment fragment{.fragmentId = 0};
-  fragment.fragment = core::PlanFragment(plan);
-
   optimizer::PlanAndStats planAndStats = {
       std::make_shared<MultiFragmentPlan>(
-          std::vector<ExecutableFragment>{std::move(fragment)},
+          std::vector<core::Stage>{{.id = 1, .plan = plan}},
+          folly::F14FastMap<int32_t, FragmentScans>{},
           std::move(options)),
   };
 
@@ -601,8 +599,8 @@ velox::core::PlanNodePtr QueryTestBase::toSingleNodePlan(
                   std::nullopt,
                   std::nullopt)
                   .plan;
-  EXPECT_EQ(1, plan->fragments().size());
-  return plan->fragments().at(0).fragment.planNode;
+  EXPECT_EQ(1, plan->stages().size());
+  return plan->stages().at(0).plan;
 }
 
 std::string QueryTestBase::getTestDataPath(const std::string& filename) {

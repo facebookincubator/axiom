@@ -888,7 +888,7 @@ TEST_P(SubfieldTest, parallelExpr) {
   auto fragmentedPlan = planVelox(logicalPlan);
 
   auto* parallelProject = core::PlanNode::findFirstNode(
-      fragmentedPlan.plan->fragments().at(0).fragment.planNode.get(),
+      fragmentedPlan.plan->stages().at(0).plan.get(),
       [](const core::PlanNode* node) {
         return node->is<core::ParallelProjectNode>();
       });

@@ -138,12 +138,12 @@ class LocalRunner : public Runner,
   /// appears before B in the sequence. It's essentially a way to arrange tasks
   /// or items with dependencies so that all prerequisites are completed before
   /// the dependent tasks.
-  const std::vector<optimizer::ExecutableFragment>& fragments() const override {
+  const std::vector<velox::core::Stage>& stages() const override {
     return fragments_;
   }
 
-  /// Returns aggregated runtime stats for each fragment in 'fragments()'.
-  /// Corresponds 1:1 to 'fragments()'. For multi-task fragments, stats from all
+  /// Returns aggregated runtime stats for each stage in 'stages()'.
+  /// Corresponds 1:1 to 'stages()'. For multi-task fragments, stats from all
   /// tasks are aggregated together. While running this is a live snapshot; once
   /// execution has been reaped and the final stats captured, it returns those.
   std::vector<velox::exec::TaskStats> stats() const override;
@@ -236,7 +236,7 @@ class LocalRunner : public Runner,
 
   const RunnerSessionPtr session_;
   const optimizer::MultiFragmentPlanPtr plan_;
-  const std::vector<optimizer::ExecutableFragment> fragments_;
+  const std::vector<velox::core::Stage> fragments_;
   optimizer::FinishWrite finishWrite_;
 
   // Runs a fixed point's orchestration separately from the executor used by

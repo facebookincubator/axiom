@@ -50,9 +50,8 @@ folly::dynamic toJson(const NodePrediction& prediction) {
 
 // How a fragment's output reaches its consumer: hash, gather, broadcast or
 // arbitrary.
-std::string_view distribution(const ExecutableFragment& producer) {
-  const auto* output =
-      producer.fragment.planNode->as<velox::core::PartitionedOutputNode>();
+std::string_view distribution(const velox::core::Stage& producer) {
+  const auto* output = producer.plan->as<velox::core::PartitionedOutputNode>();
   VELOX_CHECK_NOT_NULL(
       output, "A fragment read by an exchange ends in PartitionedOutput");
   if (output->isBroadcast()) {
@@ -67,7 +66,7 @@ std::string_view distribution(const ExecutableFragment& producer) {
 
 // The word an exchange line starts with: Shuffle for hash partitioning,
 // otherwise Gather, Broadcast or Arbitrary.
-std::string exchangeWord(const ExecutableFragment& producer) {
+std::string exchangeWord(const velox::core::Stage& producer) {
   const auto kind = distribution(producer);
   if (kind == "hash") {
     return "Shuffle";
@@ -78,7 +77,7 @@ std::string exchangeWord(const ExecutableFragment& producer) {
 }
 
 struct SummaryContext : velox::core::PlanNodeVisitorContext {
-  const ExecutableFragment* fragment{nullptr};
+  const velox::core::Stage* fragment{nullptr};
   // The estimate of the nearest node above that the summary leaves out: an
   // optimizer operator can lower to a control node under a projection, and
   // the estimate is keyed by the outermost node.
@@ -97,8 +96,8 @@ class ControlNodeVisitor : public velox::core::PlanNodeVisitor {
       const MultiFragmentPlan& plan,
       const NodePredictionMap* prediction)
       : prediction_(prediction) {
-    for (const auto& fragment : plan.fragments()) {
-      fragments_.emplace(fragment.fragmentId, &fragment);
+    for (const auto& fragment : plan.stages()) {
+      fragments_.emplace(fragment.id, &fragment);
     }
   }
 
@@ -342,7 +341,7 @@ class ControlNodeVisitor : public velox::core::PlanNodeVisitor {
   // makes it a union of them.
   virtual void visitExchange(
       const velox::core::PlanNode& node,
-      const std::vector<const ExecutableFragment*>& producers,
+      const std::vector<const velox::core::Stage*>& producers,
       const NodePrediction* estimate,
       SummaryContext& ctx) const = 0;
 
@@ -364,7 +363,7 @@ class ControlNodeVisitor : public velox::core::PlanNodeVisitor {
       const NodePrediction* estimate,
       SummaryContext& ctx) const = 0;
 
-  const ExecutableFragment& fragment(int32_t id) const {
+  const velox::core::Stage& fragment(int32_t id) const {
     return *fragments_.at(id);
   }
 
@@ -401,17 +400,17 @@ class ControlNodeVisitor : public velox::core::PlanNodeVisitor {
   }
 
   void exchange(const velox::core::PlanNode& node, Ctx& ctx) const {
-    std::vector<const ExecutableFragment*> producers;
-    for (const auto& input : summary(ctx).fragment->inputStages) {
-      if (input.consumerNodeId == node.id()) {
-        producers.push_back(&fragment(input.producerFragmentId));
+    std::vector<const velox::core::Stage*> producers;
+    for (const auto& input : summary(ctx).fragment->inputs) {
+      if (input.exchangeId == node.id()) {
+        producers.push_back(&fragment(input.producerStageId));
       }
     }
     visitExchange(node, producers, estimate(node, ctx), summary(ctx));
   }
 
   const NodePredictionMap* prediction_;
-  folly::F14FastMap<int32_t, const ExecutableFragment*> fragments_;
+  folly::F14FastMap<int32_t, const velox::core::Stage*> fragments_;
 };
 
 folly::dynamic jsonNode(
@@ -431,12 +430,12 @@ class JsonTreeVisitor : public ControlNodeVisitor {
  public:
   using ControlNodeVisitor::ControlNodeVisitor;
 
-  folly::dynamic tree(const ExecutableFragment& fragment) const {
+  folly::dynamic tree(const velox::core::Stage& fragment) const {
     folly::dynamic nodes = folly::dynamic::array;
     SummaryContext ctx;
     ctx.fragment = &fragment;
     ctx.nodes = &nodes;
-    fragment.fragment.planNode->accept(*this, ctx);
+    fragment.plan->accept(*this, ctx);
     return nodes;
   }
 
@@ -476,7 +475,7 @@ class JsonTreeVisitor : public ControlNodeVisitor {
 
   void visitExchange(
       const velox::core::PlanNode& node,
-      const std::vector<const ExecutableFragment*>& producers,
+      const std::vector<const velox::core::Stage*>& producers,
       const NodePrediction* estimate,
       SummaryContext& ctx) const override {
     folly::dynamic legs = folly::dynamic::array;
@@ -484,7 +483,7 @@ class JsonTreeVisitor : public ControlNodeVisitor {
       auto leg = jsonNode(
           node, "Exchange", producers.size() == 1 ? estimate : nullptr);
       leg["distribution"] = distribution(*producer);
-      leg["producerFragmentId"] = producer->fragmentId;
+      leg["producerFragmentId"] = producer->id;
       legs.push_back(std::move(leg));
     }
     if (producers.size() == 1) {
@@ -556,9 +555,9 @@ std::string withCommas(int64_t value) {
 // A fragment's type and, where the plan fixes it, how many workers run it,
 // e.g. `FIXED, 4 workers`. A SOURCE fragment runs on as many workers as its
 // splits need, which planning does not decide.
-std::string fragmentKind(const ExecutableFragment& fragment) {
-  const auto type = FragmentTypeName::toName(fragment.type);
-  if (fragment.type == FragmentType::kSingle) {
+std::string fragmentKind(const velox::core::Stage& fragment) {
+  const auto type = velox::core::StageTypeName::toName(fragment.type);
+  if (fragment.type == velox::core::StageType::kSingle) {
     return fmt::format("{}, 1 worker", type);
   }
   if (fragment.numRemotePartitions.has_value()) {
@@ -578,11 +577,11 @@ class TextVisitor : public ControlNodeVisitor {
  public:
   using ControlNodeVisitor::ControlNodeVisitor;
 
-  void write(const ExecutableFragment& fragment, size_t depth) const {
+  void write(const velox::core::Stage& fragment, size_t depth) const {
     SummaryContext ctx;
     ctx.fragment = &fragment;
     ctx.depth = depth;
-    fragment.fragment.planNode->accept(*this, ctx);
+    fragment.plan->accept(*this, ctx);
   }
 
   std::string text() const {
@@ -631,7 +630,7 @@ class TextVisitor : public ControlNodeVisitor {
 
   void visitExchange(
       const velox::core::PlanNode& /*node*/,
-      const std::vector<const ExecutableFragment*>& producers,
+      const std::vector<const velox::core::Stage*>& producers,
       const NodePrediction* estimate,
       SummaryContext& ctx) const override {
     size_t depth = ctx.depth;
@@ -646,9 +645,9 @@ class TextVisitor : public ControlNodeVisitor {
       add(fmt::format(
               "{} F{} ({}) → F{}",
               exchangeWord(*producer),
-              producer->fragmentId,
+              producer->id,
               fragmentKind(*producer),
-              ctx.fragment->fragmentId),
+              ctx.fragment->id),
           producers.size() == 1 ? estimate : nullptr,
           legCtx);
       write(*producer, depth + 1);
@@ -721,33 +720,33 @@ class TextVisitor : public ControlNodeVisitor {
 folly::dynamic toGraph(
     const MultiFragmentPlan& plan,
     const NodePredictionMap* prediction) {
-  // InputStage names the producer, so invert the edges once to find each
+  // A StageInput names the producer, so invert the edges once to find each
   // fragment's consumer.
   folly::F14FastMap<int32_t, int32_t> consumerOf;
-  for (const auto& fragment : plan.fragments()) {
-    for (const auto& input : fragment.inputStages) {
-      consumerOf[input.producerFragmentId] = fragment.fragmentId;
+  for (const auto& fragment : plan.stages()) {
+    for (const auto& input : fragment.inputs) {
+      consumerOf[input.producerStageId] = fragment.id;
     }
   }
 
   const JsonTreeVisitor treeVisitor{plan, prediction};
   folly::dynamic fragments = folly::dynamic::array;
-  for (const auto& fragment : plan.fragments()) {
+  for (const auto& fragment : plan.stages()) {
     folly::dynamic entry = folly::dynamic::object;
-    entry["id"] = fragment.fragmentId;
-    entry["type"] = std::string{FragmentTypeName::toName(fragment.type)};
+    entry["id"] = fragment.id;
+    entry["type"] =
+        std::string{velox::core::StageTypeName::toName(fragment.type)};
     if (fragment.numRemotePartitions.has_value()) {
       entry["numRemotePartitions"] = fragment.numRemotePartitions.value();
     }
 
     entry["tree"] = treeVisitor.tree(fragment);
 
-    if (const auto* output = fragment.fragment.planNode
-                                 ->as<velox::core::PartitionedOutputNode>()) {
+    if (const auto* output =
+            fragment.plan->as<velox::core::PartitionedOutputNode>()) {
       folly::dynamic outputEntry = folly::dynamic::object;
       outputEntry["nodeId"] = output->id();
-      if (auto it = consumerOf.find(fragment.fragmentId);
-          it != consumerOf.end()) {
+      if (auto it = consumerOf.find(fragment.id); it != consumerOf.end()) {
         outputEntry["consumerFragmentId"] = it->second;
       }
       entry["output"] = std::move(outputEntry);
@@ -763,15 +762,15 @@ std::string toText(
     const MultiFragmentPlan& plan,
     const NodePredictionMap* prediction) {
   folly::F14FastSet<int32_t> producers;
-  for (const auto& fragment : plan.fragments()) {
-    for (const auto& input : fragment.inputStages) {
-      producers.insert(input.producerFragmentId);
+  for (const auto& fragment : plan.stages()) {
+    for (const auto& input : fragment.inputs) {
+      producers.insert(input.producerStageId);
     }
   }
 
   const TextVisitor visitor{plan, prediction};
-  for (const auto& fragment : plan.fragments()) {
-    if (!producers.contains(fragment.fragmentId)) {
+  for (const auto& fragment : plan.stages()) {
+    if (!producers.contains(fragment.id)) {
       visitor.write(fragment, 0);
     }
   }

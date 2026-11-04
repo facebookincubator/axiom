@@ -8,8 +8,8 @@ The optimizer's role is to decide where exchanges go, what partitioning each exc
 
 **Implementation status.** Sections 1 and 2 describe the fragment and exchange model that is in place today, with two exceptions called out where they appear:
 
-- **`kCoordinator` fragments and SystemConnector isolation** are not yet implemented. Section 1 (UNION ALL with single-task inputs) and Section 2 (`FragmentType::kCoordinator`) describe the intended behavior.
-- **Grouped execution** (Section 3) is partially implemented. The shuffle-avoidance path is in place: the `PartitionType` API, the `groupedNodes` field on `ExecutableFragment`, split-level `remotePartition` tagging, and `scaleDown` to a `kFixed` fragment whose tasks are routed by `remotePartition`. The full per-group-processing path — `GroupedSplitSource` (complete groups in order) and the `groupedExecution` flag that clears hash tables between groups — is not yet implemented.
+- **`kCoordinator` fragments and SystemConnector isolation** are not yet implemented. Section 1 (UNION ALL with single-task inputs) and Section 2 (`StageType::kCoordinator`) describe the intended behavior.
+- **Grouped execution** (Section 3) is partially implemented. The shuffle-avoidance path is in place: the `PartitionType` API, the `groupedNodes` field of `FragmentScans`, split-level `remotePartition` tagging, and `scaleDown` to a `kFixed` fragment whose tasks are routed by `remotePartition`. The full per-group-processing path — `GroupedSplitSource` (complete groups in order) and the `groupedExecution` flag that clears hash tables between groups — is not yet implemented.
 
 ### 1. Fragment Structure and Scheduling Constraints
 
@@ -191,44 +191,48 @@ For the full UNION ALL fragment-placement rules — co-location decisions, per-l
 
 ### 2. Runtime Contract: Task Creation and Data Wiring
 
-The runtime receives a `MultiFragmentPlan` — a list of
-`ExecutableFragment`s linked by `inputStages`. For each fragment, the
-runtime must decide how many tasks to create, how to wire data between
-producer and consumer tasks, and how to distribute splits to leaf
-fragments.
+The runtime receives a `MultiFragmentPlan` — a
+`velox::core::MultiStagePlan` of `Stage`s linked by their `inputs`, plus what
+Axiom adds about reading each stage's scans (`FragmentScans`). For each stage,
+the runtime must decide how many tasks to create, how to wire data between
+producer and consumer tasks, and how to distribute splits to leaf stages. A
+stage holds only a plan node: the runtime builds each task's `PlanFragment`
+from it, with per-task settings such as `taskUniqueId`.
 
 ```cpp
-// Links an ExchangeNode in the consumer to its producer fragment.
-struct InputStage {
-    /// ExchangeNode in the consumer fragment.
-    velox::core::PlanNodeId consumerNodeId;
-    /// Identifies the producer fragment.
-    int32_t producerFragmentId;
+// Links an ExchangeNode in the consumer to its producer stage.
+struct StageInput {
+    /// ExchangeNode in the consumer stage.
+    velox::core::PlanNodeId exchangeId;
+    /// Identifies the producer stage.
+    int32_t producerStageId;
 };
 
-/// Determines how the runtime decides the task count for a fragment.
-enum class FragmentType {
+/// Determines how the runtime decides the task count for a stage.
+enum class StageType {
     kSource,       /// Task count driven by splits at runtime.
     kFixed,        /// Exactly 'numRemotePartitions' tasks.
     kSingle,       /// Exactly 1 task, any worker.
     kCoordinator,  /// Exactly 1 task, on coordinator.
 };
 
-struct ExecutableFragment {
-    /// Identifies the fragment within its plan.
-    int32_t fragmentId;
-    FragmentType type;
+struct Stage {
+    /// Identifies the stage within its plan.
+    int32_t id;
+    StageType type;
     /// Required for kFixed, optional hint for kSource, nullopt otherwise.
     std::optional<int32_t> numRemotePartitions;
-    velox::core::PlanFragment fragment;
-    std::vector<InputStage> inputStages;
-    /// See Section 3 for grouped execution fields.
+    velox::core::PlanNodePtr plan;
+    std::vector<StageInput> inputs;
 };
+
+/// Validates its stages when built; the root is the stage no stage reads.
+class MultiStagePlan;
 ```
 
 #### Task count
 
-The runtime determines task count based on `FragmentType`:
+The runtime determines task count based on `StageType`:
 
 - **kFixed** — create exactly `numRemotePartitions` tasks. The optimizer
   guarantees that all hash-partitioned exchange inputs into this fragment use
@@ -254,8 +258,8 @@ The runtime determines task count based on `FragmentType`:
 
 #### Data wiring
 
-Each `InputStage` in a consumer fragment identifies an `ExchangeNode` (by
-plan node ID) and a producer fragment (by id). The runtime must
+Each `StageInput` in a consumer stage identifies an `ExchangeNode` (by
+plan node ID) and a producer stage (by id). The runtime must
 connect producer tasks to consumer tasks so that data flows correctly.
 
 The producer fragment's root node is always a `PartitionedOutputNode`.
@@ -336,8 +340,8 @@ The FINAL aggregation lives in the same fragment as the UNION ALL because A6 (kS
 ### 3. Grouped Execution (Bucketed Tables)
 
 > **Status (2026-07-31): partially implemented.** The shuffle-avoidance
-> path is in place — the `PartitionType` API, the `groupedNodes` field on
-> `ExecutableFragment`, split-level `remotePartition` tagging, and `scaleDown`
+> path is in place — the `PartitionType` API, the `groupedNodes` field of
+> `FragmentScans`, split-level `remotePartition` tagging, and `scaleDown`
 > to a `kFixed` fragment routed by `remotePartition` (see "Shuffle avoidance without
 > per-group processing" below). The full per-group-processing path described
 > in this section — `GroupedSplitSource` / `co_getGroups` and the
@@ -392,26 +396,28 @@ tables), the non-bucketed side goes through a hash-partitioned
 exchange compatible with the bucketing. The fragment processes
 exchange partitions and scan splits together in groups.
 
-#### ExecutableFragment extensions
+#### FragmentScans
 
-Grouped execution adds two fields to `ExecutableFragment`:
+Grouped execution is described per stage in Axiom's `FragmentScans`, which
+`MultiFragmentPlan::scans(stageId)` returns:
 
 ```cpp
-struct ExecutableFragment {
-    // ... base fields from Section 2 ...
-
+struct FragmentScans {
     /// Per-node PartitionType for grouped leaf nodes. Scan nodes
     /// carry the PartitionType passed to getGroupedSplitSource /
     /// getSplitSource — the connector uses it to compute group IDs.
     /// Exchange nodes have nullptr (their partitions are already
     /// aligned with groups by construction). Empty when not grouped.
-    std::unordered_map<
+    folly::F14FastMap<
         velox::core::PlanNodeId,
         std::shared_ptr<PartitionType>> groupedNodes;
 
-    /// When true, the runtime processes one group at a time and clears
-    /// hash tables between groups. When false, all groups are processed
-    /// at once (shuffle avoidance only, no memory reduction).
+    /// Sample percentage per scan node for TABLESAMPLE SYSTEM.
+    folly::F14FastMap<velox::core::PlanNodeId, double> sampledScans;
+
+    /// Planned. When true, the runtime processes one group at a time and
+    /// clears hash tables between groups. When false, all groups are
+    /// processed at once (shuffle avoidance only, no memory reduction).
     /// Only meaningful when groupedNodes is non-empty.
     bool groupedExecution{false};
 };

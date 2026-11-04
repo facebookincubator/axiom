@@ -160,8 +160,8 @@ velox::core::PlanNodePtr HiveQueriesTestBase::toSingleNodePlan(
                   {.maxRemotePartitions = 1, .maxLocalPartitions = numDrivers})
                   .plan;
 
-  EXPECT_EQ(1, plan->fragments().size());
-  return plan->fragments().at(0).fragment.planNode;
+  EXPECT_EQ(1, plan->stages().size());
+  return plan->stages().at(0).plan;
 }
 
 void HiveQueriesTestBase::checkResults(

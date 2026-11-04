@@ -31,8 +31,11 @@ class EmitPass {
  public:
   /// Output of `run`.
   struct Result {
-    /// The plan's fragments, root fragment last.
-    std::vector<ExecutableFragment> fragments;
+    /// The plan's stages, root stage last; empty when the connector carries
+    /// out a write itself.
+    std::vector<velox::core::Stage> stages;
+    /// What the scans of each stage need, for the stages that need anything.
+    folly::F14FastMap<int32_t, FragmentScans> scans;
     /// Set when the plan writes a table; empty otherwise.
     FinishWrite finishWrite;
     /// Per-node estimates, keyed by emitted `PlanNodeId`, for EXPLAIN. Empty

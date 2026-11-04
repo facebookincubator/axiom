@@ -52,21 +52,21 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
 
   velox::core::PlanNodePtr shuffleBroadcastResult() override;
 
-  /// Returns the planned fragments. The builder will be empty after this. This
+  /// Returns the planned stages. The builder will be empty after this. This
   /// is only called on the root builder.
-  std::vector<optimizer::ExecutableFragment> fragments();
+  std::vector<velox::core::Stage> stages();
 
   optimizer::MultiFragmentPlanPtr build();
 
  private:
   void newFragment(std::optional<int32_t> numRemotePartitions = std::nullopt);
 
-  void appendFragments(std::vector<optimizer::ExecutableFragment> fragments);
+  void appendFragments(std::vector<velox::core::Stage> fragments);
 
   void addExchange(
       const velox::RowTypePtr& producerType,
-      int32_t producerFragmentId,
-      optimizer::ExecutableFragment& fragment);
+      int32_t producerStageId,
+      velox::core::Stage& fragment);
 
   const optimizer::MultiFragmentPlan::Options& options_;
 
@@ -84,11 +84,11 @@ class DistributedPlanBuilder : public velox::exec::test::PlanBuilder {
 
   // The fragment being built. Will be moved to the root builder's 'fragments_'
   // when complete.
-  std::unique_ptr<optimizer::ExecutableFragment> current_;
+  std::unique_ptr<velox::core::Stage> current_;
 
   // The fragments gathered under this builder. Moved to the root builder when
   // returning the subplan.
-  std::vector<optimizer::ExecutableFragment> fragments_;
+  std::vector<velox::core::Stage> fragments_;
 };
 
 } // namespace facebook::axiom::runner::test

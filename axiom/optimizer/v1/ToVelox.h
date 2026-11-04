@@ -36,7 +36,7 @@ struct OutputColumnNameMapping {
 };
 
 /// Per-fragment leaf-PartitionType maps produced by the optimizer and consumed
-/// by ToVelox to populate ExecutableFragment::groupedNodes.
+/// by ToVelox to populate FragmentScans::groupedNodes.
 struct GroupedLeavesBundle {
   /// One entry per Repartition (fragment boundary).
   folly::F14FastMap<const Repartition*, GroupedLeaves> perRepartition;
@@ -171,116 +171,116 @@ class ToVelox {
   // Makes a Velox UnnestNode for a RelationOp.
   velox::core::PlanNodePtr makeUnnest(
       const Unnest& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes a Velox AggregationNode for a RelationOp.
   velox::core::PlanNodePtr makeAggregation(
       const Aggregation& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes partial + final order by fragments for order by with and without
   // limit.
   velox::core::PlanNodePtr makeOrderBy(
       const OrderBy& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes partial + final limit fragments.
   velox::core::PlanNodePtr makeLimit(
       const Limit& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // @pre op.sNoLimit() is true.
   velox::core::PlanNodePtr makeOffset(
       const Limit& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeScan(
       const TableScan& scan,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Joins 'scan's probe-side input to 'lookupSource' by index lookup. Only
   // called for a TableScan carrying lookup keys.
   velox::core::PlanNodePtr makeIndexLookupJoin(
       const TableScan& scan,
       const velox::core::TableScanNodePtr& lookupSource,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeFilter(
       const Filter& filter,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeProject(
       const Project& project,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeJoin(
       const Join& join,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeRepartition(
       const Repartition& repartition,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages,
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages,
       std::shared_ptr<velox::core::ExchangeNode>& exchange);
 
   // Makes a union all with a mix of remote and local inputs. Combines all
   // remote inputs into one ExchangeNode.
   velox::core::PlanNodePtr makeUnionAll(
       const UnionAll& unionAll,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeValues(
       const Values& values,
-      ExecutableFragment& fragment);
+      velox::core::Stage& fragment);
 
   velox::core::PlanNodePtr makeWrite(
       const TableWrite& write,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeEnforceSingleRow(
       const EnforceSingleRow& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeAssignUniqueId(
       const AssignUniqueId& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   velox::core::PlanNodePtr makeEnforceDistinct(
       const EnforceDistinct& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes a Velox WindowNode for a RelationOp.
   velox::core::PlanNodePtr makeWindow(
       const Window& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes a Velox RowNumberNode for a RelationOp.
   velox::core::PlanNodePtr makeRowNumber(
       const RowNumber& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes a Velox TopNRowNumberNode for a RelationOp.
   velox::core::PlanNodePtr makeTopNRowNumber(
       const TopNRowNumber& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Adds a ProjectNode to trim extra columns from 'input' if it has more
   // columns than 'inputOp' expects. A scan with a rejected filter emits the
@@ -297,8 +297,8 @@ class ToVelox {
   velox::core::PlanNodePtr makeWindowInput(
       const RelationOp& op,
       const ExprVector& partitionKeys,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Converts a single WindowFunction to a Velox WindowNode::Function.
   velox::core::WindowNode::Function toVeloxWindowFunction(
@@ -308,25 +308,25 @@ class ToVelox {
   // Makes a Velox MarkDistinctNode for a RelationOp.
   velox::core::PlanNodePtr makeMarkDistinct(
       const MarkDistinct& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Converts a GroupId operator to a Velox GroupIdNode.
   velox::core::PlanNodePtr makeGroupId(
       const GroupId& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Makes a tree of PlanNode for a tree of
   // RelationOp. 'fragment' is the fragment that 'op'
   // belongs to. If op or children are repartitions then the
   // source of each makes a separate fragment. These
   // fragments are referenced from 'fragment' via
-  // 'inputStages' and are returned in 'stages'.
+  // 'inputs' and are returned in 'stages'.
   velox::core::PlanNodePtr makeFragment(
       const RelationOpPtr& op,
-      ExecutableFragment& fragment,
-      std::vector<ExecutableFragment>& stages);
+      velox::core::Stage& fragment,
+      std::vector<velox::core::Stage>& stages);
 
   // Records the prediction for 'node' and a history key to update history
   // after the plan is executed.
@@ -352,7 +352,7 @@ class ToVelox {
       const TableScan& scan,
       const velox::core::PlanNodePtr& scanNode);
 
-  ExecutableFragment newFragment();
+  velox::core::Stage newFragment();
 
   // TODO: Move this into MultiFragmentPlan::Options.
   const std::string exchangeSerdeKind_{
@@ -395,6 +395,9 @@ class ToVelox {
   // Serial number for stages in executable plan.
   int32_t stageCounter_{0};
 
+  // What the scans of each stage made so far need, by stage id.
+  folly::F14FastMap<int32_t, FragmentScans> scans_;
+
   const std::optional<std::string> subscript_;
   const std::optional<std::string> elementAt_;
 
@@ -406,12 +409,12 @@ class ToVelox {
   std::optional<velox::core::ColumnStatsSpec> finalMergeSpec_;
 
   // Translates 'groupedLeaves' (keyed by const RelationOp*) into entries in
-  // 'fragment.groupedNodes' (keyed by Velox PlanNodeId) using
+  // 'fragment's groupedNodes (keyed by Velox PlanNodeId) using
   // 'relationOpToNodeId_'. After translation, if any non-null PartitionType
   // entry is present, sets fragment.type = kFixed and
   // fragment.numRemotePartitions = numPartitions().
   void applyGroupedLeaves(
-      ExecutableFragment& fragment,
+      velox::core::Stage& fragment,
       const GroupedLeaves& groupedLeaves);
 
   // RelationOp identity → minted Velox PlanNodeId. Cleared at the top of

@@ -488,8 +488,9 @@ Literal* tryFoldConstantDt(DerivedTableP dt) {
 
   auto veloxPlan = toVelox.toVeloxPlan(
       plan, MultiFragmentPlan::Options::singleNode(), {}, {});
-  VELOX_CHECK_EQ(1, veloxPlan.plan->fragments().size());
-  const auto& fragment = veloxPlan.plan->fragments().front().fragment;
+  VELOX_CHECK_EQ(1, veloxPlan.plan->stages().size());
+  const velox::core::PlanFragment fragment{
+      veloxPlan.plan->stagePlan().root().plan};
   ConstantPlanRunner constantPlanRunner{optimization->veloxQueryCtx()};
   const auto& type = fragment.planNode->outputType()->childAt(0);
   auto value = constantPlanRunner.runScalar(fragment);

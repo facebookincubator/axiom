@@ -197,7 +197,7 @@ class Optimization {
   /// Per-Repartition map from leaf RelationOp to its scaled-down
   /// PartitionType, captured at fragment commit. ToVelox reads it at
   /// makeRepartition emission to populate the producer
-  /// ExecutableFragment::groupedNodes.
+  /// FragmentScans::groupedNodes.
   folly::F14FastMap<const Repartition*, GroupedLeaves>&
   repartitionGroupedLeaves() {
     return repartitionGroupedLeaves_;
@@ -502,7 +502,7 @@ class Optimization {
 
   // Per-Repartition map from leaf RelationOp to its scaled-down PartitionType,
   // committed at every make<Repartition>. Consumed by ToVelox at Repartition
-  // emission to populate the producer ExecutableFragment::groupedNodes.
+  // emission to populate the producer FragmentScans::groupedNodes.
   folly::F14FastMap<const Repartition*, GroupedLeaves>
       repartitionGroupedLeaves_;
 

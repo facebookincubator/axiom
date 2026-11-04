@@ -42,32 +42,32 @@ void markFinished(ExecutionStats& stats) {
 
 std::vector<QueryProgressBuilder::StageTopology>
 QueryProgressBuilder::toStageTopology(
-    const std::vector<optimizer::ExecutableFragment>& fragments) {
-  // Map each fragment id to its index so the exchange inputs, which name a
+    const std::vector<velox::core::Stage>& stages) {
+  // Map each stage id to its index so the exchange inputs, which name a
   // producer by id, resolve to stage indexes.
   folly::F14FastMap<int32_t, int32_t> indexById;
-  indexById.reserve(fragments.size());
-  for (size_t i = 0; i < fragments.size(); ++i) {
-    indexById.emplace(fragments[i].fragmentId, static_cast<int32_t>(i));
+  indexById.reserve(stages.size());
+  for (size_t i = 0; i < stages.size(); ++i) {
+    indexById.emplace(stages[i].id, static_cast<int32_t>(i));
   }
 
-  std::vector<StageTopology> stages;
-  stages.reserve(fragments.size());
-  for (size_t i = 0; i < fragments.size(); ++i) {
+  std::vector<StageTopology> topology;
+  topology.reserve(stages.size());
+  for (size_t i = 0; i < stages.size(); ++i) {
     StageTopology stage;
-    for (const auto& input : fragments[i].inputStages) {
-      const auto it = indexById.find(input.producerFragmentId);
-      // Every exchange input must resolve to a known producer fragment.
+    for (const auto& input : stages[i].inputs) {
+      const auto it = indexById.find(input.producerStageId);
+      // Every exchange input must resolve to a known producer stage.
       VELOX_CHECK(
           it != indexById.end(),
-          "Exchange input names an unknown producer fragment. stage: {}, fragment id: {}",
+          "Exchange input names an unknown producer stage. stage: {}, producer id: {}",
           i,
-          input.producerFragmentId);
+          input.producerStageId);
       stage.producers.push_back(it->second);
     }
-    stages.push_back(std::move(stage));
+    topology.push_back(std::move(stage));
   }
-  return stages;
+  return topology;
 }
 
 QueryProgress QueryProgressBuilder::computeProgress(

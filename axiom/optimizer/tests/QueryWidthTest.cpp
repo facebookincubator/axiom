@@ -56,13 +56,11 @@ class QueryWidthTest : public test::HiveQueriesTestBase {
     return result.plan->options().maxRemotePartitions;
   }
 
-  // Task counts of the plan's hash-partitioned stages, after checking that
-  // every producer partitions to its consumer's count.
+  // Task counts of the plan's hash-partitioned stages.
   static std::vector<int32_t> hashStageWidths(const PlanAndStats& result) {
-    result.plan->checkConsistency(/*mayBeEmpty=*/false);
     std::vector<int32_t> widths;
-    for (const auto& fragment : result.plan->fragments()) {
-      if (fragment.type == FragmentType::kFixed) {
+    for (const auto& fragment : result.plan->stages()) {
+      if (fragment.type == velox::core::StageType::kFixed) {
         widths.push_back(fragment.numRemotePartitions.value());
       }
     }

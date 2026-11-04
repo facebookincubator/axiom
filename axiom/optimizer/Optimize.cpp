@@ -321,9 +321,7 @@ PlanAndStats Optimizer::optimize(
 
   PlanAndStats result;
   result.plan = std::make_shared<MultiFragmentPlan>(
-      std::move(emitted.fragments), planOptions_);
-  result.plan->checkConsistency(
-      /*mayBeEmpty=*/plan_.is(logical_plan::NodeKind::kTableWrite));
+      std::move(emitted.stages), std::move(emitted.scans), planOptions_);
   result.finishWrite = std::move(emitted.finishWrite);
   result.prediction = std::move(emitted.prediction);
 
@@ -332,7 +330,7 @@ PlanAndStats Optimizer::optimize(
   // is exempt.
   if (!plan_.is(logical_plan::NodeKind::kTableWrite)) {
     const auto& veloxOutput =
-        result.plan->fragments().back().fragment.planNode->outputType();
+        result.plan->stagePlan().root().plan->outputType();
     VELOX_CHECK(
         veloxOutput->equivalent(*plan_.outputType()),
         "Plan output type does not match the logical plan output type: {} vs {}",

@@ -39,40 +39,34 @@ class MultiFragmentPlanTest : public testing::Test {
             ROW("a", BIGINT()), 1, pool_.get())});
   }
 
-  core::PlanFragment values() {
-    return core::PlanFragment(startValues().planNode());
+  core::PlanNodePtr values() {
+    return startValues().planNode();
   }
 
-  core::PlanFragment partitionedOutput(int32_t numPartitions) {
-    return core::PlanFragment(
-        startValues().partitionedOutput({"a"}, numPartitions).planNode());
+  core::PlanNodePtr partitionedOutput(int32_t numPartitions) {
+    return startValues().partitionedOutput({"a"}, numPartitions).planNode();
   }
 
-  core::PlanFragment broadcastOutput() {
-    return core::PlanFragment(
-        startValues().partitionedOutputBroadcast().planNode());
+  core::PlanNodePtr exchange() {
+    return PlanBuilder(idGenerator_)
+        .exchange(
+            ROW("a", BIGINT()),
+            VectorSerde::kindName(VectorSerde::Kind::kPresto))
+        .planNode();
   }
 
-  core::PlanFragment exchange() {
-    return core::PlanFragment(
-        PlanBuilder(idGenerator_)
-            .exchange(
-                ROW("a", BIGINT()),
-                VectorSerde::kindName(VectorSerde::Kind::kPresto))
-            .planNode());
-  }
-
-  // Creates a single-fragment plan with the given type.
+  // Creates a single-stage plan with the given type.
   MultiFragmentPlan makeSingleFragmentPlan(
-      FragmentType type,
+      velox::core::StageType type,
       std::optional<int32_t> numRemotePartitions = std::nullopt,
       const MultiFragmentPlan::Options& options = defaultOptions()) {
-    ExecutableFragment fragment;
-    fragment.fragmentId = 1;
-    fragment.type = type;
-    fragment.numRemotePartitions = numRemotePartitions;
-    fragment.fragment = values();
-    return MultiFragmentPlan({std::move(fragment)}, options);
+    return MultiFragmentPlan(
+        {{.id = 1,
+          .type = type,
+          .numRemotePartitions = numRemotePartitions,
+          .plan = values()}},
+        {},
+        options);
   }
 
   static MultiFragmentPlan::Options defaultOptions() {
@@ -90,260 +84,103 @@ class MultiFragmentPlanTest : public testing::Test {
 };
 
 TEST_F(MultiFragmentPlanTest, validSingleFragment) {
-  auto plan = makeSingleFragmentPlan(
-      FragmentType::kSource,
+  EXPECT_NO_THROW(makeSingleFragmentPlan(
+      velox::core::StageType::kSource,
       std::nullopt,
-      MultiFragmentPlan::Options::singleNode());
-  EXPECT_NO_THROW(plan.checkConsistency(/*mayBeEmpty=*/false));
+      MultiFragmentPlan::Options::singleNode()));
 }
 
 TEST_F(MultiFragmentPlanTest, validDistributedPlan) {
   auto options = defaultOptions();
   options.remoteOutput = true;
 
-  ExecutableFragment producer;
-  producer.fragmentId = 1;
-  producer.type = FragmentType::kSource;
-  producer.fragment = partitionedOutput(4);
+  const auto exchangeNode = exchange();
+  const MultiFragmentPlan plan(
+      {
+          {.id = 1,
+           .type = velox::core::StageType::kSource,
+           .plan = partitionedOutput(4)},
+          {.id = 2,
+           .type = velox::core::StageType::kFixed,
+           .numRemotePartitions = 4,
+           .plan = exchangeNode,
+           .inputs = {{exchangeNode->id(), 1}}},
+      },
+      {},
+      options);
+  EXPECT_EQ(plan.stagePlan().root().id, 2);
+}
 
-  ExecutableFragment consumer;
-  consumer.fragmentId = 2;
-  consumer.type = FragmentType::kFixed;
-  consumer.numRemotePartitions = 4;
-  consumer.fragment = exchange();
-  consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), 1);
+TEST_F(MultiFragmentPlanTest, invalidStages) {
+  VELOX_ASSERT_USER_THROW(
+      makeSingleFragmentPlan(velox::core::StageType::kFixed),
+      "kFixed stage must have numRemotePartitions set: 1");
+}
 
-  auto plan =
-      MultiFragmentPlan({std::move(producer), std::move(consumer)}, options);
-  EXPECT_NO_THROW(plan.checkConsistency(/*mayBeEmpty=*/false));
+TEST_F(MultiFragmentPlanTest, scansOfMissingStage) {
+  auto scansOf = [](int32_t stageId) {
+    folly::F14FastMap<int32_t, FragmentScans> scans;
+    scans[stageId].sampledScans.emplace("0", 50);
+    return scans;
+  };
+  auto makePlan = [&](int32_t stageId) {
+    return MultiFragmentPlan(
+        {{.id = 1, .type = velox::core::StageType::kSingle, .plan = values()}},
+        scansOf(stageId),
+        defaultOptions());
+  };
+  VELOX_ASSERT_THROW(
+      makePlan(2), "Scans name a stage that is not in the plan: 2");
+  VELOX_ASSERT_THROW(
+      makePlan(0), "Scans name a stage that is not in the plan: 0");
+  VELOX_ASSERT_THROW(
+      MultiFragmentPlan({}, scansOf(1), defaultOptions()),
+      "Scans name a stage that is not in the plan: 1");
 }
 
 TEST_F(MultiFragmentPlanTest, emptyFragments) {
-  VELOX_ASSERT_THROW(
-      MultiFragmentPlan({}, defaultOptions())
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "Plan must have at least one fragment");
+  const MultiFragmentPlan plan({}, {}, defaultOptions());
+  EXPECT_TRUE(plan.empty());
+  EXPECT_TRUE(plan.stages().empty());
+  VELOX_ASSERT_THROW(plan.stagePlan(), "Plan has no stages");
 }
 
-TEST_F(MultiFragmentPlanTest, fixedWithoutWidth) {
+TEST_F(MultiFragmentPlanTest, maxRemotePartitions) {
   VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kFixed)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "kFixed fragment must have numRemotePartitions set");
-}
-
-TEST_F(MultiFragmentPlanTest, singleWithWidth) {
-  VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kSingle, 1)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "fragment must not have numRemotePartitions set");
-}
-
-TEST_F(MultiFragmentPlanTest, coordinatorWithWidth) {
-  VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kCoordinator, 1)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "fragment must not have numRemotePartitions set");
-}
-
-TEST_F(MultiFragmentPlanTest, invalidWidth) {
-  VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kFixed, 0)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "Fragment numRemotePartitions must be positive");
-
-  VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kFixed, 20)
-          .checkConsistency(/*mayBeEmpty=*/false),
+      makeSingleFragmentPlan(velox::core::StageType::kFixed, 20),
       "Fragment numRemotePartitions exceeds maxRemotePartitions");
 }
 
 TEST_F(MultiFragmentPlanTest, sourceWithWidthHint) {
   auto options = defaultOptions();
   options.remoteOutput = true;
-  auto plan = makeSingleFragmentPlan(FragmentType::kSource, 5, options);
-  EXPECT_NO_THROW(plan.checkConsistency(/*mayBeEmpty=*/false));
+  EXPECT_NO_THROW(
+      makeSingleFragmentPlan(velox::core::StageType::kSource, 5, options));
 }
 
-TEST_F(MultiFragmentPlanTest, missingProducer) {
-  ExecutableFragment fragment;
-  fragment.fragmentId = 1;
-  fragment.type = FragmentType::kSingle;
-  fragment.fragment = exchange();
-  fragment.inputStages.emplace_back(fragment.fragment.planNode->id(), 7);
-
-  auto plan = MultiFragmentPlan({std::move(fragment)}, defaultOptions());
-  VELOX_ASSERT_THROW(
-      plan.checkConsistency(/*mayBeEmpty=*/false),
-      "Producer fragment not found: 7, consumer: 1");
-}
-
-TEST_F(MultiFragmentPlanTest, producerNotPartitionedOutput) {
-  ExecutableFragment producer;
-  producer.fragmentId = 1;
-  producer.type = FragmentType::kSource;
-  producer.fragment = values();
-
-  ExecutableFragment consumer;
-  consumer.fragmentId = 2;
-  consumer.type = FragmentType::kSingle;
-  consumer.fragment = exchange();
-  consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), 1);
-
-  auto plan = MultiFragmentPlan(
-      {std::move(producer), std::move(consumer)}, defaultOptions());
-  VELOX_ASSERT_THROW(
-      plan.checkConsistency(/*mayBeEmpty=*/false),
-      "Expected PartitionedOutputNode");
-}
-
-TEST_F(MultiFragmentPlanTest, lastFragmentIsProducer) {
-  auto options = defaultOptions();
-  options.remoteOutput = true;
-
-  ExecutableFragment producer;
-  producer.fragmentId = 2;
-  producer.type = FragmentType::kFixed;
-  producer.numRemotePartitions = 4;
-  producer.fragment = partitionedOutput(4);
-
-  ExecutableFragment consumer;
-  consumer.fragmentId = 1;
-  consumer.type = FragmentType::kFixed;
-  consumer.numRemotePartitions = 4;
-  consumer.fragment = exchange();
-  consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), 2);
-
-  {
-    auto plan = MultiFragmentPlan({consumer, producer}, options);
-    VELOX_ASSERT_THROW(
-        plan.checkConsistency(/*mayBeEmpty=*/false),
-        "Last fragment cannot be a producer");
-  }
-
-  {
-    auto plan = MultiFragmentPlan({producer, consumer}, options);
-    ASSERT_NO_THROW(plan.checkConsistency(/*mayBeEmpty=*/false));
-  }
-}
-
-TEST_F(MultiFragmentPlanTest, partitionCountMismatch) {
-  auto options = defaultOptions();
-  options.remoteOutput = true;
-
-  ExecutableFragment producer;
-  producer.fragmentId = 1;
-  producer.type = FragmentType::kSource;
-  producer.fragment = partitionedOutput(4);
-
-  ExecutableFragment consumer;
-  consumer.fragmentId = 2;
-  consumer.type = FragmentType::kFixed;
-  consumer.numRemotePartitions = 8;
-  consumer.fragment = exchange();
-  consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), 1);
-
-  auto plan =
-      MultiFragmentPlan({std::move(producer), std::move(consumer)}, options);
-  VELOX_ASSERT_THROW(
-      plan.checkConsistency(/*mayBeEmpty=*/false), "Partition count mismatch");
-}
-
-TEST_F(MultiFragmentPlanTest, broadcastSkipsWidthCheck) {
-  ExecutableFragment producer;
-  producer.fragmentId = 1;
-  producer.type = FragmentType::kSource;
-  producer.fragment = broadcastOutput();
-
-  ExecutableFragment consumer;
-  consumer.fragmentId = 2;
-  consumer.type = FragmentType::kSingle;
-  consumer.fragment = exchange();
-  consumer.inputStages.emplace_back(consumer.fragment.planNode->id(), 1);
-
-  auto plan = MultiFragmentPlan(
-      {std::move(producer), std::move(consumer)}, defaultOptions());
-  EXPECT_NO_THROW(plan.checkConsistency(/*mayBeEmpty=*/false));
-}
-
-TEST_F(MultiFragmentPlanTest, lastFragmentType) {
+TEST_F(MultiFragmentPlanTest, rootFragmentType) {
   auto options = defaultOptions();
   options.remoteOutput = false;
 
   VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kFixed, 4, options)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "Last fragment must be kSingle or kCoordinator");
+      makeSingleFragmentPlan(velox::core::StageType::kFixed, 4, options),
+      "Root fragment must be kSingle or kCoordinator");
 
   VELOX_ASSERT_THROW(
-      makeSingleFragmentPlan(FragmentType::kSource, std::nullopt, options)
-          .checkConsistency(/*mayBeEmpty=*/false),
-      "Last fragment must be kSingle or kCoordinator");
+      makeSingleFragmentPlan(
+          velox::core::StageType::kSource, std::nullopt, options),
+      "Root fragment must be kSingle or kCoordinator");
 
-  // kSource is allowed as last fragment with maxRemotePartitions == 1.
+  // kSource is allowed as root fragment with maxRemotePartitions == 1.
   EXPECT_NO_THROW(makeSingleFragmentPlan(
-                      FragmentType::kSource,
-                      std::nullopt,
-                      MultiFragmentPlan::Options::singleNode())
-                      .checkConsistency(/*mayBeEmpty=*/false));
+      velox::core::StageType::kSource,
+      std::nullopt,
+      MultiFragmentPlan::Options::singleNode()));
 
-  // kFixed is allowed as last fragment with remoteOutput.
+  // kFixed is allowed as root fragment with remoteOutput.
   options.remoteOutput = true;
-  EXPECT_NO_THROW(makeSingleFragmentPlan(FragmentType::kFixed, 4, options)
-                      .checkConsistency(/*mayBeEmpty=*/false));
-}
-
-TEST_F(MultiFragmentPlanTest, orphanFragment) {
-  auto options = defaultOptions();
-  options.remoteOutput = true;
-
-  ExecutableFragment orphan;
-  orphan.fragmentId = 1;
-  orphan.type = FragmentType::kSource;
-  orphan.fragment = partitionedOutput(4);
-
-  ExecutableFragment output;
-  output.fragmentId = 2;
-  output.type = FragmentType::kFixed;
-  output.numRemotePartitions = 4;
-  output.fragment = values();
-
-  auto plan =
-      MultiFragmentPlan({std::move(orphan), std::move(output)}, options);
-  VELOX_ASSERT_THROW(
-      plan.checkConsistency(/*mayBeEmpty=*/false),
-      "Non-last fragment must be referenced by exactly one consumer: 1");
-}
-
-TEST_F(MultiFragmentPlanTest, producerReferencedByMultipleConsumers) {
-  auto options = defaultOptions();
-  options.remoteOutput = true;
-
-  ExecutableFragment producer;
-  producer.fragmentId = 1;
-  producer.type = FragmentType::kSource;
-  producer.fragment = partitionedOutput(4);
-
-  ExecutableFragment consumerA;
-  consumerA.fragmentId = 2;
-  consumerA.type = FragmentType::kFixed;
-  consumerA.numRemotePartitions = 4;
-  consumerA.fragment = exchange();
-  consumerA.inputStages.emplace_back(consumerA.fragment.planNode->id(), 1);
-
-  ExecutableFragment consumerB;
-  consumerB.fragmentId = 3;
-  consumerB.type = FragmentType::kFixed;
-  consumerB.numRemotePartitions = 4;
-  consumerB.fragment = exchange();
-  consumerB.inputStages.emplace_back(consumerB.fragment.planNode->id(), 1);
-
-  auto plan = MultiFragmentPlan(
-      {std::move(producer), std::move(consumerA), std::move(consumerB)},
-      options);
-  VELOX_ASSERT_THROW(
-      plan.checkConsistency(/*mayBeEmpty=*/false),
-      "Producer fragment referenced by multiple consumers: 1");
+  EXPECT_NO_THROW(
+      makeSingleFragmentPlan(velox::core::StageType::kFixed, 4, options));
 }
 
 } // namespace

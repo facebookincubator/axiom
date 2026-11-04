@@ -16,6 +16,8 @@
 
 #include "axiom/runner/tests/DistributedPlanBuilder.h"
 
+#include <folly/container/F14Map.h>
+
 namespace facebook::axiom::runner::test {
 
 DistributedPlanBuilder::DistributedPlanBuilder(
@@ -41,42 +43,46 @@ DistributedPlanBuilder::~DistributedPlanBuilder() {
   VELOX_CHECK_EQ(root_->stack_.size(), 1);
 }
 
-std::vector<optimizer::ExecutableFragment> DistributedPlanBuilder::fragments() {
+std::vector<velox::core::Stage> DistributedPlanBuilder::stages() {
   newFragment();
+  // Builders that return a shuffle take an id for a stage they never finish,
+  // so number the finished stages from 1 again.
+  folly::F14FastMap<int32_t, int32_t> newIds;
+  for (const auto& stage : fragments_) {
+    newIds.emplace(stage.id, static_cast<int32_t>(newIds.size()) + 1);
+  }
+  for (auto& stage : fragments_) {
+    stage.id = newIds.at(stage.id);
+    for (auto& input : stage.inputs) {
+      input.producerStageId = newIds.at(input.producerStageId);
+    }
+  }
   return std::move(fragments_);
 }
 
 optimizer::MultiFragmentPlanPtr DistributedPlanBuilder::build() {
-  return std::make_shared<optimizer::MultiFragmentPlan>(fragments(), options_);
+  return std::make_shared<optimizer::MultiFragmentPlan>(
+      stages(),
+      folly::F14FastMap<int32_t, optimizer::FragmentScans>{},
+      options_);
 }
 
 void DistributedPlanBuilder::newFragment(
     std::optional<int32_t> numRemotePartitions) {
   if (current_) {
-    current_->fragment = velox::core::PlanFragment(std::move(planNode_));
+    current_->plan = std::move(planNode_);
     fragments_.push_back(std::move(*current_));
   }
 
-  const auto fragmentId = root_->fragmentCounter_++;
+  current_ = std::make_unique<velox::core::Stage>();
+  current_->id = ++root_->fragmentCounter_;
   if (numRemotePartitions.has_value() && numRemotePartitions.value() > 1) {
-    current_ = std::make_unique<optimizer::ExecutableFragment>(
-        optimizer::ExecutableFragment{
-            .fragmentId = fragmentId,
-            .type = optimizer::FragmentType::kFixed,
-            .numRemotePartitions = numRemotePartitions,
-        });
+    current_->type = velox::core::StageType::kFixed;
+    current_->numRemotePartitions = numRemotePartitions;
   } else if (numRemotePartitions.has_value()) {
-    current_ = std::make_unique<optimizer::ExecutableFragment>(
-        optimizer::ExecutableFragment{
-            .fragmentId = fragmentId,
-            .type = optimizer::FragmentType::kSingle,
-        });
+    current_->type = velox::core::StageType::kSingle;
   } else {
-    current_ = std::make_unique<optimizer::ExecutableFragment>(
-        optimizer::ExecutableFragment{
-            .fragmentId = fragmentId,
-            .type = optimizer::FragmentType::kSource,
-        });
+    current_->type = velox::core::StageType::kSource;
   }
 
   planNode_ = nullptr;
@@ -96,15 +102,15 @@ const TNode* as(const velox::core::PlanNodePtr& node) {
 
 void DistributedPlanBuilder::addExchange(
     const velox::RowTypePtr& producerType,
-    int32_t producerFragmentId,
-    optimizer::ExecutableFragment& fragment) {
+    int32_t producerStageId,
+    velox::core::Stage& fragment) {
   exchange(
       producerType,
       velox::VectorSerde::kindName(velox::VectorSerde::Kind::kPresto));
   auto* exchange = as<velox::core::ExchangeNode>(planNode_);
 
-  fragment.inputStages.push_back(
-      optimizer::InputStage{exchange->id(), producerFragmentId});
+  fragment.inputs.push_back(
+      velox::core::StageInput{exchange->id(), producerStageId});
 }
 
 DistributedPlanBuilder& DistributedPlanBuilder::shufflePartitioned(
@@ -116,16 +122,16 @@ DistributedPlanBuilder& DistributedPlanBuilder::shufflePartitioned(
       partitionKeys, numPartitions, replicateNullsAndAny, outputLayout);
   auto* output = as<velox::core::PartitionedOutputNode>(planNode_);
 
-  const auto producerFragmentId = current_->fragmentId;
+  const auto producerStageId = current_->id;
 
   newFragment(numPartitions);
 
-  addExchange(output->outputType(), producerFragmentId, *current_);
+  addExchange(output->outputType(), producerStageId, *current_);
   return *this;
 }
 
 void DistributedPlanBuilder::appendFragments(
-    std::vector<optimizer::ExecutableFragment> fragments) {
+    std::vector<velox::core::Stage> fragments) {
   for (auto& fragment : fragments) {
     fragments_.emplace_back(std::move(fragment));
   }
@@ -140,7 +146,7 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shufflePartitionedResult(
       partitionKeys, numPartitions, replicateNullsAndAny, outputLayout);
   auto* output = as<velox::core::PartitionedOutputNode>(planNode_);
 
-  const auto producerFragmentId = current_->fragmentId;
+  const auto producerStageId = current_->id;
 
   newFragment();
 
@@ -154,8 +160,8 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shufflePartitionedResult(
         "The consumer numRemotePartitions should match the producer fanout");
   } else {
     consumer->current_->type = numPartitions > 1
-        ? optimizer::FragmentType::kFixed
-        : optimizer::FragmentType::kSingle;
+        ? velox::core::StageType::kFixed
+        : velox::core::StageType::kSingle;
     consumer->current_->numRemotePartitions = numPartitions > 1
         ? std::optional<int32_t>{numPartitions}
         : std::nullopt;
@@ -163,7 +169,7 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shufflePartitionedResult(
 
   root_->appendFragments(std::move(fragments_));
 
-  addExchange(output->outputType(), producerFragmentId, *consumer->current_);
+  addExchange(output->outputType(), producerStageId, *consumer->current_);
   return std::move(planNode_);
 }
 
@@ -171,7 +177,7 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shuffleBroadcastResult() {
   partitionedOutputBroadcast();
   auto* output = as<velox::core::PartitionedOutputNode>(planNode_);
 
-  const auto producerFragmentId = current_->fragmentId;
+  const auto producerStageId = current_->id;
   auto result = planNode_;
   newFragment();
 
@@ -181,12 +187,12 @@ velox::core::PlanNodePtr DistributedPlanBuilder::shuffleBroadcastResult() {
 
   VELOX_CHECK(
       consumer->current_->numRemotePartitions.has_value() ||
-      consumer->current_->type == optimizer::FragmentType::kSingle ||
-      consumer->current_->type == optimizer::FragmentType::kCoordinator);
+      consumer->current_->type == velox::core::StageType::kSingle ||
+      consumer->current_->type == velox::core::StageType::kCoordinator);
 
   root_->appendFragments(std::move(fragments_));
 
-  addExchange(output->outputType(), producerFragmentId, *consumer->current_);
+  addExchange(output->outputType(), producerStageId, *consumer->current_);
   return std::move(planNode_);
 }
 

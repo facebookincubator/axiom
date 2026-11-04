@@ -164,47 +164,35 @@ struct PlanFragmentInfo {
   int32_t numWorkers{0};
 };
 
-std::vector<optimizer::ExecutableFragment> createExecutableFragments(
+std::vector<velox::core::Stage> createStages(
     const folly::F14FastMap<std::string, PlanFragmentInfo>& planFragments) {
   // The replayed plan identifies fragments by the task prefix logged with each
-  // Presto task; ExecutableFragment identifies them by id, so number them here.
-  folly::F14FastMap<std::string, int32_t> fragmentIds;
-  fragmentIds.reserve(planFragments.size());
+  // Presto task; a Stage identifies them by an id from 1, so number them here.
+  folly::F14FastMap<std::string, int32_t> stageIds;
+  stageIds.reserve(planFragments.size());
   for (const auto& [taskPrefix, _] : planFragments) {
-    fragmentIds.emplace(taskPrefix, fragmentIds.size());
+    stageIds.emplace(taskPrefix, stageIds.size() + 1);
   }
 
-  std::vector<optimizer::ExecutableFragment> executableFragments;
+  std::vector<velox::core::Stage> stages;
   for (const auto& [taskPrefix, planFragmentInfo] : planFragments) {
-    std::vector<optimizer::InputStage> inputStages;
-    const auto& remoteTaskIdMap = planFragmentInfo.remoteTaskIdMap;
-    for (const auto& [planNodeId, remoteTaskPrefixes] : remoteTaskIdMap) {
+    velox::core::Stage stage{
+        .id = stageIds.at(taskPrefix), .plan = planFragmentInfo.plan};
+    if (planFragmentInfo.numWorkers > 1) {
+      stage.type = velox::core::StageType::kFixed;
+      stage.numRemotePartitions = planFragmentInfo.numWorkers;
+    } else {
+      stage.type = velox::core::StageType::kSingle;
+    }
+    for (const auto& [planNodeId, remoteTaskPrefixes] :
+         planFragmentInfo.remoteTaskIdMap) {
       for (const auto& remoteTaskPrefix : remoteTaskPrefixes) {
-        inputStages.push_back(
-            optimizer::InputStage{
-                planNodeId, fragmentIds.at(remoteTaskPrefix)});
+        stage.inputs.push_back({planNodeId, stageIds.at(remoteTaskPrefix)});
       }
     }
-    if (planFragmentInfo.numWorkers > 1) {
-      executableFragments.push_back(
-          optimizer::ExecutableFragment{
-              .fragmentId = fragmentIds.at(taskPrefix),
-              .type = optimizer::FragmentType::kFixed,
-              .numRemotePartitions = planFragmentInfo.numWorkers,
-              .fragment = velox::core::PlanFragment{planFragmentInfo.plan},
-              .inputStages = std::move(inputStages),
-          });
-    } else {
-      executableFragments.push_back(
-          optimizer::ExecutableFragment{
-              .fragmentId = fragmentIds.at(taskPrefix),
-              .type = optimizer::FragmentType::kSingle,
-              .fragment = velox::core::PlanFragment{planFragmentInfo.plan},
-              .inputStages = std::move(inputStages),
-          });
-    }
+    stages.push_back(std::move(stage));
   }
-  return executableFragments;
+  return stages;
 }
 
 } // namespace
@@ -356,11 +344,11 @@ PrestoQueryReplayRunner::deserializeSupportedPlan(
     planFragments[kFinalTaskPrefix].remoteTaskIdMap[id] = {rootTaskPrefix};
   }
 
-  auto executableFragments = createExecutableFragments(planFragments);
-
   optimizer::MultiFragmentPlan::Options options{queryId, width_, maxDrivers_};
   return std::make_shared<optimizer::MultiFragmentPlan>(
-      std::move(executableFragments), std::move(options));
+      createStages(planFragments),
+      folly::F14FastMap<int32_t, optimizer::FragmentScans>{},
+      std::move(options));
 }
 
 folly::F14FastMap<velox::core::PlanNodeId, std::vector<ConnectorSplitPtr>>

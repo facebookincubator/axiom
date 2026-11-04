@@ -295,9 +295,9 @@ namespace {
 
 // Merges fragment-type contributions per the compatibility rules in
 // docs/UnionAllPlanning.md. nullopt means "no constraint".
-std::optional<FragmentType> mergeFragmentTypes(
-    std::optional<FragmentType> lhs,
-    std::optional<FragmentType> rhs) {
+std::optional<velox::core::StageType> mergeFragmentTypes(
+    std::optional<velox::core::StageType> lhs,
+    std::optional<velox::core::StageType> rhs) {
   if (!lhs.has_value()) {
     return rhs;
   }
@@ -307,9 +307,11 @@ std::optional<FragmentType> mergeFragmentTypes(
   if (*lhs == *rhs) {
     return lhs;
   }
-  if ((*lhs == FragmentType::kSource && *rhs == FragmentType::kFixed) ||
-      (*lhs == FragmentType::kFixed && *rhs == FragmentType::kSource)) {
-    return FragmentType::kFixed;
+  if ((*lhs == velox::core::StageType::kSource &&
+       *rhs == velox::core::StageType::kFixed) ||
+      (*lhs == velox::core::StageType::kFixed &&
+       *rhs == velox::core::StageType::kSource)) {
+    return velox::core::StageType::kFixed;
   }
   VELOX_FAIL(
       "Incompatible fragment-type contributions in same fragment: {} + {}",
@@ -317,15 +319,16 @@ std::optional<FragmentType> mergeFragmentTypes(
       *rhs);
 }
 
-std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
+std::optional<velox::core::StageType> fragmentTypeContribution(
+    const RelationOp& op) {
   // Repartition is a fragment boundary — its contribution is the
   // consumer-side type derived from its distribution kind.
   if (op.relType() == RelType::kRepartition) {
     switch (op.distribution().kind()) {
       case Distribution::Kind::kPartitioned:
-        return FragmentType::kFixed;
+        return velox::core::StageType::kFixed;
       case Distribution::Kind::kGather:
-        return FragmentType::kSingle;
+        return velox::core::StageType::kSingle;
       case Distribution::Kind::kBroadcast:
       case Distribution::Kind::kArbitrary:
       case Distribution::Kind::kUnspecified:
@@ -338,16 +341,16 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
   // synthesizes an implicit gather sub-fragment boundary, or it inherits
   // gather from a single-partition input below.
   if (op.distribution().isGather()) {
-    return FragmentType::kSingle;
+    return velox::core::StageType::kSingle;
   }
 
   switch (op.relType()) {
     case RelType::kTableScan:
-      return FragmentType::kSource;
+      return velox::core::StageType::kSource;
     case RelType::kValues:
-      return FragmentType::kSingle;
+      return velox::core::StageType::kSingle;
     case RelType::kUnionAll: {
-      std::optional<FragmentType> result;
+      std::optional<velox::core::StageType> result;
       for (const auto& input : op.as<UnionAll>()->inputs) {
         result = mergeFragmentTypes(result, fragmentTypeContribution(*input));
       }
@@ -378,14 +381,15 @@ std::optional<FragmentType> fragmentTypeContribution(const RelationOp& op) {
 void decideFragmentType(
     const RelationOp& op,
     const MultiFragmentPlan::Options& options,
-    ExecutableFragment& fragment) {
+    velox::core::Stage& fragment) {
   if (options.maxRemotePartitions == 1) {
-    fragment.type = FragmentType::kSingle;
+    fragment.type = velox::core::StageType::kSingle;
     return;
   }
 
-  fragment.type = fragmentTypeContribution(op).value_or(FragmentType::kSource);
-  if (fragment.type == FragmentType::kFixed) {
+  fragment.type =
+      fragmentTypeContribution(op).value_or(velox::core::StageType::kSource);
+  if (fragment.type == velox::core::StageType::kFixed) {
     fragment.numRemotePartitions = options.maxRemotePartitions;
   }
 }
@@ -416,7 +420,7 @@ int32_t groupedLeavesWidth(
 } // namespace
 
 void ToVelox::applyGroupedLeaves(
-    ExecutableFragment& fragment,
+    velox::core::Stage& fragment,
     const GroupedLeaves& groupedLeaves) {
   // A fragment is bucketed iff at least one groupedLeaves entry has a non-null
   // PartitionType. Non-bucketed fragments leave groupedNodes empty: a
@@ -432,20 +436,21 @@ void ToVelox::applyGroupedLeaves(
   if (!anyNonNull) {
     return;
   }
+  auto& groupedNodes = scans_[fragment.id].groupedNodes;
   for (const auto& [relOp, partitionType] : groupedLeaves) {
     auto idIt = relationOpToNodeId_.find(relOp);
     VELOX_CHECK(
         idIt != relationOpToNodeId_.end(),
         "GroupedLeaves references a RelationOp not yet emitted by ToVelox");
-    // ExecutableFragment::groupedNodes' contract is non-const PartitionType
+    // FragmentScans::groupedNodes' contract is non-const PartitionType
     // (axel/runtime side); groupedLeaves are const for optimizer-side
     // immutability. Drop-const is safe — neither consumer mutates the type.
-    fragment.groupedNodes.emplace(
+    groupedNodes.emplace(
         idIt->second,
         std::const_pointer_cast<connector::PartitionType>(partitionType));
   }
   int32_t numRemotePartitions = -1;
-  for (const auto& [_, pt] : fragment.groupedNodes) {
+  for (const auto& [_, pt] : groupedNodes) {
     if (pt == nullptr) {
       continue;
     }
@@ -455,11 +460,11 @@ void ToVelox::applyGroupedLeaves(
       VELOX_CHECK_EQ(
           pt->numPartitions(),
           numRemotePartitions,
-          "fragment.groupedNodes has non-null PartitionTypes with disagreeing numPartitions");
+          "groupedNodes has non-null PartitionTypes with disagreeing numPartitions");
     }
   }
   if (numRemotePartitions >= 0) {
-    fragment.type = FragmentType::kFixed;
+    fragment.type = velox::core::StageType::kFixed;
     fragment.numRemotePartitions = numRemotePartitions;
   }
 }
@@ -472,6 +477,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   options_ = options;
 
   stageCounter_ = 0;
+  scans_.clear();
   prediction_.clear();
   nodeHistory_.clear();
   relationOpToNodeId_.clear();
@@ -502,14 +508,14 @@ PlanAndStats ToVelox::toVeloxPlan(
   // contents demand. Otherwise the final fragment runs a single local
   // consumer. Decide before recursing so operators inside (e.g. makeWrite)
   // see the correct type.
-  ExecutableFragment top = newFragment();
+  velox::core::Stage top = newFragment();
   if (options.remoteOutput) {
     decideFragmentType(*plan, options, top);
   } else {
-    top.type = FragmentType::kSingle;
+    top.type = velox::core::StageType::kSingle;
   }
 
-  std::vector<ExecutableFragment> stages;
+  std::vector<velox::core::Stage> stages;
   auto rootNode = makeFragment(plan, top, stages);
 
   // The root fragment passes its input columns through unchanged, so trim it to
@@ -518,21 +524,22 @@ PlanAndStats ToVelox::toVeloxPlan(
   if (!finishWrite_) {
     rootNode = maybeTrimColumns(std::move(rootNode), plan);
   }
-  top.fragment.planNode = std::move(rootNode);
+  top.plan = std::move(rootNode);
 
   // For the root fragment when no addGather was inserted, apply the
-  // optimizer's root groupedLeaves directly to top.groupedNodes so the
+  // optimizer's root groupedLeaves directly to top's groupedNodes so the
   // runtime/connector pair sees the root's bucketed-leaf routing.
   // Skip when top.type is kSingle: a single-task root has no groupId
   // routing (local consumer) and applyGroupedLeaves would otherwise
-  // overwrite the type with kFixed and trip checkLastFragment.
-  if (gatherRepartition_ == nullptr && top.type != FragmentType::kSingle) {
+  // overwrite the type with kFixed and trip the root stage check.
+  if (gatherRepartition_ == nullptr &&
+      top.type != velox::core::StageType::kSingle) {
     applyGroupedLeaves(top, groupedLeaves_->root);
   }
 
   stages.push_back(std::move(top));
 
-  auto& rootPlanNode = stages.back().fragment.planNode;
+  auto& rootPlanNode = stages.back().plan;
 
   // For multi-worker writes, add a coordinator-side TableWriteMerge(kFinal)
   // to merge intermediate stats from all workers. The local merge on each
@@ -554,7 +561,7 @@ PlanAndStats ToVelox::toVeloxPlan(
   }
 
   for (const auto& stage : stages) {
-    velox::core::PlanConsistencyChecker::check(stage.fragment.planNode);
+    velox::core::PlanConsistencyChecker::check(stage.plan);
   }
 
   if (options.remoteOutput) {
@@ -565,9 +572,10 @@ PlanAndStats ToVelox::toVeloxPlan(
   auto finishWrite = std::move(finishWrite_);
   VELOX_DCHECK(!finishWrite_);
 
-  auto multiFragmentPlan =
-      std::make_shared<MultiFragmentPlan>(std::move(stages), options);
-  multiFragmentPlan->checkConsistency(/*mayBeEmpty=*/false);
+  auto multiFragmentPlan = std::make_shared<MultiFragmentPlan>(
+      std::move(stages), std::move(scans_), options);
+  VELOX_CHECK(
+      !multiFragmentPlan->empty(), "Plan must have at least one fragment");
 
   return PlanAndStats{
       std::move(multiFragmentPlan),
@@ -952,11 +960,11 @@ velox::core::TypedExprPtr ToVelox::toTypedExprUncached(
   }
 }
 
-ExecutableFragment ToVelox::newFragment() {
-  return ExecutableFragment{
-      .fragmentId = ++stageCounter_,
-      .type = FragmentType::kSource,
-  };
+velox::core::Stage ToVelox::newFragment() {
+  velox::core::Stage fragment;
+  fragment.id = ++stageCounter_;
+  fragment.type = velox::core::StageType::kSource;
+  return fragment;
 }
 
 namespace {
@@ -1075,8 +1083,8 @@ std::vector<velox::core::FieldAccessTypedExprPtr> ToVelox::toFieldRefs(
 
 velox::core::PlanNodePtr ToVelox::makeOrderBy(
     const OrderBy& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto sortOrder = toSortOrders(op.distribution().orderTypes());
   auto keys = toFieldRefs(op.distribution().orderKeys());
 
@@ -1137,16 +1145,16 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
     node = addLocalMerge(nextId(), keys, sortOrder, node);
   }
 
-  source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+  source.plan = velox::core::PartitionedOutputNode::single(
       nextId(), node->outputType(), exchangeSerdeKind_, node);
-  makePredictionAndHistory(source.fragment.planNode->id(), &op);
+  makePredictionAndHistory(source.plan->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
 
   auto merge = std::make_shared<velox::core::MergeExchangeNode>(
       nextId(), node->outputType(), keys, sortOrder, exchangeSerdeKind_);
 
-  fragment.inputStages.emplace_back(merge->id(), source.fragmentId);
+  fragment.inputs.emplace_back(merge->id(), source.id);
   stages.push_back(std::move(source));
 
   if (!op.isNoLimit() || op.offset > 0) {
@@ -1157,8 +1165,8 @@ velox::core::PlanNodePtr ToVelox::makeOrderBy(
 
 velox::core::PlanNodePtr ToVelox::makeOffset(
     const Limit& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   if (isSingle_) {
     auto input = makeFragment(op.input(), fragment, stages);
     return addFinalLimit(nextId(), op.offset, op.limit, input);
@@ -1168,9 +1176,9 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
   decideFragmentType(*op.input(), options_, source);
   auto input = makeFragment(op.input(), source, stages);
 
-  source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+  source.plan = velox::core::PartitionedOutputNode::single(
       nextId(), input->outputType(), exchangeSerdeKind_, input);
-  makePredictionAndHistory(source.fragment.planNode->id(), &op);
+  makePredictionAndHistory(source.plan->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
 
@@ -1179,7 +1187,7 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
 
   auto limitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
 
-  fragment.inputStages.emplace_back(exchange->id(), source.fragmentId);
+  fragment.inputs.emplace_back(exchange->id(), source.id);
   stages.push_back(std::move(source));
 
   return limitNode;
@@ -1187,8 +1195,8 @@ velox::core::PlanNodePtr ToVelox::makeOffset(
 
 velox::core::PlanNodePtr ToVelox::makeLimit(
     const Limit& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   if (op.isNoLimit()) {
     return makeOffset(op, fragment, stages);
   }
@@ -1219,9 +1227,9 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
     node = addFinalLimit(nextId(), 0, op.offset + op.limit, node);
   }
 
-  source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+  source.plan = velox::core::PartitionedOutputNode::single(
       nextId(), node->outputType(), exchangeSerdeKind_, node);
-  makePredictionAndHistory(source.fragment.planNode->id(), &op);
+  makePredictionAndHistory(source.plan->id(), &op);
 
   applyGroupedLeaves(source, groupedLeaves_->root);
 
@@ -1230,7 +1238,7 @@ velox::core::PlanNodePtr ToVelox::makeLimit(
 
   auto finalLimitNode = addFinalLimit(nextId(), op.offset, op.limit, exchange);
 
-  fragment.inputStages.emplace_back(exchange->id(), source.fragmentId);
+  fragment.inputs.emplace_back(exchange->id(), source.id);
   stages.push_back(std::move(source));
 
   return finalLimitNode;
@@ -1454,8 +1462,8 @@ velox::core::TypedExprPtr toAndWithAliases(
 velox::core::PlanNodePtr ToVelox::makeIndexLookupJoin(
     const TableScan& scan,
     const velox::core::TableScanNodePtr& lookupSource,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   VELOX_CHECK_EQ(
       scan.keys.size(),
       scan.lookupColumns.size(),
@@ -1505,8 +1513,8 @@ velox::core::PlanNodePtr ToVelox::makeIndexLookupJoin(
 
 velox::core::PlanNodePtr ToVelox::makeScan(
     const TableScan& scan,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   columnAlteredTypes_.clear();
 
   const bool isSubfieldPushdown = hasSubfieldPushdown(scan);
@@ -1579,7 +1587,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
   relationOpToNodeId_.insert_or_assign(&scan, scanId);
 
   if (scan.baseTable->sampledPercentage.has_value()) {
-    fragment.sampledScans.emplace(scanId, *scan.baseTable->sampledPercentage);
+    scans_[fragment.id].sampledScans.emplace(
+        scanId, *scan.baseTable->sampledPercentage);
   }
 
   if (!scan.keys.empty()) {
@@ -1606,8 +1615,8 @@ velox::core::PlanNodePtr ToVelox::makeScan(
 
 velox::core::PlanNodePtr ToVelox::makeFilter(
     const Filter& filter,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto filterNode = std::make_shared<velox::core::FilterNode>(
       nextId(),
       toAnd(filter.exprs()),
@@ -1618,8 +1627,8 @@ velox::core::PlanNodePtr ToVelox::makeFilter(
 
 velox::core::PlanNodePtr ToVelox::makeProject(
     const Project& project,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(project.input(), fragment, stages);
   if (optimizerSession_->options().parallelProjectWidth > 1) {
     auto result = maybeParallelProject(&project, input);
@@ -1650,8 +1659,8 @@ velox::core::PlanNodePtr ToVelox::makeProject(
 
 velox::core::PlanNodePtr ToVelox::makeJoin(
     const Join& join,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto left = makeFragment(join.input(), fragment, stages);
   auto right = makeFragment(join.right, fragment, stages);
   if (join.method == JoinMethod::kCross) {
@@ -1715,8 +1724,8 @@ velox::core::PlanNodePtr ToVelox::makeJoin(
 
 velox::core::PlanNodePtr ToVelox::makeUnnest(
     const Unnest& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   const auto* ordinalityColumn = op.unnestTable->ordinalityColumn;
@@ -1743,8 +1752,8 @@ velox::core::PlanNodePtr ToVelox::makeUnnest(
 
 velox::core::PlanNodePtr ToVelox::makeAggregation(
     const Aggregation& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   const bool isRawInput =
@@ -1907,8 +1916,8 @@ velox::core::PlanNodePtr ToVelox::maybeTrimColumns(
 velox::core::PlanNodePtr ToVelox::makeWindowInput(
     const RelationOp& op,
     const ExprVector& partitionKeys,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   // Trim any rejected-filter columns before the Window so they are not carried
   // through its sort/partition.
   auto input =
@@ -1921,8 +1930,8 @@ velox::core::PlanNodePtr ToVelox::makeWindowInput(
 
 velox::core::PlanNodePtr ToVelox::makeWindow(
     const Window& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   auto partitionKeys = toFieldRefs(op.partitionKeys);
@@ -1955,8 +1964,8 @@ velox::core::PlanNodePtr ToVelox::makeWindow(
 
 velox::core::PlanNodePtr ToVelox::makeRowNumber(
     const RowNumber& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::RowNumberNode>(
@@ -1969,8 +1978,8 @@ velox::core::PlanNodePtr ToVelox::makeRowNumber(
 
 velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
     const TopNRowNumber& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeWindowInput(op, op.partitionKeys, fragment, stages);
 
   return std::make_shared<velox::core::TopNRowNumberNode>(
@@ -1986,8 +1995,8 @@ velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
 
 velox::core::PlanNodePtr ToVelox::makeRepartition(
     const Repartition& repartition,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages,
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages,
     std::shared_ptr<velox::core::ExchangeNode>& exchange) {
   // The producer fragment's type is determined by what's inside it. The
   // Repartition's distribution describes the wire output and is independent.
@@ -2029,40 +2038,39 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
 
   if (distribution.isArbitrary()) {
     VELOX_CHECK_EQ(0, keys.size());
-    source.fragment.planNode = velox::core::PartitionedOutputNode::arbitrary(
+    source.plan = velox::core::PartitionedOutputNode::arbitrary(
         nextId(), outputType, exchangeSerdeKind_, sourcePlan);
   } else if (distribution.isBroadcast()) {
     VELOX_CHECK_EQ(0, keys.size());
-    source.fragment.planNode = velox::core::PartitionedOutputNode::broadcast(
+    source.plan = velox::core::PartitionedOutputNode::broadcast(
         nextId(), 1, outputType, exchangeSerdeKind_, sourcePlan);
   } else if (distribution.isGather()) {
     VELOX_CHECK_EQ(0, keys.size());
-    source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+    source.plan = velox::core::PartitionedOutputNode::single(
         nextId(), outputType, exchangeSerdeKind_, sourcePlan);
   } else {
     VELOX_CHECK_NE(0, keys.size());
     const auto numPartitions = groupedLeavesWidth(
         *outerConsumerGroupedLeaves, options_.maxRemotePartitions);
     if (numPartitions == 1) {
-      source.fragment.planNode = velox::core::PartitionedOutputNode::single(
+      source.plan = velox::core::PartitionedOutputNode::single(
           nextId(), outputType, exchangeSerdeKind_, sourcePlan);
     } else {
       auto partitionFunctionFactory = createPartitionFunctionSpec(
           sourcePlan->outputType(), keys, distribution, numPartitions);
-      source.fragment.planNode =
-          std::make_shared<velox::core::PartitionedOutputNode>(
-              nextId(),
-              velox::core::PartitionedOutputNode::Kind::kPartitioned,
-              keys,
-              numPartitions,
-              repartition.isReplicateNullsAndAny(),
-              std::move(partitionFunctionFactory),
-              outputType,
-              exchangeSerdeKind_,
-              sourcePlan);
+      source.plan = std::make_shared<velox::core::PartitionedOutputNode>(
+          nextId(),
+          velox::core::PartitionedOutputNode::Kind::kPartitioned,
+          keys,
+          numPartitions,
+          repartition.isReplicateNullsAndAny(),
+          std::move(partitionFunctionFactory),
+          outputType,
+          exchangeSerdeKind_,
+          sourcePlan);
     }
   }
-  makePredictionAndHistory(source.fragment.planNode->id(), &repartition);
+  makePredictionAndHistory(source.plan->id(), &repartition);
 
   if (exchange == nullptr) {
     exchange = std::make_shared<velox::core::ExchangeNode>(
@@ -2082,15 +2090,15 @@ velox::core::PlanNodePtr ToVelox::makeRepartition(
     applyGroupedLeaves(source, *sourceGroupedLeaves);
   }
 
-  fragment.inputStages.emplace_back(exchange->id(), source.fragmentId);
+  fragment.inputs.emplace_back(exchange->id(), source.id);
   stages.push_back(std::move(source));
   return exchange;
 }
 
 velox::core::PlanNodePtr ToVelox::makeUnionAll(
     const UnionAll& unionAll,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   // Each Repartition input becomes its own remote Exchange (one producer
   // per Exchange). Local inputs are added directly. All sources are then
   // merged with a LocalPartition.
@@ -2148,7 +2156,7 @@ velox::core::PlanNodePtr ToVelox::makeUnionAll(
 
 velox::core::PlanNodePtr ToVelox::makeValues(
     const Values& values,
-    ExecutableFragment& fragment) {
+    velox::core::Stage& fragment) {
   const auto& newColumns = values.columns();
   const auto newType = makeOutputType(newColumns);
   VELOX_DCHECK_EQ(newColumns.size(), newType->size());
@@ -2254,8 +2262,8 @@ bool isSingleThreadedPipeline(const velox::core::PlanNodePtr& node) {
 
 velox::core::PlanNodePtr ToVelox::makeWrite(
     const TableWrite& tableWrite,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(tableWrite.input(), fragment, stages);
   const auto& write = *tableWrite.write;
   const auto& table = write.table();
@@ -2307,19 +2315,20 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
   auto inputType = ROW(inputNames, inputTypes);
 
   auto numDrivers = options_.maxLocalPartitions;
-  if ((fragment.type == FragmentType::kSingle ||
-       fragment.type == FragmentType::kCoordinator) &&
+  if ((fragment.type == velox::core::StageType::kSingle ||
+       fragment.type == velox::core::StageType::kCoordinator) &&
       numDrivers > 1 && isSingleThreadedPipeline(input)) {
     numDrivers = 1;
   }
 
   VELOX_CHECK(
-      fragment.type != FragmentType::kFixed ||
+      fragment.type != velox::core::StageType::kFixed ||
           fragment.numRemotePartitions.has_value(),
       "kFixed fragment must have numRemotePartitions set");
   auto numTasks = fragment.numRemotePartitions.value_or(
-      fragment.type == FragmentType::kSource ? options_.maxRemotePartitions
-                                             : 1);
+      fragment.type == velox::core::StageType::kSource
+          ? options_.maxRemotePartitions
+          : 1);
 
   WriteStatsBuilder statsBuilder(
       table, inputType, *handle, numDrivers, numTasks);
@@ -2386,8 +2395,8 @@ velox::core::PlanNodePtr ToVelox::makeWrite(
 
 velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
     const EnforceSingleRow& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
   auto node = std::make_shared<velox::core::EnforceSingleRowNode>(
       nextId(), std::move(input));
@@ -2397,8 +2406,8 @@ velox::core::PlanNodePtr ToVelox::makeEnforceSingleRow(
 
 velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
     const AssignUniqueId& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   auto node = std::make_shared<velox::core::AssignUniqueIdNode>(
@@ -2410,8 +2419,8 @@ velox::core::PlanNodePtr ToVelox::makeAssignUniqueId(
 
 velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
     const EnforceDistinct& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   auto node = std::make_shared<velox::core::EnforceDistinctNode>(
@@ -2427,8 +2436,8 @@ velox::core::PlanNodePtr ToVelox::makeEnforceDistinct(
 
 velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
     const MarkDistinct& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
   if (options_.maxLocalPartitions > 1) {
     // Add local partition unless keys are already co-located.
@@ -2480,8 +2489,8 @@ velox::core::PlanNodePtr ToVelox::makeMarkDistinct(
 
 velox::core::PlanNodePtr ToVelox::makeGroupId(
     const GroupId& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   auto input = makeFragment(op.input(), fragment, stages);
 
   std::vector<velox::core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
@@ -2539,8 +2548,8 @@ void ToVelox::makePredictionAndHistory(
 
 velox::core::PlanNodePtr ToVelox::makeFragment(
     const RelationOpPtr& op,
-    ExecutableFragment& fragment,
-    std::vector<ExecutableFragment>& stages) {
+    velox::core::Stage& fragment,
+    std::vector<velox::core::Stage>& stages) {
   velox::core::PlanNodePtr result;
   switch (op->relType()) {
     case RelType::kProject:

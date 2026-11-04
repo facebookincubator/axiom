@@ -27,7 +27,7 @@ namespace facebook::axiom::graphviz {
 /// Each fragment is rendered as a labeled box containing:
 ///   - The fragment's output distribution (e.g. hash[k1, k2], broadcast,
 ///     arbitrary, gather) read from the root PartitionedOutputNode.
-///   - The fragment header: task prefix, FragmentType, and task width.
+///   - The fragment header: task prefix, StageType, and task width.
 ///   - The fragment's Velox plan tree, indented to preserve structure,
 ///     with node type names only. ProjectNode nodes and the root
 ///     PartitionedOutputNode are skipped as structural noise.
