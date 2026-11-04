@@ -16,15 +16,18 @@
 
 #include "axiom/optimizer/Node.h"
 
+#include <optional>
+#include <type_traits>
+
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/Builder.h"
 #include "axiom/optimizer/ExprFactory.h"
-#include "axiom/optimizer/KeyHash.h"
 #include "axiom/optimizer/NodePrinter.h"
 #include "axiom/optimizer/NodeVisitor.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/TableAccessHandle.h"
+#include "velox/common/base/BitUtil.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -781,6 +784,70 @@ Scan::Scan(Key key)
         column->outputName());
   }
 }
+
+namespace {
+
+// Hashes a single value. Pointer / integer / enum / range / Frame are handled
+// generically; pointer-elements of ranges are hashed by address, matching how
+// `Key::operator==` compares them.
+template <typename T>
+size_t hashOne(const T& value);
+
+// Forward declaration: keeps `hashOf` (template) able to resolve to this
+// non-template overload during phase-1 name lookup; otherwise the generic
+// `hashOne<Frame>` template hits the catch-all static_assert.
+size_t hashOne(const Frame& frame);
+
+template <typename T>
+constexpr bool isOptional = false;
+
+template <typename T>
+constexpr bool isOptional<std::optional<T>> = true;
+
+// Hashes a list of fields by combining `hashOne` of each via `hashMix`.
+template <typename... Args>
+size_t hashOf(const Args&... args) {
+  size_t hash = 0;
+  ((hash = velox::bits::hashMix(hash, hashOne(args))), ...);
+  return hash;
+}
+
+size_t hashOne(const Frame& frame) {
+  return hashOf(
+      frame.type,
+      frame.startType,
+      frame.startValue,
+      frame.endType,
+      frame.endValue);
+}
+
+template <typename T>
+size_t hashOne(const T& value) {
+  if constexpr (std::is_pointer_v<T>) {
+    return reinterpret_cast<uintptr_t>(value);
+  } else if constexpr (std::is_enum_v<T>) {
+    return static_cast<size_t>(value);
+  } else if constexpr (std::is_integral_v<T>) {
+    return static_cast<size_t>(value);
+  } else if constexpr (isOptional<T>) {
+    // An absent optional must not collide with any present value, so mix in
+    // whether it is set.
+    return value.has_value() ? velox::bits::hashMix(1, hashOne(*value)) : 0;
+  } else if constexpr (requires {
+                         value.begin();
+                         value.end();
+                       }) {
+    size_t hash = 0;
+    for (const auto& element : value) {
+      hash = velox::bits::hashMix(hash, hashOne(element));
+    }
+    return hash;
+  } else {
+    static_assert(sizeof(T) == 0, "Add a hashOne overload for this type");
+  }
+}
+
+} // namespace
 
 size_t Scan::KeyHash::operator()(const Scan* node) const {
   return hashOf(
