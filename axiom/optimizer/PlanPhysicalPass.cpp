@@ -1151,8 +1151,11 @@ class SmallRelationExpressions {
     inputNeeded.unionColumns(join->filter());
     ColumnVector outputColumns;
     ColumnVector sourceColumns;
+    const ColumnCP mark =
+        Join::projectsMark(join->joinType()) ? join->markColumn() : nullptr;
     for (size_t i = 0; i < join->outputColumns().size(); ++i) {
-      if (needed.contains(join->outputColumns()[i])) {
+      if (join->outputColumns()[i] != mark &&
+          needed.contains(join->outputColumns()[i])) {
         outputColumns.push_back(join->outputColumns()[i]);
         sourceColumns.push_back(join->sourceColumns()[i]);
         inputNeeded.add(join->sourceColumns()[i]);
@@ -1171,6 +1174,10 @@ class SmallRelationExpressions {
           sourceColumns.push_back(column);
         }
       }
+    }
+    if (mark != nullptr) {
+      outputColumns.push_back(mark);
+      sourceColumns.push_back(mark);
     }
     return builder_.make<Join>({
         .left = sides[0],
