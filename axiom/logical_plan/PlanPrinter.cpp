@@ -134,23 +134,19 @@ std::string toText(const GraphPathPattern& path) {
   return folly::join(" ", prefix);
 }
 
-// Describes a vector search: its keys, then the index searched for the
-// embedding, 'k' and the metric.
+// Describes a vector search: its condition, the embeddings searched, the
+// metric, 'k' and the hints.
 std::string describeVectorSearch(const VectorSearchNode& node) {
-  std::vector<std::string> keys;
-  keys.reserve(node.probeKeys().size());
-  for (size_t i = 0; i < node.probeKeys().size(); ++i) {
-    keys.push_back(
-        fmt::format("{} = {}", node.probeKeys()[i], node.buildKeys()[i]));
-  }
   auto text = fmt::format(
-      "{}nearest {} to {}, k = {}, {}",
-      keys.empty() ? "" : folly::join(" AND ", keys) + ", ",
-      node.buildIndex(),
+      "{}nearest {} to {}, {}, k = {}",
+      node.condition() != nullptr
+          ? ExprPrinter::toText(*node.condition()) + ", "
+          : "",
+      node.buildEmbedding(),
       node.probeEmbedding(),
-      node.k(),
-      velox::common::vectorindex::VectorIndexMetricName::toName(node.metric()));
-  for (const auto& [name, value] : node.searchOptions()) {
+      velox::common::vectorindex::VectorIndexMetricName::toName(node.metric()),
+      node.k());
+  for (const auto& [name, value] : node.hints()) {
     text += fmt::format(", {} = {}", name, value);
   }
   return text;
@@ -619,6 +615,10 @@ class CollectExprStatsPlanNodeVisitor : public PlanNodeVisitor {
 
   void visit(const VectorSearchNode& node, PlanNodeVisitorContext& context)
       const override {
+    auto& stats = static_cast<Context&>(context).stats;
+    if (node.condition() != nullptr) {
+      collectExprStats(*node.condition(), stats);
+    }
     visitInputs(node, context);
   }
 

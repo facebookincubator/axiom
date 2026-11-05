@@ -171,6 +171,31 @@ TEST_F(DeleteTest, partitionPredicate) {
   EXPECT_EQ(0, runCount("FROM test"));
 }
 
+// A delete of partitions of a table removes the same partitions from each of
+// its vector indexes, and a delete of all rows empties them.
+TEST_F(DeleteTest, vectorIndex) {
+  run("CREATE TABLE t (id BIGINT, e ARRAY(REAL), pk BIGINT, PRIMARY KEY (id), "
+      "VECTOR INDEX i (e) WITH (distance_metric = 'cosine', "
+      "index_type = 'flat', num_clusters = 4)) "
+      "WITH (partitioned_by = ARRAY['pk'])");
+  run("INSERT INTO t VALUES (1, ARRAY[1, 0], 1), (2, ARRAY[0, 1], 2)");
+  run("INSERT INTO t__i__codecs VALUES (NULL, 1, 0), (NULL, 2, 0)");
+  run("INSERT INTO t__i__index VALUES (0, 0, 0, NULL, 1), (0, 0, 0, NULL, 2)");
+
+  EXPECT_EQ(1, fetchSingleValue<int64_t>("DELETE FROM t WHERE pk = 1"));
+  for (const auto* table : {"t", "t__i__codecs", "t__i__index"}) {
+    SCOPED_TRACE(table);
+    EXPECT_EQ(0, runCount(fmt::format("FROM {} WHERE pk = 1", table)));
+    EXPECT_EQ(1, runCount(fmt::format("FROM {} WHERE pk = 2", table)));
+  }
+
+  run("DELETE FROM t");
+  for (const auto* table : {"t", "t__i__codecs", "t__i__index"}) {
+    SCOPED_TRACE(table);
+    EXPECT_EQ(0, runCount(fmt::format("FROM {}", table)));
+  }
+}
+
 // A delete drops whole partitions, so a predicate on a data column is refused.
 TEST_F(DeleteTest, unsupportedPredicate) {
   run("CREATE TABLE t WITH (partitioned_by = ARRAY['pk']) AS "

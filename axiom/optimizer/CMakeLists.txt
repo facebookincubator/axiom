@@ -124,6 +124,7 @@ add_library(
   GraphMatchLowering.cpp
   TranslatePass.cpp
   Translator.cpp
+  VectorIndexSearch.cpp
   VeloxExprImporter.cpp
 )
 

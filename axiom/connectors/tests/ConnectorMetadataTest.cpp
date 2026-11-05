@@ -20,6 +20,8 @@
 
 #include <functional>
 
+#include <folly/coro/BlockingWait.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 
@@ -134,6 +136,60 @@ TEST(ConnectorDeleteHandleTest, requiredFields) {
   VELOX_ASSERT_THROW(
       ConnectorDeleteHandle(std::make_shared<TestInsertHandle>(), nullptr),
       "Delete result type must not be null");
+}
+
+// A connector without CREATE TABLE support, so without vector indexes.
+class NoVectorIndexMetadata final : public ConnectorMetadata {
+ public:
+  TablePtr findTable(const SchemaTableName& /*tableName*/) override {
+    return nullptr;
+  }
+
+  ConnectorSplitManager* splitManager() override {
+    return nullptr;
+  }
+
+  std::vector<std::string> listSchemaNames(
+      const ConnectorSessionPtr& /*session*/) override {
+    return {};
+  }
+
+  bool schemaExists(
+      const ConnectorSessionPtr& /*session*/,
+      const std::string& /*schemaName*/) override {
+    return false;
+  }
+
+  std::vector<std::string> listTableNames(
+      const ConnectorSessionPtr& /*session*/,
+      const std::string& /*schemaName*/) override {
+    return {};
+  }
+};
+
+// Adding or dropping a vector index through a connector without vector indexes
+// is a user error.
+TEST(ConnectorVectorIndexTest, unsupported) {
+  NoVectorIndexMetadata metadata;
+  const SchemaTableName table{"s", "t"};
+  VELOX_ASSERT_USER_THROW(
+      folly::coro::blockingWait(metadata.co_addVectorIndex(
+          /*session=*/nullptr,
+          table,
+          {.name = "i", .column = "e"},
+          /*ifTableExists=*/false,
+          /*ifNotExists=*/false,
+          /*explain=*/false)),
+      "Vector indexes are not supported by this connector: i");
+  VELOX_ASSERT_USER_THROW(
+      metadata.dropVectorIndex(
+          /*session=*/nullptr,
+          table,
+          "i",
+          /*ifTableExists=*/false,
+          /*ifExists=*/false,
+          /*explain=*/false),
+      "Vector indexes are not supported by this connector: i");
 }
 
 } // namespace

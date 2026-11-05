@@ -1809,10 +1809,18 @@ class IndexLookupJoin : public Node {
 
 using IndexLookupJoinCP = const IndexLookupJoin*;
 
-/// Joins each probe row with the entries of vector indexes nearest to its
-/// embedding: the vector search join of the logical plan (see
-/// logical_plan::VectorSearchNode). Each row of `build`, the build side, holds
-/// a packed vector index in `buildIndex`.
+/// Joins each probe row with the build entries nearest to its embedding: the
+/// vector search join of the logical plan (see
+/// logical_plan::VectorSearchNode). It has two forms, by what `buildIndex`
+/// holds:
+/// - A search of embeddings: `buildIndex` is an ARRAY(REAL) column of a table
+///   with a vector index on it (see connector::Table::vectorIndexes()),
+///   each row a candidate. Translation builds this form. Pushdown and pruning
+///   replaces it with searches of the index's storage tables, so it never
+///   reaches emission.
+/// - A search of VECTOR_INDEX values: each row of `build` holds a vector index
+///   in `buildIndex`, whose entries are the candidates. Each entry found gives
+///   an output row with its `id`.
 ///
 ///     VectorSearch(probe=queries, build=codecs, joinType=kInner,
 ///                  probeKeys=[q.ds], buildKeys=[c.ds],
@@ -1820,10 +1828,11 @@ using IndexLookupJoinCP = const IndexLookupJoin*;
 ///                  id=cluster_id, score=score)
 ///
 /// The equality of `probeKeys` and `buildKeys` matches each probe row to build
-/// rows. Each match's index is searched for the `k` entries nearest to the
-/// probe row's embedding, and each entry gives an output row with its `id` and
-/// `score`. A left join outputs a probe row with no entries once, with nulls
-/// for the build columns, `id` and `score`.
+/// rows. Among the candidates of its matches, a search of embeddings finds the
+/// `k` nearest to the probe row's embedding, and a search of VECTOR_INDEX
+/// values finds the `k` nearest in each match's index. A left join outputs a
+/// probe row with no entries once, with nulls for the build columns, `id` and
+/// `score`.
 ///
 /// `sourceColumns[i]` supplies `outputColumns[i]`. A probe column supplies
 /// itself, as do `id` and `score`. A build column supplies itself in an inner
@@ -1836,15 +1845,17 @@ using IndexLookupJoinCP = const IndexLookupJoin*;
 ///   may be empty: every probe row then matches every build row.
 /// - `probeEmbedding` is a column of `probe`, `buildIndex` a column of `build`.
 /// - `k` is at least 1.
-/// - `sourceColumns` and `outputColumns` have the same size, and `buildIndex`
-///   is not a source.
+/// - `id` is set exactly for a search of VECTOR_INDEX values, and `numProbes`
+///   and `index` only for a search of embeddings.
+/// - `sourceColumns` and `outputColumns` have the same size. In a search of
+///   VECTOR_INDEX values, `buildIndex` is not a source.
 /// - Once placed, its inputs satisfy `Join::keepsReplicatedInputs`.
 class VectorSearch : public Node {
  public:
   struct Key {
     /// The rows with embeddings to search for.
     NodeCP probe;
-    /// The rows with the indexes to search in.
+    /// The rows to search in.
     NodeCP build;
     /// kInner or kLeft.
     velox::core::JoinType joinType;
@@ -1854,17 +1865,26 @@ class VectorSearch : public Node {
     ExprVector buildKeys;
     /// The ARRAY(REAL) probe column to search for.
     ColumnCP probeEmbedding;
-    /// The VARBINARY build column with a packed vector index.
+    /// The build column searched, which decides the form of the search.
     ColumnCP buildIndex;
-    /// The metric the indexes were built for.
+    /// How the search compares embeddings. The indexes searched were built
+    /// with it.
     velox::common::vectorindex::VectorIndexMetric metric;
-    /// The number of entries to find in each matching index.
+    /// The number of candidates to find in each matching index, or for each
+    /// probe row when searching embeddings.
     int64_t k;
+    /// For a search of embeddings, the num_probes hint (see
+    /// logical_plan::VectorSearchNode).
+    std::optional<int64_t> numProbes;
+    /// For a search of embeddings, the index hint: the name of the build
+    /// table's vector index to search (see logical_plan::VectorSearchNode).
+    std::optional<Name> index;
     /// Search settings that override the ones recorded in the indexes.
-    std::vector<std::pair<std::string, std::string>> searchOptions;
-    /// The BIGINT id of each entry found.
+    QGVector<std::pair<Name, Name>> searchOptions;
+    /// The BIGINT id of each entry found. Set for a search of VECTOR_INDEX
+    /// values.
     ColumnCP id;
-    /// The REAL score of each entry found.
+    /// The REAL score of each entry found, or nullptr when no output reads it.
     ColumnCP score;
     /// Output schema, pruned to what consumers need.
     ColumnVector outputColumns;
@@ -1926,8 +1946,20 @@ class VectorSearch : public Node {
     return k_;
   }
 
-  const std::vector<std::pair<std::string, std::string>>& searchOptions()
-      const {
+  std::optional<int64_t> numProbes() const {
+    return numProbes_;
+  }
+
+  std::optional<Name> index() const {
+    return index_;
+  }
+
+  /// True if the search is of embeddings, false if of VECTOR_INDEX values.
+  bool searchesEmbeddings() const {
+    return id_ == nullptr;
+  }
+
+  const QGVector<std::pair<Name, Name>>& searchOptions() const {
     return searchOptions_;
   }
 
@@ -1963,7 +1995,9 @@ class VectorSearch : public Node {
   const ColumnCP buildIndex_;
   const velox::common::vectorindex::VectorIndexMetric metric_;
   const int64_t k_;
-  const std::vector<std::pair<std::string, std::string>> searchOptions_;
+  const std::optional<int64_t> numProbes_;
+  const std::optional<Name> index_;
+  const QGVector<std::pair<Name, Name>> searchOptions_;
   const ColumnCP id_;
   const ColumnCP score_;
   const ColumnVector sourceColumns_;

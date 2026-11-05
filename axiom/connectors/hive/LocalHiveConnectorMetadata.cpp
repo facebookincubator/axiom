@@ -19,10 +19,13 @@
 #include <folly/Conv.h>
 #include <folly/CppAttributes.h>
 #include <folly/FileUtil.h>
+#include <folly/String.h>
 #include <folly/json.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <array>
+#include <functional>
+#include <set>
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/optimizer/JsonUtil.h"
@@ -270,8 +273,6 @@ std::shared_ptr<SplitSource> LocalHiveSplitManager::getSplitSource(
   VELOX_USER_CHECK(
       !samplePercentage.has_value(),
       "SYSTEM sampling is not supported by this connector");
-  // Since there are only unpartitioned tables now, always makes a SplitSource
-  // that goes over all the files in the handle's layout.
   auto table = metadata_->findTable(
       {std::string(LocalHiveConnectorMetadata::kDefaultSchema),
        tableHandle->name()});
@@ -477,7 +478,7 @@ void LocalHiveConnectorMetadata::readTables(std::string_view path) {
 LocalHiveTableLayout::LocalHiveTableLayout(
     const std::string& label,
     const Table* table,
-    const LocalHiveConnectorMetadata& metadata,
+    LocalHiveConnectorMetadata& metadata,
     std::vector<const Column*> columns,
     std::optional<int32_t> numBuckets,
     const std::vector<const Column*>& partitioning,
@@ -888,6 +889,98 @@ std::unique_ptr<DiscretePredicates> LocalHiveTableLayout::discretePredicates(
   return std::make_unique<HiveDiscretePredicates>(columns, std::move(rows));
 }
 
+namespace {
+
+// Returns the values of 'partitionColumns' in the partition of 'file'.
+std::vector<std::optional<std::string>> partitionOf(
+    const FileInfo& file,
+    const velox::RowType& partitionColumns) {
+  std::vector<std::optional<std::string>> partition;
+  partition.reserve(partitionColumns.size());
+  for (const auto& name : partitionColumns.names()) {
+    const auto it = file.partitionKeys.find(name);
+    VELOX_CHECK(
+        it != file.partitionKeys.end(),
+        "File has no value for a partition column: {}, {}",
+        file.path,
+        name);
+    partition.push_back(it->second);
+  }
+  return partition;
+}
+
+} // namespace
+
+// A partition of the table is one with data files.
+// TODO: Prune by the filters createTableHandle rejected too. A filter on
+// partition columns it rejects can fail a search for a partition the search
+// does not read.
+folly::coro::Task<void> LocalHiveTableLayout::co_checkVectorIndexCoverage(
+    ConnectorSessionPtr /*session*/,
+    velox::connector::ConnectorTableHandlePtr tableHandle,
+    velox::core::ExpressionEvaluator& /*evaluator*/,
+    VectorIndexPtr index) const {
+  const auto& partitionColumns = *index->partitionColumns;
+  const auto indexTable = metadata_.findTable(index->indexTable);
+  VELOX_CHECK_NOT_NULL(
+      indexTable,
+      "Vector index table not found: {}",
+      index->indexTable.toString());
+
+  std::set<std::vector<std::optional<std::string>>> covered;
+  for (const auto& file : indexTable->primaryLayout()
+                              ->asChecked<LocalHiveTableLayout>()
+                              ->files()) {
+    covered.insert(partitionOf(*file, partitionColumns));
+  }
+
+  const auto& handle =
+      *tableHandle->asChecked<velox::connector::hive::HiveTableHandle>();
+  const auto selected =
+      [&](const std::vector<std::optional<std::string>>& partition) {
+        for (const auto& [subfield, filter] : handle.subfieldFilters()) {
+          const auto column =
+              partitionColumns.getChildIdxIfExists(subfield.baseName());
+          if (column.has_value() &&
+              !testPartitionValue(
+                  *filter,
+                  partition[column.value()],
+                  *partitionColumns.childAt(column.value()))) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+  for (const auto& file : files()) {
+    const auto partition = partitionOf(*file, partitionColumns);
+    if (covered.contains(partition) || !selected(partition)) {
+      continue;
+    }
+    if (partition.empty()) {
+      VELOX_USER_FAIL(
+          "Vector index does not cover its table: {} of {}",
+          index->name,
+          table().name().toString());
+    }
+    std::vector<std::string> values;
+    values.reserve(partition.size());
+    for (size_t i = 0; i < partition.size(); ++i) {
+      values.push_back(
+          fmt::format(
+              "{}={}",
+              partitionColumns.nameOf(i),
+              partition[i].value_or("NULL")));
+    }
+    VELOX_USER_FAIL(
+        "Vector index does not cover a partition the search reads: {} of {}, partition ({})",
+        index->name,
+        table().name().toString(),
+        folly::join(", ", values));
+  }
+  co_return;
+}
+
 LocalHiveTableLayout* LocalTable::makeDefaultLayout(
     std::vector<std::unique_ptr<const FileInfo>> files,
     LocalHiveConnectorMetadata& metadata) {
@@ -1117,12 +1210,168 @@ folly::dynamic toJsonArray(const std::vector<std::string>& values) {
   return json;
 }
 
+// Returns the record of 'index' a '.schema' keeps: what the table's columns
+// and the index's name do not determine.
+folly::dynamic toVectorIndexJson(const VectorIndex& index) {
+  folly::dynamic indexOptions = folly::dynamic::object;
+  for (const auto& [key, value] : index.properties.indexOptions) {
+    indexOptions[key] = value;
+  }
+  return folly::dynamic::object("name", index.name)(
+      "keyColumn", index.keyColumn)("embeddingColumn", index.embeddingColumn)(
+      "distanceMetric",
+      velox::common::vectorindex::VectorIndexMetricName::toName(
+          index.properties.metric))(
+      "indexType",
+      velox::common::vectorindex::VectorIndexKindName::toName(
+          index.properties.indexKind))(
+      "numClusters", index.properties.numClusters)(
+      "codecPolicy",
+      VectorIndexCodecPolicyName::toName(index.properties.codecPolicy))(
+      "indexOptions", std::move(indexOptions));
+}
+
+// Returns the names this connector gives the codec table and the index table
+// of the index 'name' of 'table': the table's name, the index's name and
+// "codecs" or "index", joined by "__", e.g. products__product_index__codecs.
+std::pair<SchemaTableName, SchemaTableName> storageTableNames(
+    const SchemaTableName& table,
+    std::string_view name) {
+  return {
+      {table.schema, fmt::format("{}__{}__codecs", table.table, name)},
+      {table.schema, fmt::format("{}__{}__index", table.table, name)},
+  };
+}
+
+// Returns the index of 'table', with the partition columns 'partitionColumns',
+// that 'json' records (see toVectorIndexJson).
+VectorIndexPtr fromVectorIndexJson(
+    const SchemaTableName& table,
+    const velox::RowTypePtr& partitionColumns,
+    const folly::dynamic& json) {
+  std::map<std::string, std::string> indexOptions;
+  for (const auto& [key, value] : json["indexOptions"].items()) {
+    indexOptions.emplace(key.asString(), value.asString());
+  }
+  auto name = json["name"].asString();
+  auto [codecTable, indexTable] = storageTableNames(table, name);
+  return std::make_shared<const VectorIndex>(VectorIndex{
+      .name = std::move(name),
+      .keyColumn = json["keyColumn"].asString(),
+      .embeddingColumn = json["embeddingColumn"].asString(),
+      .partitionColumns = partitionColumns,
+      .properties =
+          {
+              .metric = velox::common::vectorindex::VectorIndexMetricName::
+                  toVectorIndexMetric(json["distanceMetric"].asString()),
+              .indexKind = velox::common::vectorindex::VectorIndexKindName::
+                  toVectorIndexKind(json["indexType"].asString()),
+              .numClusters = json["numClusters"].asInt(),
+              .codecPolicy =
+                  VectorIndexCodecPolicyName::toVectorIndexCodecPolicy(
+                      json["codecPolicy"].asString()),
+              .indexOptions = std::move(indexOptions),
+          },
+      .codecTable = std::move(codecTable),
+      .indexTable = std::move(indexTable),
+  });
+}
+
+// Returns the columns of 'schema' that 'names' names, in that order.
+velox::RowTypePtr selectColumns(
+    const velox::RowTypePtr& schema,
+    const std::vector<std::string>& names) {
+  std::vector<velox::TypePtr> types;
+  types.reserve(names.size());
+  for (const auto& name : names) {
+    types.push_back(schema->findChild(name));
+  }
+  return velox::ROW(names, std::move(types));
+}
+
+// Returns the index 'resolved' of 'table', with the partition columns
+// 'partitionColumns', and the properties of its storage tables.
+std::pair<VectorIndexPtr, folly::F14FastMap<std::string, velox::Variant>>
+makeVectorIndex(
+    const SchemaTableName& table,
+    const velox::RowTypePtr& partitionColumns,
+    ResolvedVectorIndex resolved) {
+  auto& storageProperties = resolved.storageProperties;
+  // These name columns of the index's table, which its storage tables do not
+  // have, and the storage tables take the table's partitions.
+  for (const auto* property : {
+           HiveWriteOptions::kPartitionedBy,
+           HiveWriteOptions::kBucketedBy,
+           HiveWriteOptions::kBucketCount,
+           HiveWriteOptions::kSortedBy,
+       }) {
+    VELOX_USER_CHECK(
+        !storageProperties.contains(property),
+        "Unsupported property for a vector index: {}",
+        property);
+  }
+  auto [codecTable, indexTable] = storageTableNames(table, resolved.name);
+  return {
+      std::make_shared<const VectorIndex>(VectorIndex{
+          .name = std::move(resolved.name),
+          .keyColumn = std::move(resolved.keyColumn),
+          .embeddingColumn = std::move(resolved.embeddingColumn),
+          .partitionColumns = partitionColumns,
+          .properties = std::move(resolved.properties),
+          .codecTable = std::move(codecTable),
+          .indexTable = std::move(indexTable),
+      }),
+      std::move(storageProperties)};
+}
+
+// The definitions of the codec table and the index table of 'index', with the
+// properties 'storageProperties'.
+std::array<std::pair<SchemaTableName, TableDefinition>, 2>
+storageTableDefinitions(
+    const VectorIndex& index,
+    const folly::F14FastMap<std::string, velox::Variant>& storageProperties) {
+  const auto partitionedBy = [](std::vector<std::string> names) {
+    return velox::Variant::array(
+        std::vector<velox::Variant>(names.begin(), names.end()));
+  };
+  auto codecProperties = storageProperties;
+  auto codecPartitions = index.partitionColumns->names();
+  codecPartitions.emplace_back(VectorIndex::kCodecId);
+  codecProperties[HiveWriteOptions::kPartitionedBy] =
+      partitionedBy(std::move(codecPartitions));
+  auto indexProperties = storageProperties;
+  if (index.partitionColumns->size() > 0) {
+    indexProperties[HiveWriteOptions::kPartitionedBy] =
+        partitionedBy(index.partitionColumns->names());
+  }
+  return {{
+      {index.codecTable,
+       TableDefinition::create(
+           VectorIndex::codecTableType(index.partitionColumns),
+           std::move(codecProperties))},
+      {index.indexTable,
+       TableDefinition::create(
+           VectorIndex::indexTableType(index.partitionColumns),
+           std::move(indexProperties))},
+  }};
+}
+
 // Returns the '.schema' JSON for a table with the columns, comment and primary
-// key of 'definition' and the properties in 'options'.
+// key of 'definition', the properties in 'options' and the vector indexes
+// 'indexes'.
 folly::dynamic toSchemaJson(
     const TableDefinition& definition,
-    const CreateTableOptions& options) {
+    const CreateTableOptions& options,
+    const std::vector<VectorIndexPtr>& indexes) {
   folly::dynamic schema = folly::dynamic::object;
+
+  if (!indexes.empty()) {
+    auto records = folly::dynamic::array();
+    for (const auto& index : indexes) {
+      records.push_back(toVectorIndexJson(*index));
+    }
+    schema["vectorIndexes"] = std::move(records);
+  }
 
   if (definition.comment.has_value()) {
     schema["comment"] = definition.comment.value();
@@ -1187,13 +1436,14 @@ folly::dynamic toSchemaJson(
   return schema;
 }
 
-// Returns a table with the columns, comment and primary key of 'definition' and
-// the properties in 'createTableOptions'.
+// Returns a table with the columns, comment and primary key of 'definition',
+// the properties in 'createTableOptions' and the vector indexes 'indexes'.
 std::shared_ptr<LocalTable> createLocalTable(
     std::string_view name,
     const TableDefinition& definition,
     const CreateTableOptions& createTableOptions,
-    const LocalHiveConnectorMetadata& metadata) {
+    const std::vector<VectorIndexPtr>& indexes,
+    LocalHiveConnectorMetadata& metadata) {
   folly::F14FastMap<std::string, velox::Variant> options;
   if (createTableOptions.compressionKind.has_value()) {
     options[HiveWriteOptions::kCompressionKind] =
@@ -1311,13 +1561,16 @@ std::shared_ptr<LocalTable> createLocalTable(
       createTableOptions.fileFormat.value(),
       std::move(serdeParameters));
   table->addLayout(std::move(layout));
+  for (const auto& index : indexes) {
+    table->linkVectorIndex(index);
+  }
   return table;
 }
 
 std::shared_ptr<LocalTable> createTableFromSchema(
     std::string_view name,
     std::string_view path,
-    const LocalHiveConnectorMetadata& metadata) {
+    LocalHiveConnectorMetadata& metadata) {
   auto jsons = readConcatenatedDynamicsFromFile(SchemaFile::path(path));
   if (jsons.empty()) {
     return nullptr;
@@ -1338,7 +1591,20 @@ std::shared_ptr<LocalTable> createTableFromSchema(
     }
   }
 
-  return createLocalTable(name, definition, options, metadata);
+  std::vector<VectorIndexPtr> indexes;
+  if (json.count("vectorIndexes")) {
+    const SchemaTableName tableName{
+        std::string(LocalHiveConnectorMetadata::kDefaultSchema),
+        std::string(name)};
+    const auto partitionColumns =
+        selectColumns(definition.rowType(), options.partitionedByColumns);
+    for (const auto& record : json["vectorIndexes"]) {
+      indexes.push_back(
+          fromVectorIndexJson(tableName, partitionColumns, record));
+    }
+  }
+
+  return createLocalTable(name, definition, options, indexes, metadata);
 }
 
 // Parses a Hive partition directory named '<expectedColumn>=<value>'. Returns
@@ -1671,9 +1937,10 @@ void createDir(const std::string& path) {
 } // namespace
 
 folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
-    ConnectorSessionPtr /*session*/,
+    ConnectorSessionPtr session,
     SchemaTableName tableName,
     TableDefinition definition,
+    std::vector<ResolvedVectorIndex> vectorIndexes,
     bool ifNotExists,
     bool explain) {
   const auto& options = definition.properties;
@@ -1685,6 +1952,20 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
   ensureInitialized();
   auto createTableOptions = parseCreateTableOptions(options, format_);
 
+  const auto partitionColumns = selectColumns(
+      definition.rowType(), createTableOptions.partitionedByColumns);
+  std::vector<VectorIndexPtr> indexes;
+  std::vector<std::pair<SchemaTableName, TableDefinition>> storageTables;
+  for (auto& resolved : vectorIndexes) {
+    auto [index, storageProperties] =
+        makeVectorIndex(tableName, partitionColumns, std::move(resolved));
+    for (auto& storageTable :
+         storageTableDefinitions(*index, storageProperties)) {
+      storageTables.push_back(std::move(storageTable));
+    }
+    indexes.push_back(std::move(index));
+  }
+
   if (explain) {
     {
       std::lock_guard<std::mutex> l(mutex_);
@@ -1695,8 +1976,13 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
         VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
       }
     }
+    co_await co_createStorageTables(
+        session,
+        std::move(storageTables),
+        /*explain=*/true,
+        /*publish=*/nullptr);
     co_return createLocalTable(
-        tableName.table, definition, createTableOptions, *this);
+        tableName.table, definition, createTableOptions, indexes, *this);
   }
 
   auto path = tablePath(tableName);
@@ -1709,29 +1995,39 @@ folly::coro::Task<TablePtr> LocalHiveConnectorMetadata::co_doCreateTable(
     createDir(path);
   }
 
-  const std::string jsonStr =
-      folly::toPrettyJson(toSchemaJson(definition, createTableOptions));
-  const std::string filePath = SchemaFile::path(path);
-
-  std::lock_guard<std::mutex> l(mutex_);
-  if (findTableLocked(tableName.table)) {
+  // The table and its indexes' storage tables are created together, or none
+  // of them is: the table is published once its storage tables exist.
+  std::vector<SchemaTableName> created;
+  try {
+    created = co_await co_createStorageTables(
+        session, std::move(storageTables), /*explain=*/false, [&] {
+          folly::writeFileAtomic(
+              SchemaFile::path(path),
+              folly::toPrettyJson(
+                  toSchemaJson(definition, createTableOptions, indexes)));
+        });
+  } catch (...) {
     deleteDirectoryRecursive(path);
-    if (ifNotExists) {
-      co_return nullptr;
-    }
-    VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
+    throw;
   }
-  {
-    std::ofstream outputFile(filePath);
-    VELOX_CHECK(outputFile.is_open());
 
-    outputFile << jsonStr;
-    outputFile.close();
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (!findTableLocked(tableName.table)) {
+      auto table = createLocalTable(
+          tableName.table, definition, createTableOptions, indexes, *this);
+      tables_[tableName.table] = table;
+      co_return table;
+    }
   }
-  auto table =
-      createLocalTable(tableName.table, definition, createTableOptions, *this);
-  tables_[tableName.table] = table;
-  co_return table;
+  for (const auto& name : created) {
+    dropTableIfExists(name);
+  }
+  deleteDirectoryRecursive(path);
+  if (ifNotExists) {
+    co_return nullptr;
+  }
+  VELOX_USER_FAIL("Table already exists: {}", tableName.toString());
 }
 
 namespace {
@@ -1756,7 +2052,52 @@ void removeEmptyParents(const fs::path& dir, const fs::path& root) {
   }
 }
 
+// Removes the data files and stats of the table at 'path', keeping its
+// directory and '.schema'.
+void removeTableData(const fs::path& path) {
+  // Collected before removing any: removing an entry invalidates an open
+  // directory iterator.
+  const auto schemaFile = SchemaFile::path(path.string());
+  std::vector<fs::path> entries;
+  for (const auto& entry : fs::directory_iterator(path)) {
+    if (entry.path().string() != schemaFile) {
+      entries.push_back(entry.path());
+    }
+  }
+  for (const auto& entry : entries) {
+    fs::remove_all(entry);
+  }
+}
+
 } // namespace
+
+void LocalHiveConnectorMetadata::removeFromVectorIndexes(
+    const Table& table,
+    const std::vector<fs::path>& partitions) {
+  const fs::path path = tablePath(table.name());
+  const bool partitioned = !table.primaryLayout()
+                                ->asChecked<HiveTableLayout>()
+                                ->hivePartitionColumns()
+                                .empty();
+  for (const auto& index : table.vectorIndexes()) {
+    for (const auto& storageTable : {index->codecTable, index->indexTable}) {
+      const fs::path storagePath = tablePath(storageTable);
+      if (!partitioned) {
+        removeTableData(storagePath);
+      }
+      // The storage tables nest the table's partition directories.
+      for (const auto& partition : partitions) {
+        const auto storagePartition =
+            storagePath / fs::relative(partition, path);
+        if (fs::exists(storagePartition)) {
+          deleteDirectoryRecursive(storagePartition.string());
+          removeEmptyParents(storagePartition, storagePath);
+        }
+      }
+      loadTable(storageTable.table, storagePath);
+    }
+  }
+}
 
 std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
     const HiveDeleteWriteHandle& handle) {
@@ -1773,20 +2114,9 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
     // directory and its '.schema' stay; the data files and stats go.
     auto persisted = PersistedStats::read(path.string());
 
-    // Collected before removing any: removing an entry invalidates an open
-    // directory iterator.
-    const auto schemaFile = SchemaFile::path(path.string());
-    std::vector<fs::path> entries;
-    for (const auto& entry : fs::directory_iterator(path)) {
-      if (entry.path().string() != schemaFile) {
-        entries.push_back(entry.path());
-      }
-    }
-    for (const auto& entry : entries) {
-      fs::remove_all(entry);
-    }
-
+    removeTableData(path);
     loadTable(table.name().table, path);
+    removeFromVectorIndexes(table, /*partitions=*/{});
     // Without stats the removed rows cannot be counted.
     return persisted.has_value() ? std::optional<int64_t>{persisted->numRows}
                                  : std::nullopt;
@@ -1827,8 +2157,8 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
     deleteDirectoryRecursive(partition.string());
     removeEmptyParents(partition, path);
   }
-
   loadTable(table.name().table, path);
+  removeFromVectorIndexes(table, matchedPartitions);
   return rows;
 }
 
@@ -1872,6 +2202,7 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   VELOX_CHECK(
       !partitioned || groupingKeys != nullptr || rows == 0,
       "A write to a partitioned table must report its partitions");
+  std::vector<fs::path> writtenPartitions;
   if (groupingKeys != nullptr) {
     VELOX_CHECK_EQ(
         groupStats.size(),
@@ -1893,6 +2224,7 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
       auto partitionDirName =
           velox::connector::hive::HivePartitionName::partitionName(
               i, partitionKeys, /*partitionKeyAsLowerCase=*/true);
+      writtenPartitions.push_back(fs::path(targetPath) / partitionDirName);
       PersistedStats::write(
           fmt::format("{}/{}", targetPath, partitionDirName),
           {static_cast<uint64_t>(partitionRows), std::move(groupStats[i])});
@@ -1908,6 +2240,10 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   // loadTable reads the .schema and .stats files, populating in-memory
   // Column stats.
   loadTable(hiveHandle->table()->name().table, targetPath);
+  // The partitions the write changed are no longer the ones the indexes hold.
+  if (rows > 0) {
+    removeFromVectorIndexes(*hiveHandle->table(), writtenPartitions);
+  }
 
   return rows;
 }
@@ -1957,6 +2293,22 @@ std::optional<std::string> LocalHiveConnectorMetadata::makeStagingDirectory(
       hiveMetadataConfig_->localDataPath(), tableName.table);
 }
 
+void LocalHiveConnectorMetadata::checkNotVectorIndexStorage(
+    const SchemaTableName& tableName) const {
+  for (const auto& [name, table] : tables_) {
+    for (const auto& index : table->vectorIndexes()) {
+      for (const auto& storageTable : {index->codecTable, index->indexTable}) {
+        VELOX_USER_CHECK(
+            tableName != storageTable,
+            "A vector index's storage table must be dropped with its index: {}, index {} of {}",
+            tableName.toString(),
+            index->name,
+            table->name().toString());
+      }
+    }
+  }
+}
+
 bool LocalHiveConnectorMetadata::dropTable(
     const ConnectorSessionPtr& /* session */,
     const SchemaTableName& tableName,
@@ -1964,25 +2316,61 @@ bool LocalHiveConnectorMetadata::dropTable(
     bool explain) {
   ensureInitialized();
 
-  std::lock_guard<std::mutex> l(mutex_);
-  const bool exists = tables_.contains(tableName.table);
-  if (explain) {
+  std::vector<SchemaTableName> storageTables;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    const auto it = tables_.find(tableName.table);
+    const bool exists = it != tables_.end();
+    if (exists) {
+      checkNotVectorIndexStorage(tableName);
+    }
+    if (explain) {
+      if (!exists) {
+        VELOX_USER_CHECK(ifExists, "Table doesn't exist: {}", tableName);
+      }
+      return exists;
+    }
+
     if (!exists) {
-      VELOX_USER_CHECK(ifExists, "Table doesn't exist: {}", tableName);
+      if (ifExists) {
+        return false;
+      }
+      VELOX_USER_FAIL("Table doesn't exist: {}", tableName);
     }
-    return exists;
-  }
 
-  if (!exists) {
-    if (ifExists) {
-      return false;
+    for (const auto& index : it->second->vectorIndexes()) {
+      storageTables.push_back(index->codecTable);
+      storageTables.push_back(index->indexTable);
     }
-    VELOX_USER_FAIL("Table doesn't exist: {}", tableName);
+    deleteDirectoryRecursive(tablePath(tableName));
+    tables_.erase(it);
   }
-
-  deleteDirectoryRecursive(tablePath(tableName));
-  return tables_.erase(tableName.table) == 1;
+  for (const auto& storageTable : storageTables) {
+    dropTableIfExists(storageTable);
+  }
+  return true;
 }
+
+namespace {
+
+// Replaces the '.schema' of the table at 'path' with what 'update' makes of it.
+// Returns the replaced contents.
+std::string rewriteSchemaFile(
+    const std::string& path,
+    const std::function<void(folly::dynamic&)>& update) {
+  const auto schemaFile = SchemaFile::path(path);
+  std::string contents;
+  VELOX_CHECK(
+      folly::readFile(schemaFile.c_str(), contents),
+      "Schema file is missing: {}",
+      schemaFile);
+  auto schema = folly::parseJson(contents);
+  update(schema);
+  folly::writeFileAtomic(schemaFile, folly::toPrettyJson(schema));
+  return contents;
+}
+
+} // namespace
 
 folly::coro::Task<std::optional<bool>>
 LocalHiveConnectorMetadata::co_doAddColumn(
@@ -2020,298 +2408,143 @@ LocalHiveConnectorMetadata::co_doAddColumn(
   }
 
   auto path = tablePath(tableName);
-  auto schemaFile = SchemaFile::path(path);
-  VELOX_CHECK(
-      std::filesystem::exists(schemaFile),
-      "Schema file is missing for table {}: {}",
-      tableName,
-      schemaFile);
-
-  auto jsons = readConcatenatedDynamicsFromFile(schemaFile);
-  VELOX_CHECK(
-      !jsons.empty(),
-      "Schema file is empty for table {}: {}",
-      tableName,
-      schemaFile);
-
-  auto& schema = jsons[0];
-  schema["dataColumns"].push_back(
-      SchemaFile::columnToJson(columnName, column.type, column.comment));
-
-  std::ofstream outputFile(schemaFile);
-  VELOX_CHECK(outputFile.is_open());
-  outputFile << folly::toPrettyJson(schema);
-  outputFile.close();
-
+  rewriteSchemaFile(path, [&](folly::dynamic& schema) {
+    schema["dataColumns"].push_back(
+        SchemaFile::columnToJson(columnName, column.type, column.comment));
+  });
   loadTable(tableName.table, path);
   co_return true;
 }
 
-namespace {
-
-// Returns the names of 'indexName's codec table and index table.
-std::pair<SchemaTableName, SchemaTableName> vectorIndexTables(
-    const SchemaTableName& indexName) {
-  return {
-      {indexName.schema, indexName.table + "__codecs"},
-      {indexName.schema, indexName.table + "__index"},
-  };
-}
-
-// Returns the names of the id and embedding columns of 'columns', the columns
-// of the index besides the partition columns: one BIGINT and one ARRAY(REAL),
-// in either order.
-std::pair<std::string, std::string> idAndEmbeddingColumns(
-    const velox::RowTypePtr& columns) {
-  VELOX_USER_CHECK_EQ(
-      columns->size(),
-      2,
-      "A vector index must have exactly two columns besides its partition "
-      "columns, a BIGINT id and an ARRAY(REAL) embedding: {}",
-      columns->toString());
-
-  const uint32_t idIndex =
-      columns->childAt(0)->kind() == velox::TypeKind::BIGINT ? 0 : 1;
-  const uint32_t embeddingIndex = 1 - idIndex;
-
-  VELOX_USER_CHECK_EQ(
-      columns->childAt(idIndex)->kind(),
-      velox::TypeKind::BIGINT,
-      "A vector index must have a BIGINT id column: {} {}, {} {}",
-      columns->nameOf(0),
-      columns->childAt(0)->toString(),
-      columns->nameOf(1),
-      columns->childAt(1)->toString());
-
-  const auto& embeddingType = columns->childAt(embeddingIndex);
-  VELOX_USER_CHECK(
-      embeddingType->equivalent(*velox::ARRAY(velox::REAL())),
-      "The embedding column of a vector index must be an ARRAY(REAL): {} {}",
-      columns->nameOf(embeddingIndex),
-      embeddingType->toString());
-  return {columns->nameOf(idIndex), columns->nameOf(embeddingIndex)};
-}
-
-folly::dynamic toVectorIndexJson(const VectorIndex& index) {
-  folly::dynamic indexOptions = folly::dynamic::object;
-  for (const auto& [key, value] : index.properties.indexOptions) {
-    indexOptions[key] = value;
-  }
-  return folly::dynamic::object("idColumn", index.idColumn)(
-      "embeddingColumn", index.embeddingColumn)(
-      "distanceMetric",
-      velox::common::vectorindex::VectorIndexMetricName::toName(
-          index.properties.metric))(
-      "indexType",
-      velox::common::vectorindex::VectorIndexKindName::toName(
-          index.properties.indexKind))(
-      "numClusters", index.properties.numClusters)(
-      "codecPolicy",
-      VectorIndexCodecPolicyName::toName(index.properties.codecPolicy))(
-      "indexOptions", std::move(indexOptions))(
-      "codecTable", index.codecTable.table)(
-      "indexTable", index.indexTable.table);
-}
-
-VectorIndexPtr fromVectorIndexJson(
-    const SchemaTableName& indexName,
-    const folly::dynamic& json) {
-  std::map<std::string, std::string> indexOptions;
-  for (const auto& [key, value] : json["indexOptions"].items()) {
-    indexOptions.emplace(key.asString(), value.asString());
-  }
-  return std::make_shared<VectorIndex>(VectorIndex{
-      .name = indexName,
-      .idColumn = json["idColumn"].asString(),
-      .embeddingColumn = json["embeddingColumn"].asString(),
-      .properties =
-          {
-              .metric = velox::common::vectorindex::VectorIndexMetricName::
-                  toVectorIndexMetric(json["distanceMetric"].asString()),
-              .indexKind = velox::common::vectorindex::VectorIndexKindName::
-                  toVectorIndexKind(json["indexType"].asString()),
-              .numClusters = json["numClusters"].asInt(),
-              .codecPolicy =
-                  VectorIndexCodecPolicyName::toVectorIndexCodecPolicy(
-                      json["codecPolicy"].asString()),
-              .indexOptions = std::move(indexOptions),
-          },
-      .codecTable = {indexName.schema, json["codecTable"].asString()},
-      .indexTable = {indexName.schema, json["indexTable"].asString()},
-  });
-}
-
-// Returns the path of the file that holds 'indexName's record.
-std::string vectorIndexPath(
-    const LocalHiveConnectorMetadata& metadata,
-    const SchemaTableName& indexName) {
-  return fmt::format(
-      "{}/{}.vector_index",
-      metadata.hiveMetadataConfig()->localDataPath(),
-      indexName.table);
-}
-
-} // namespace
-
-folly::coro::Task<bool> LocalHiveConnectorMetadata::co_createVectorIndex(
+folly::coro::Task<std::vector<SchemaTableName>>
+LocalHiveConnectorMetadata::co_createStorageTables(
     ConnectorSessionPtr session,
-    SchemaTableName indexName,
-    velox::RowTypePtr columns,
-    VectorIndexProperties properties,
-    folly::F14FastMap<std::string, velox::Variant> tableProperties,
-    bool ifNotExists,
-    bool explain) {
-  VELOX_USER_CHECK(
-      schemaExists(session, indexName.schema),
-      "Schema does not exist: {}",
-      indexName.schema);
-
-  validateOptions(tableProperties);
-  // These name the index's columns, which its tables do not have.
-  for (const auto* property : {
-           HiveWriteOptions::kBucketedBy,
-           HiveWriteOptions::kBucketCount,
-           HiveWriteOptions::kSortedBy,
-       }) {
-    VELOX_USER_CHECK(
-        !tableProperties.contains(property),
-        "Unsupported table property for a vector index: {}",
-        property);
-  }
-  ensureInitialized();
-  const auto partitionColumns =
-      parseCreateTableOptions(tableProperties, format_).partitionedByColumns;
-  for (const auto& name : partitionColumns) {
-    VELOX_USER_CHECK(
-        columns->containsChild(name),
-        "Partition column is not a column of the vector index: {}",
-        name);
-  }
-  std::vector<std::string> nonPartitionNames;
-  std::vector<velox::TypePtr> nonPartitionTypes;
-  for (size_t i = 0; i < columns->size(); ++i) {
-    if (std::ranges::find(partitionColumns, columns->nameOf(i)) ==
-        partitionColumns.end()) {
-      nonPartitionNames.push_back(columns->nameOf(i));
-      nonPartitionTypes.push_back(columns->childAt(i));
-    }
-  }
-  auto [idColumn, embeddingColumn] = idAndEmbeddingColumns(
-      velox::ROW(std::move(nonPartitionNames), std::move(nonPartitionTypes)));
-
-  if (findVectorIndex(session, indexName) != nullptr) {
-    VELOX_USER_CHECK(
-        ifNotExists, "Vector index already exists: {}", indexName.toString());
-    co_return false;
-  }
-
-  std::vector<velox::TypePtr> partitionTypes;
-  partitionTypes.reserve(partitionColumns.size());
-  for (const auto& name : partitionColumns) {
-    partitionTypes.push_back(columns->findChild(name));
-  }
-  const auto partitionRow = velox::ROW(partitionColumns, partitionTypes);
-
-  auto codecProperties = tableProperties;
-  auto codecPartitions = partitionColumns;
-  codecPartitions.emplace_back(VectorIndex::kCodecId);
-  codecProperties[HiveWriteOptions::kPartitionedBy] = velox::Variant::array(
-      std::vector<velox::Variant>(
-          codecPartitions.begin(), codecPartitions.end()));
-
-  struct StorageTable {
-    SchemaTableName name;
-    TableDefinition definition;
-  };
-  const auto [codecTableName, indexTableName] = vectorIndexTables(indexName);
-  const std::array<StorageTable, 2> tables{{
-      {codecTableName,
-       TableDefinition::create(
-           VectorIndex::codecTableType(partitionRow),
-           std::move(codecProperties))},
-      {indexTableName,
-       TableDefinition::create(
-           VectorIndex::indexTableType(partitionRow), tableProperties)},
-  }};
-
-  for (const auto& table : tables) {
-    VELOX_USER_CHECK_NULL(
-        findTable(table.name),
-        "Vector index table already exists: {}",
-        table.name.toString());
-  }
-
+    std::vector<std::pair<SchemaTableName, TableDefinition>> storageTables,
+    bool explain,
+    const std::function<void()>& publish) {
   if (explain) {
-    for (const auto& table : tables) {
+    for (auto& [name, storageDefinition] : storageTables) {
       co_await co_createTable(
           session,
-          table.name,
-          table.definition,
+          name,
+          std::move(storageDefinition),
           /*ifNotExists=*/false,
           /*explain=*/true);
     }
-    co_return true;
+    co_return {};
   }
 
-  const VectorIndex index{
-      .name = indexName,
-      .idColumn = std::move(idColumn),
-      .embeddingColumn = std::move(embeddingColumn),
-      .properties = std::move(properties),
-      .codecTable = codecTableName,
-      .indexTable = indexTableName,
-  };
-  std::vector<SchemaTableName> createdTables;
+  std::vector<SchemaTableName> created;
   try {
-    for (const auto& table : tables) {
+    for (auto& [name, storageDefinition] : storageTables) {
       co_await co_createEmptyTable(
-          session,
-          table.name,
-          table.definition,
-          /*ifNotExists=*/false);
-      createdTables.push_back(table.name);
+          session, name, std::move(storageDefinition), /*ifNotExists=*/false);
+      created.push_back(name);
     }
-    folly::writeFileAtomic(
-        vectorIndexPath(*this, indexName),
-        folly::toPrettyJson(toVectorIndexJson(index)));
+    publish();
   } catch (...) {
-    for (const auto& table : createdTables) {
-      dropTableIfExists(table);
+    for (const auto& name : created) {
+      dropTableIfExists(name);
     }
     throw;
   }
+  co_return created;
+}
+
+folly::coro::Task<bool> LocalHiveConnectorMetadata::co_doAddVectorIndex(
+    ConnectorSessionPtr session,
+    TablePtr table,
+    ResolvedVectorIndex resolved,
+    bool ifNotExists,
+    bool explain) {
+  const auto current = findTable(table->name());
+  VELOX_USER_CHECK_NOT_NULL(
+      current, "Table does not exist: {}", table->name().toString());
+  if (current->findVectorIndex(resolved.name) != nullptr) {
+    VELOX_USER_CHECK(
+        ifNotExists,
+        "Vector index already exists: {} of {}",
+        resolved.name,
+        table->name().toString());
+    co_return false;
+  }
+  // A concurrent add of the same name fails to create the storage tables.
+  const auto partitionNames = partitionColumnNames(
+      *table->primaryLayout()->asChecked<HiveTableLayout>());
+  auto [index, storageProperties] = makeVectorIndex(
+      table->name(),
+      selectColumns(
+          table->type(),
+          std::vector<std::string>(
+              partitionNames.begin(), partitionNames.end())),
+      std::move(resolved));
+  auto storageTables = storageTableDefinitions(*index, storageProperties);
+
+  // The index is added with its storage tables and its record, or none of
+  // them is.
+  co_await co_createStorageTables(
+      session,
+      {std::make_move_iterator(storageTables.begin()),
+       std::make_move_iterator(storageTables.end())},
+      explain,
+      [&] {
+        std::lock_guard<std::mutex> l(mutex_);
+        const auto path = tablePath(table->name());
+        const auto previous =
+            rewriteSchemaFile(path, [&](folly::dynamic& schema) {
+              if (!schema.count("vectorIndexes")) {
+                schema["vectorIndexes"] = folly::dynamic::array();
+              }
+              schema["vectorIndexes"].push_back(toVectorIndexJson(*index));
+            });
+        try {
+          loadTable(table->name().table, path);
+        } catch (...) {
+          folly::writeFileAtomic(SchemaFile::path(path), previous);
+          throw;
+        }
+      });
   co_return true;
 }
 
-VectorIndexPtr LocalHiveConnectorMetadata::findVectorIndex(
+bool LocalHiveConnectorMetadata::doDropVectorIndex(
     const ConnectorSessionPtr& /*session*/,
-    const SchemaTableName& indexName) {
-  if (indexName.schema != kDefaultSchema) {
-    return nullptr;
-  }
-  std::string contents;
-  if (!folly::readFile(vectorIndexPath(*this, indexName).c_str(), contents)) {
-    return nullptr;
-  }
-  return fromVectorIndexJson(indexName, folly::parseJson(contents));
-}
-
-bool LocalHiveConnectorMetadata::dropVectorIndex(
-    const ConnectorSessionPtr& session,
-    const SchemaTableName& indexName,
+    const TablePtr& table,
+    std::string_view name,
     bool ifExists,
     bool explain) {
-  auto index = findVectorIndex(session, indexName);
-  if (index == nullptr) {
-    VELOX_USER_CHECK(
-        ifExists, "Vector index doesn't exist: {}", indexName.toString());
-    return false;
+  VectorIndexPtr index;
+  {
+    // The index is found and its record removed under one lock, so a
+    // concurrent drop of it finds none.
+    std::lock_guard<std::mutex> l(mutex_);
+    const auto current = findTableLocked(table->name().table);
+    VELOX_USER_CHECK_NOT_NULL(
+        current, "Table does not exist: {}", table->name().toString());
+    index = current->findVectorIndex(name);
+    if (index == nullptr) {
+      VELOX_USER_CHECK(
+          ifExists,
+          "Vector index does not exist: {} of {}",
+          name,
+          table->name().toString());
+      return false;
+    }
+    if (explain) {
+      return true;
+    }
+    const auto path = tablePath(table->name());
+    rewriteSchemaFile(path, [&](folly::dynamic& schema) {
+      auto records = folly::dynamic::array();
+      for (auto& record : schema["vectorIndexes"]) {
+        if (record["name"].asString() != name) {
+          records.push_back(std::move(record));
+        }
+      }
+      schema["vectorIndexes"] = std::move(records);
+    });
+    loadTable(table->name().table, path);
   }
-  if (explain) {
-    return true;
-  }
-
-  fs::remove(vectorIndexPath(*this, indexName));
   dropTableIfExists(index->codecTable);
   dropTableIfExists(index->indexTable);
   return true;

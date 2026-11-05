@@ -16,6 +16,8 @@
 
 #include "axiom/connectors/ConnectorMetadata.h"
 
+#include <folly/String.h>
+#include <folly/container/F14Set.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -268,6 +270,20 @@ const std::string& Table::connectorId() const {
   return primaryLayout()->connectorId();
 }
 
+const std::vector<VectorIndexPtr>& Table::vectorIndexes() const {
+  static const std::vector<VectorIndexPtr> kNone;
+  return kNone;
+}
+
+VectorIndexPtr Table::findVectorIndex(std::string_view name) const {
+  for (const auto& index : vectorIndexes()) {
+    if (index->name == name) {
+      return index;
+    }
+  }
+  return nullptr;
+}
+
 // static
 std::vector<std::unique_ptr<const Column>> Table::makeColumns(
     const velox::RowTypePtr& rowType) {
@@ -426,6 +442,71 @@ std::string ConnectorMetadata::normalizeIdentifier(
   return normalized;
 }
 
+namespace {
+
+// Checks 'definition' against a table of 'columns' with 'primaryKey', as
+// ConnectorMetadata::co_addVectorIndex describes, and sets its key.
+ResolvedVectorIndex resolveVectorIndex(
+    VectorIndexDefinition definition,
+    const velox::RowType& columns,
+    const std::vector<std::string>& primaryKey) {
+  VELOX_USER_CHECK(
+      columns.containsChild(definition.column),
+      "Vector index column not found: {}",
+      definition.column);
+  const auto& columnType = columns.findChild(definition.column);
+  VELOX_USER_CHECK(
+      columnType->equivalent(*velox::ARRAY(velox::REAL())),
+      "Vector index column must be an ARRAY(REAL): {} {}",
+      definition.column,
+      columnType->toString());
+
+  for (const auto& key : definition.key) {
+    VELOX_USER_CHECK(
+        columns.containsChild(key),
+        "Vector index KEY column not found: {}",
+        key);
+  }
+  if (definition.key.empty()) {
+    VELOX_USER_CHECK(
+        !primaryKey.empty(),
+        "Vector index KEY is required for a table without a primary key: {}",
+        definition.name);
+    definition.key = primaryKey;
+  } else {
+    VELOX_USER_CHECK(
+        primaryKey.empty() || definition.key == primaryKey,
+        "Vector index KEY must be the table's primary key: ({}) vs ({})",
+        folly::join(", ", definition.key),
+        folly::join(", ", primaryKey));
+  }
+  VELOX_NYI_CHECK_EQ(
+      definition.key.size(),
+      1,
+      "A vector index key of more than one column is not supported yet: {}",
+      definition.name);
+  const auto& key = definition.key.front();
+  const auto& keyType = columns.findChild(key);
+  VELOX_NYI_CHECK_EQ(
+      keyType->kind(),
+      velox::TypeKind::BIGINT,
+      "A vector index key of another type than BIGINT is not supported yet: {} {}",
+      key,
+      keyType->toString());
+
+  auto storageProperties = std::move(definition.properties);
+  auto properties = VectorIndexProperties::extract(storageProperties);
+  return {
+      .name = std::move(definition.name),
+      .embeddingColumn = std::move(definition.column),
+      .keyColumn = std::move(definition.key.front()),
+      .properties = std::move(properties),
+      .storageProperties = std::move(storageProperties),
+  };
+}
+
+} // namespace
+
 folly::coro::Task<TablePtr> ConnectorMetadata::co_createTable(
     ConnectorSessionPtr session,
     SchemaTableName tableName,
@@ -437,10 +518,25 @@ folly::coro::Task<TablePtr> ConnectorMetadata::co_createTable(
     VELOX_UNSUPPORTED("Connector does not support CREATE TABLE");
   }
   support->check(definition);
+  std::vector<ResolvedVectorIndex> vectorIndexes;
+  if (!definition.vectorIndexes.empty()) {
+    const auto columns = definition.rowType();
+    folly::F14FastSet<std::string> names;
+    for (auto& index : definition.vectorIndexes) {
+      VELOX_USER_CHECK(
+          names.insert(index.name).second,
+          "Duplicate vector index name: {}",
+          index.name);
+      vectorIndexes.push_back(resolveVectorIndex(
+          std::move(index), *columns, definition.primaryKey));
+    }
+    definition.vectorIndexes.clear();
+  }
   co_return co_await co_doCreateTable(
       std::move(session),
       std::move(tableName),
       std::move(definition),
+      std::move(vectorIndexes),
       ifNotExists,
       explain);
 }
@@ -464,6 +560,51 @@ folly::coro::Task<std::optional<bool>> ConnectorMetadata::co_addColumn(
       ifTableExists,
       ifNotExists,
       explain);
+}
+
+folly::coro::Task<std::optional<bool>> ConnectorMetadata::co_addVectorIndex(
+    ConnectorSessionPtr session,
+    SchemaTableName tableName,
+    VectorIndexDefinition definition,
+    bool ifTableExists,
+    bool ifNotExists,
+    bool explain) {
+  supportsCreateTable().value_or(TableDefinitionSupport{}).check(definition);
+  auto table = findTable(tableName);
+  if (table == nullptr) {
+    if (ifTableExists) {
+      co_return std::nullopt;
+    }
+    VELOX_USER_FAIL("Table does not exist: {}", tableName.toString());
+  }
+  auto index = resolveVectorIndex(
+      std::move(definition), *table->type(), table->primaryKey());
+  co_return co_await co_doAddVectorIndex(
+      std::move(session),
+      std::move(table),
+      std::move(index),
+      ifNotExists,
+      explain);
+}
+
+std::optional<bool> ConnectorMetadata::dropVectorIndex(
+    const ConnectorSessionPtr& session,
+    const SchemaTableName& tableName,
+    std::string_view name,
+    bool ifTableExists,
+    bool ifExists,
+    bool explain) {
+  VELOX_USER_CHECK(
+      supportsCreateTable().value_or(TableDefinitionSupport{}).vectorIndexes,
+      "Vector indexes are not supported by this connector: {}",
+      name);
+  const auto table = findTable(tableName);
+  if (table == nullptr) {
+    VELOX_USER_CHECK(
+        ifTableExists, "Table does not exist: {}", tableName.toString());
+    return std::nullopt;
+  }
+  return doDropVectorIndex(session, table, name, ifExists, explain);
 }
 
 folly::coro::Task<TablePtr> ConnectorMetadata::co_createEmptyTable(

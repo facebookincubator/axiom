@@ -57,13 +57,24 @@ TEST(TableDefinitionTest, check) {
   VELOX_ASSERT_THROW(
       none.check(withKey), "PRIMARY KEY is not supported by this connector");
 
+  auto withIndex = definition({.name = "a", .type = ARRAY(REAL())});
+  withIndex.vectorIndexes = {{.name = "i", .column = "a"}};
+  VELOX_ASSERT_THROW(
+      none.check(withIndex),
+      "Vector indexes are not supported by this connector: i");
+  VELOX_ASSERT_THROW(
+      none.check(withIndex.vectorIndexes.front()),
+      "Vector indexes are not supported by this connector: i");
+
   const TableDefinitionSupport all{
       .nullability = true,
       .columnComments = true,
       .columnProperties = true,
       .tableComment = true,
       .primaryKey = true,
+      .vectorIndexes = true,
   };
+  all.check(withIndex);
   all.check(
       TableDefinition{
           .columns = {{

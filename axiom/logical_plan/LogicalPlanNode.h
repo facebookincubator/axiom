@@ -660,55 +660,71 @@ class LateralJoinNode : public LogicalPlanNode {
 
 using LateralJoinNodePtr = std::shared_ptr<const LateralJoinNode>;
 
-/// A vector search join: joins each probe row with the entries of vector
-/// indexes that are nearest to its embedding. The probe input holds the rows
-/// to search for. Each row of the build input holds a packed vector index (see
-/// velox::common::vectorindex::LocalVectorIndex).
+/// A vector search join: joins each probe row with the build rows a vector
+/// search finds nearest to its embedding. Both inputs are rows with an
+/// ARRAY(REAL) embedding column. For each probe row the join returns up to 'k'
+/// build rows, among those that satisfy the condition. The output type is the
+/// probe columns, then the build columns, then 'scoreName', a REAL, if set.
 ///
-/// The join matches each probe row to the build rows with equal keys, then
-/// searches each match's index for the 'k' entries it returns as nearest to the
-/// probe row's embedding. A probe row matching several build rows gets up to
-/// 'k' entries from each. Exactness is the index's: a flat index returns the
-/// nearest entries, IVF and HNSW indexes return approximate ones.
+///   probe: (name, embedding, ds)    build: (id, embedding_2, ds_3), a table
+///   VectorSearch INNER: eq(ds, ds_3), nearest embedding_2 to embedding,
+///       cosine, k = 10, num_probes = 50
+///   output: (name, embedding, ds, id, embedding_2, ds_3, score)
 ///
-///   probe: (query_id, embedding, ds)        build: (codec_ds, codec)
-///   VectorSearch INNER: ds = codec_ds, nearest codec to embedding, k = 1
-///   output: (query_id, embedding, ds, codec_ds, cluster_id, score)
+/// The search compares embeddings by 'metric'. It runs through a vector index
+/// of the table the build input reads, on 'buildEmbedding' with 'metric' (see
+/// connector::Table::vectorIndexes()). It is approximate: how close its
+/// results are to the exact nearest rows depends on the index type and on
+/// 'hints'. A flat index searched with every cluster returns the exact nearest
+/// rows.
 ///
-/// Each entry found gives an output row of the probe columns, the build
-/// columns except the index, the entry's id and its score: the similarity the
-/// metric defines, where larger is nearer. A left join outputs a probe row
-/// that finds no entries once, with nulls for the build columns, the id and
-/// the score. Rows with a null key, probe rows with a null embedding and build
-/// rows with a null index match nothing.
+/// 'hints' say how the search runs, never which rows qualify:
+/// - kIndex: the name of the index to search, among the table's indexes on
+///   'buildEmbedding' with 'metric'. Required when there is more than one.
+/// - kNumProbes: a positive integer, the number of clusters nearest to each
+///   probe row to search in each partition of the index. Defaults to a tenth of
+///   the index's clusters, rounded up.
+/// - The options of the index's local indexes (see
+///   velox::common::vectorindex::LocalVectorIndexOptions::parseSearch).
+///
+/// The score is the similarity the metric defines, where larger is nearer. A
+/// left join outputs a probe row that finds no build rows once, with nulls for
+/// the build columns and the score. Rows with a null embedding match nothing.
 ///
 /// Invariants:
 /// - 'joinType' is kInner or kLeft.
-/// - 'probeKeys' name probe columns and 'buildKeys' name build columns,
-/// pairwise
-///   of the same type. Both may be empty: every probe row then matches every
-///   build row.
-/// - 'probeEmbedding' names an ARRAY(REAL) probe column.
-/// - 'buildIndex' names a VARBINARY build column.
+/// - 'condition', if set, is a BOOLEAN expression over the probe and build
+///   columns. Without it, every build row satisfies the condition.
+/// - 'probeEmbedding' and 'buildEmbedding' name ARRAY(REAL) columns.
 /// - 'k' is at least 1.
 class VectorSearchNode : public LogicalPlanNode {
  public:
-  /// @param searchOptions Search settings that override the ones recorded in
-  /// the indexes (see velox::common::vectorindex::LocalVectorIndexOptions).
+  /// The name of the hint with the number of clusters to search (see above).
+  static constexpr std::string_view kNumProbes{"num_probes"};
+
+  /// The name of the hint with the index to search (see above).
+  static constexpr std::string_view kIndex{"index"};
+
+  /// Returns whether the hint 'name' is an option of the index's local
+  /// indexes: any hint other than kIndex and kNumProbes.
+  static bool isLocalIndexOption(std::string_view name) {
+    return name != kIndex && name != kNumProbes;
+  }
+
+  /// @param scoreName The name of the output column with each match's score.
+  /// Unset: the output has no score.
   VectorSearchNode(
       std::string id,
       const LogicalPlanNodePtr& probe,
       const LogicalPlanNodePtr& build,
       JoinType joinType,
-      std::vector<std::string> probeKeys,
-      std::vector<std::string> buildKeys,
+      ExprPtr condition,
       std::string probeEmbedding,
-      std::string buildIndex,
+      std::string buildEmbedding,
       velox::common::vectorindex::VectorIndexMetric metric,
       int64_t k,
-      std::vector<std::pair<std::string, std::string>> searchOptions,
-      std::string idName,
-      std::string scoreName);
+      std::optional<std::string> scoreName,
+      std::vector<std::pair<std::string, std::string>> hints);
 
   const LogicalPlanNodePtr& probe() const {
     return inputAt(0);
@@ -722,20 +738,16 @@ class VectorSearchNode : public LogicalPlanNode {
     return joinType_;
   }
 
-  const std::vector<std::string>& probeKeys() const {
-    return probeKeys_;
-  }
-
-  const std::vector<std::string>& buildKeys() const {
-    return buildKeys_;
+  const ExprPtr& condition() const {
+    return condition_;
   }
 
   const std::string& probeEmbedding() const {
     return probeEmbedding_;
   }
 
-  const std::string& buildIndex() const {
-    return buildIndex_;
+  const std::string& buildEmbedding() const {
+    return buildEmbedding_;
   }
 
   velox::common::vectorindex::VectorIndexMetric metric() const {
@@ -746,16 +758,17 @@ class VectorSearchNode : public LogicalPlanNode {
     return k_;
   }
 
-  const std::vector<std::pair<std::string, std::string>>& searchOptions()
-      const {
-    return searchOptions_;
+  const std::vector<std::pair<std::string, std::string>>& hints() const {
+    return hints_;
   }
 
-  const std::string& idName() const {
-    return idName_;
-  }
+  /// The kNumProbes hint, if set.
+  std::optional<int64_t> numProbes() const;
 
-  const std::string& scoreName() const {
+  /// The kIndex hint, if set.
+  std::optional<std::string> index() const;
+
+  const std::optional<std::string>& scoreName() const {
     return scoreName_;
   }
 
@@ -770,15 +783,13 @@ class VectorSearchNode : public LogicalPlanNode {
   bool equalTo(const LogicalPlanNode& other) const override;
 
   const JoinType joinType_;
-  const std::vector<std::string> probeKeys_;
-  const std::vector<std::string> buildKeys_;
+  const ExprPtr condition_;
   const std::string probeEmbedding_;
-  const std::string buildIndex_;
+  const std::string buildEmbedding_;
   const velox::common::vectorindex::VectorIndexMetric metric_;
   const int64_t k_;
-  const std::vector<std::pair<std::string, std::string>> searchOptions_;
-  const std::string idName_;
-  const std::string scoreName_;
+  const std::optional<std::string> scoreName_;
+  const std::vector<std::pair<std::string, std::string>> hints_;
 };
 
 using VectorSearchNodePtr = std::shared_ptr<const VectorSearchNode>;

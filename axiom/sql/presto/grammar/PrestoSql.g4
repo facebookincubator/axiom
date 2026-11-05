@@ -65,10 +65,6 @@ statement
          (COMMENT string)?
          (WITH properties)?                                            #createTable
     | DROP TABLE (IF EXISTS)? qualifiedName                            #dropTable
-    | CREATE VECTOR INDEX (IF NOT EXISTS)? qualifiedName
-        '(' columnDefinition (',' columnDefinition)* ')'
-        (WITH properties)?                                             #createVectorIndex
-    | DROP VECTOR INDEX (IF EXISTS)? qualifiedName                     #dropVectorIndex
     | INSERT INTO qualifiedName columnAliases? query                   #insertInto
     | DELETE FROM qualifiedName (WHERE booleanExpression)?             #delete
     | TRUNCATE TABLE qualifiedName                                     #truncateTable
@@ -80,6 +76,10 @@ statement
         DROP COLUMN (IF EXISTS)? column=qualifiedName                  #dropColumn
     | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
         ADD COLUMN (IF NOT EXISTS)? column=columnDefinition            #addColumn
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        ADD VECTOR INDEX (IF NOT EXISTS)? vectorIndexDefinition        #addVectorIndex
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        DROP VECTOR INDEX (IF EXISTS)? index=identifier                #dropVectorIndex
     | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
         ADD constraintSpecification                                    #addConstraint
     | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
@@ -104,6 +104,8 @@ statement
         (WITH properties)? AS (query | '('query')')                    #createMaterializedView
     | DROP MATERIALIZED VIEW (IF EXISTS)? qualifiedName                #dropMaterializedView
     | REFRESH MATERIALIZED VIEW qualifiedName WHERE booleanExpression  #refreshMaterializedView
+    | REFRESH VECTOR INDEX index=identifier ON tableName=qualifiedName
+        WHERE booleanExpression                                        #refreshVectorIndex
     | CREATE (OR REPLACE)? TEMPORARY? FUNCTION functionName=qualifiedName
         '(' (sqlParameterDeclaration (',' sqlParameterDeclaration)*)? ')'
         RETURNS returnType=type
@@ -190,8 +192,15 @@ withElement
 
 tableElement
     : constraintSpecification
+    | VECTOR INDEX vectorIndexDefinition
     | columnDefinition
     | likeClause
+    ;
+
+vectorIndexDefinition
+    : name=identifier '(' column=identifier ')'
+      (KEY '(' key+=identifier (',' key+=identifier)* ')')?
+      (WITH properties)?
     ;
 
 columnDefinition

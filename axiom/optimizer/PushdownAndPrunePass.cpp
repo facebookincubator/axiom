@@ -26,6 +26,7 @@
 #include "axiom/optimizer/ToSubfield.h"
 
 #include "axiom/optimizer/TableAccessHandle.h"
+#include "axiom/optimizer/VectorIndexSearch.h"
 
 #include <limits>
 #include <optional>
@@ -384,11 +385,13 @@ class Pushdown : public NodeRewriter<PushdownContext> {
  public:
   Pushdown(
       Builder& builder,
+      const Schema& schema,
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerSession& session,
       PushdownAndPrunePass::ConnectorPushdown connectorPushdown,
       const ColumnVector& outputColumns)
       : NodeRewriter(builder),
+        schema_(schema),
         exprs_(builder),
         evaluator_(evaluator),
         session_(session),
@@ -1855,13 +1858,118 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     return finishJoin(replacement, rewritten, pruned, context);
   }
 
+  // Conjuncts above a VectorSearch, by where they go.
+  struct SearchPending {
+    ExprVector probe;
+    ExprVector build;
+    ExprVector above;
+  };
+
+  // Splits 'pending', the conjuncts above 'node': a deterministic conjunct on
+  // probe columns goes to the probe side, and on build columns to the build
+  // side if 'toBuild'. The rest stay above, including a nondeterministic
+  // conjunct: below, it would decide once for all the rows of a probe row.
+  static SearchPending splitSearchPending(
+      const VectorSearch& node,
+      const ExprVector& pending,
+      bool toBuild) {
+    const PlanObjectSet probeColumns =
+        PlanObjectSet::fromObjects(node.probe()->outputColumns());
+    const PlanObjectSet buildColumns =
+        PlanObjectSet::fromObjects(node.build()->outputColumns());
+    SearchPending split;
+    for (ExprCP conjunct : pending) {
+      if (conjunct->containsNonDeterministic()) {
+        split.above.push_back(conjunct);
+      } else if (conjunct->columns().isSubset(probeColumns)) {
+        split.probe.push_back(conjunct);
+      } else if (toBuild && conjunct->columns().isSubset(buildColumns)) {
+        split.build.push_back(conjunct);
+      } else {
+        split.above.push_back(conjunct);
+      }
+    }
+    return split;
+  }
+
+  // Returns the columns of 'input', an input of a search, that the search
+  // reads: those 'keys' read, 'searchColumn', and 'sources'. Keeps the
+  // input's column order.
+  static ColumnVector searchReadColumns(
+      NodeCP input,
+      const ExprVector& keys,
+      ColumnCP searchColumn,
+      const ColumnVector& sources) {
+    auto read = PlanObjectSet::columnsOf(keys);
+    read.add(searchColumn);
+    for (ColumnCP source : sources) {
+      read.add(source);
+    }
+    ColumnVector columns;
+    for (ColumnCP column : input->outputColumns()) {
+      if (read.contains(column)) {
+        columns.push_back(column);
+      }
+    }
+    return columns;
+  }
+
   // VectorSearch: a deterministic conjunct on probe columns pushes to the
   // probe side, and on build columns to the build side of an inner search. A
-  // conjunct on the id or score, on the null-extended build columns of a probe
-  // search, or on both sides stays above. A nondeterministic conjunct stays
-  // above too: below, it would decide once for all the rows of a probe row.
+  // conjunct on the id or score, on the null-extended build columns of a left
+  // search, or on both sides stays above, as does a nondeterministic one (see
+  // splitSearchPending).
   NodeCP rewriteVectorSearch(const VectorSearch* node, PushdownContext& context)
       override {
+    if (node->searchesEmbeddings()) {
+      // A deterministic filter on the queries' columns applies to the queries
+      // before the search.
+      auto split =
+          splitSearchPending(*node, context.pending, /*toBuild=*/false);
+      context.pending = std::move(split.above);
+      NodeCP probe = split.probe.empty()
+          ? node->probe()
+          : builder().make<Filter>({node->probe(), std::move(split.probe)});
+
+      // The build side, a table under filters and projections, is
+      // pushed down and pruned as any input is, then expanded into searches of
+      // the index's storage tables. A filter above the search stays above:
+      // filtering the candidates is not filtering the k nearest.
+      const ColumnVector buildRead = searchReadColumns(
+          node->build(),
+          node->buildKeys(),
+          node->buildIndex(),
+          node->sourceColumns());
+      const std::function<void(NodeCP)> recordSearched = [&](NodeCP input) {
+        if (input->is(NodeType::kScan)) {
+          searchedTables_.insert(input->as<Scan>()->baseTable()->id());
+        }
+        for (NodeCP child : input->inputs()) {
+          recordSearched(child);
+        }
+      };
+      recordSearched(node->build());
+      PushdownContext buildContext = makeChildContext({}, context);
+      buildContext.required = PlanObjectSet::fromObjects(buildRead);
+      buildContext.requiredAbove = buildContext.required;
+      NodeCP build = rewrite(node->build(), buildContext);
+      NodeSimplifier::SimplifiedNode search = nodeSimplifier_.make(
+          node->key(),
+          {probe, {}, {}},
+          {build, std::move(buildContext.outputSubstitutions), buildRead});
+      if (search.empty() || !search.node->is(NodeType::kVectorSearch)) {
+        return finishSimplifiedNode(std::move(search), {}, context);
+      }
+      NodeCP plan = VectorIndexSearch::plan(
+          *search.node->as<VectorSearch>(),
+          probe,
+          builder(),
+          schema_,
+          session_,
+          evaluator_);
+      return rewrite(plan, context);
+    }
+
     for (size_t i = 0; i < node->outputColumns().size(); ++i) {
       if (node->outputColumns()[i] != node->sourceColumns()[i]) {
         access_.addProducing(
@@ -1869,27 +1977,12 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       }
     }
 
-    const PlanObjectSet probeColumns =
-        PlanObjectSet::fromObjects(node->probe()->outputColumns());
-    const PlanObjectSet buildColumns =
-        PlanObjectSet::fromObjects(node->build()->outputColumns());
-    const bool inner = node->joinType() == velox::core::JoinType::kInner;
-
-    ExprVector probePending;
-    ExprVector buildPending;
-    ExprVector blocked;
-    for (ExprCP conjunct : context.pending) {
-      if (conjunct->containsNonDeterministic()) {
-        blocked.push_back(conjunct);
-      } else if (conjunct->columns().isSubset(probeColumns)) {
-        probePending.push_back(conjunct);
-      } else if (inner && conjunct->columns().isSubset(buildColumns)) {
-        buildPending.push_back(conjunct);
-      } else {
-        blocked.push_back(conjunct);
-      }
-    }
+    auto split = splitSearchPending(
+        *node,
+        context.pending,
+        /*toBuild=*/node->joinType() == velox::core::JoinType::kInner);
     context.pending.clear();
+    ExprVector blocked = std::move(split.above);
 
     PlanObjectSet requiredOutputs = context.required;
     requiredOutputs.unionColumns(blocked);
@@ -1903,26 +1996,14 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
 
     // Each input supplies what the search reads from it and the outputs it
-    // sources, in the input's own column order.
-    auto readColumns =
-        [&](NodeCP input, const ExprVector& keys, ColumnCP searchColumn) {
-          auto read = PlanObjectSet::columnsOf(keys);
-          read.add(searchColumn);
-          for (ColumnCP source : sourceColumns) {
-            read.add(source);
-          }
-          ColumnVector columns;
-          for (ColumnCP column : input->outputColumns()) {
-            if (read.contains(column)) {
-              columns.push_back(column);
-            }
-          }
-          return columns;
-        };
-    ColumnVector probeRead =
-        readColumns(node->probe(), node->probeKeys(), node->probeEmbedding());
-    ColumnVector buildRead =
-        readColumns(node->build(), node->buildKeys(), node->buildIndex());
+    // sources.
+    ColumnVector probeRead = searchReadColumns(
+        node->probe(),
+        node->probeKeys(),
+        node->probeEmbedding(),
+        sourceColumns);
+    ColumnVector buildRead = searchReadColumns(
+        node->build(), node->buildKeys(), node->buildIndex(), sourceColumns);
 
     auto rewriteSide =
         [&](NodeCP input, ExprVector pending, const ColumnVector& read) {
@@ -1935,9 +2016,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
               rewritten, std::move(child.outputSubstitutions), read};
         };
     NodeSimplifier::SimplifiedNode probe =
-        rewriteSide(node->probe(), std::move(probePending), probeRead);
+        rewriteSide(node->probe(), std::move(split.probe), probeRead);
     NodeSimplifier::SimplifiedNode build =
-        rewriteSide(node->build(), std::move(buildPending), buildRead);
+        rewriteSide(node->build(), std::move(split.build), buildRead);
 
     VectorSearch::Key key = node->key();
     key.probe = probe.node;
@@ -2045,12 +2126,18 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // Offers 'filters' to the connector for 'baseTable' read as 'outputColumns'
   // and returns the resulting handle, appending the conjuncts the connector
   // rejected to 'rejected'. Returns null, rejecting everything, when the
-  // caller asked for no connector pushdown.
+  // caller asked for no connector pushdown, and for a table a vector search
+  // reads (see VectorIndexSearch): the search reads the index's storage tables
+  // in its place.
   const TableAccessHandle* negotiate(
       const BaseTable& baseTable,
       const ColumnVector& outputColumns,
       const ExprVector& filters,
       ExprVector& rejected) {
+    if (searchedTables_.contains(baseTable.id())) {
+      appendAll(rejected, filters);
+      return nullptr;
+    }
     if (connectorPushdown_ == PushdownAndPrunePass::ConnectorPushdown::kSkip) {
       appendAll(rejected, filters);
       return nullptr;
@@ -3239,6 +3326,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
   folly::F14FastMap<JoinCP, CollectedJoinFilters> collectedJoinFilters_;
 
+  const Schema& schema_;
   ExprFactory exprs_;
   velox::core::ExpressionEvaluator& evaluator_;
   const OptimizerSession& session_;
@@ -3262,6 +3350,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
 
   // One negotiation per base table, by base-table id.
   folly::F14FastMap<int32_t, Negotiated> negotiatedByBaseTableId_;
+
+  // The tables the build sides of searches of embeddings read. Each search
+  // reads its table through one of the table's vector indexes.
+  folly::F14FastSet<int32_t> searchedTables_;
 };
 
 } // namespace
@@ -3270,10 +3362,12 @@ PushdownAndPrunePass::Result PushdownAndPrunePass::run(
     NodeCP root,
     const ColumnVector& outputColumns,
     Builder& builder,
+    const Schema& schema,
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerSession& session,
     ConnectorPushdown connectorPushdown) {
-  Pushdown pass{builder, evaluator, session, connectorPushdown, outputColumns};
+  Pushdown pass{
+      builder, schema, evaluator, session, connectorPushdown, outputColumns};
   PushdownContext context;
   context.required = PlanObjectSet::fromObjects(outputColumns);
   context.requiredAbove = context.required;

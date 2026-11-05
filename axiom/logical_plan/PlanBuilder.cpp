@@ -1425,14 +1425,23 @@ PlanBuilder& PlanBuilder::lateralJoin(
 
 PlanBuilder& PlanBuilder::vectorSearch(
     const PlanBuilder& build,
+    const std::string& condition,
+    JoinType joinType,
+    const VectorSearch& search) {
+  std::optional<ExprApi> conditionExpr;
+  if (!condition.empty()) {
+    conditionExpr = context_.sqlParser->parseExpr(condition);
+  }
+  return vectorSearch(build, conditionExpr, joinType, search);
+}
+
+PlanBuilder& PlanBuilder::vectorSearch(
+    const PlanBuilder& build,
+    const std::optional<ExprApi>& condition,
+    JoinType joinType,
     const VectorSearch& search) {
   VELOX_USER_CHECK_NOT_NULL(node_, "Vector search node cannot be a leaf node");
   VELOX_USER_CHECK_NOT_NULL(build.node_);
-  VELOX_USER_CHECK(
-      !search.idName.empty(), "Vector search needs a name for the id column");
-  VELOX_USER_CHECK(
-      !search.scoreName.empty(),
-      "Vector search needs a name for the score column");
 
   auto resolve = [](const NameMappings& mapping,
                     const std::string& name,
@@ -1447,50 +1456,47 @@ PlanBuilder& PlanBuilder::vectorSearch(
     return std::move(resolved.value());
   };
 
-  std::vector<std::string> probeKeys;
-  probeKeys.reserve(search.probeKeys.size());
-  for (const auto& name : search.probeKeys) {
-    probeKeys.push_back(resolve(*outputMapping_, name, "probe"));
-  }
-  std::vector<std::string> buildKeys;
-  buildKeys.reserve(search.buildKeys.size());
-  for (const auto& name : search.buildKeys) {
-    buildKeys.push_back(resolve(*build.outputMapping_, name, "build"));
+  auto mapping = std::make_shared<NameMappings>(*outputMapping_);
+  mapping->merge(*build.outputMapping_);
+  ExprPtr conditionExpr;
+  if (condition.has_value()) {
+    const auto inputRowType =
+        node_->outputType()->unionWith(build.node_->outputType());
+    conditionExpr = coerceToBoolean(
+        resolver_.resolveScalarTypes(
+            condition->expr(),
+            [&](const auto& alias, const auto& name) {
+              return resolveJoinInputName(
+                  alias, name, *mapping, inputRowType, outerScope_);
+            }),
+        context_.coercer,
+        "Vector search condition");
   }
   auto probeEmbedding =
       resolve(*outputMapping_, search.probeEmbedding, "probe");
-  auto buildIndex = resolve(*build.outputMapping_, search.buildIndex, "build");
-  auto idName = newName(search.idName);
-  auto scoreName = newName(search.scoreName);
+  auto buildEmbedding =
+      resolve(*build.outputMapping_, search.buildEmbedding, "build");
+  std::optional<std::string> scoreName;
+  if (search.scoreName.has_value()) {
+    scoreName = newName(search.scoreName.value());
+    NameMappings scoreMapping;
+    scoreMapping.add(search.scoreName.value(), scoreName.value());
+    mapping->merge(scoreMapping);
+  }
 
   node_ = std::make_shared<VectorSearchNode>(
       nextId(),
       std::move(node_),
       build.node_,
-      search.joinType,
-      std::move(probeKeys),
-      std::move(buildKeys),
+      joinType,
+      std::move(conditionExpr),
       std::move(probeEmbedding),
-      std::move(buildIndex),
+      std::move(buildEmbedding),
       search.metric,
       search.k,
-      search.searchOptions,
-      idName,
-      scoreName);
+      scoreName,
+      search.hints);
 
-  // The output drops the build's index column, so the names of both inputs are
-  // carried over only for the columns the node outputs.
-  NameMappings inputs{*outputMapping_};
-  inputs.merge(*build.outputMapping_);
-  auto mapping = std::make_shared<NameMappings>();
-  for (const auto& id : node_->outputType()->names()) {
-    for (const auto& name : inputs.reverseLookup(id)) {
-      mapping->add(name, id);
-    }
-    mapping->copyUserName(id, inputs);
-  }
-  mapping->add(search.idName, idName);
-  mapping->add(search.scoreName, scoreName);
   outputMapping_ = std::move(mapping);
 
   return *this;

@@ -60,11 +60,17 @@ class AstBuilder : public PrestoSqlVisitor {
 
   std::any visitDropTable(PrestoSqlParser::DropTableContext* ctx) override;
 
-  std::any visitCreateVectorIndex(
-      PrestoSqlParser::CreateVectorIndexContext* ctx) override;
+  std::any visitAddVectorIndex(
+      PrestoSqlParser::AddVectorIndexContext* ctx) override;
 
   std::any visitDropVectorIndex(
       PrestoSqlParser::DropVectorIndexContext* ctx) override;
+
+  std::any visitRefreshVectorIndex(
+      PrestoSqlParser::RefreshVectorIndexContext* ctx) override;
+
+  std::any visitVectorIndexDefinition(
+      PrestoSqlParser::VectorIndexDefinitionContext* ctx) override;
 
   std::any visitInsertInto(PrestoSqlParser::InsertIntoContext* ctx) override;
 

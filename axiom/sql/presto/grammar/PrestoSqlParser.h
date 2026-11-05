@@ -321,122 +321,123 @@ class PrestoSqlParser : public antlr4::Parser {
     RuleWith = 5,
     RuleWithElement = 6,
     RuleTableElement = 7,
-    RuleColumnDefinition = 8,
-    RuleLikeClause = 9,
-    RuleProperties = 10,
-    RuleProperty = 11,
-    RuleSqlParameterDeclaration = 12,
-    RuleRoutineCharacteristics = 13,
-    RuleRoutineCharacteristic = 14,
-    RuleAlterRoutineCharacteristics = 15,
-    RuleAlterRoutineCharacteristic = 16,
-    RuleRoutineBody = 17,
-    RuleReturnStatement = 18,
-    RuleExternalBodyReference = 19,
-    RuleLanguage = 20,
-    RuleDeterminism = 21,
-    RuleNullCallClause = 22,
-    RuleExternalRoutineName = 23,
-    RuleQueryNoWith = 24,
-    RuleQueryTerm = 25,
-    RuleQueryPrimary = 26,
-    RuleSortItem = 27,
-    RuleQuerySpecification = 28,
-    RuleWindowDefinition = 29,
-    RuleGroupBy = 30,
-    RuleGroupingElement = 31,
-    RuleGroupingSet = 32,
-    RuleNamedQuery = 33,
-    RuleNamedGraph = 34,
-    RuleVertexTable = 35,
-    RuleEdgeTable = 36,
-    RuleGraphElementKey = 37,
-    RuleEdgeEndpoint = 38,
-    RuleGraphElementLabels = 39,
-    RuleGraphElementProperties = 40,
-    RuleGraphElementProperty = 41,
-    RuleSetQuantifier = 42,
-    RuleSelectItem = 43,
-    RuleStarModifiers = 44,
-    RuleExcludeClause = 45,
-    RuleReplaceClause = 46,
-    RuleReplaceItem = 47,
-    RuleRelation = 48,
-    RuleJoinType = 49,
-    RuleJoinCriteria = 50,
-    RuleSampledRelation = 51,
-    RuleSampleType = 52,
-    RuleAliasedRelation = 53,
-    RuleColumnAliases = 54,
-    RuleRelationPrimary = 55,
-    RuleTableFunctionCall = 56,
-    RuleTableFunctionArgument = 57,
-    RuleTableArgument = 58,
-    RuleDescriptorArgument = 59,
-    RuleGraphColumn = 60,
-    RuleGraphPattern = 61,
-    RulePathPattern = 62,
-    RulePathPatternPrefix = 63,
-    RulePathMode = 64,
-    RulePathPatternExpression = 65,
-    RulePathFactor = 66,
-    RuleParenthesizedPathPattern = 67,
-    RuleNodePattern = 68,
-    RuleEdgePattern = 69,
-    RuleElementPatternFiller = 70,
-    RuleLabelExpression = 71,
-    RuleLabelTerm = 72,
-    RuleLabelFactor = 73,
-    RuleLabelPrimary = 74,
-    RuleGraphQuantifier = 75,
-    RuleExpression = 76,
-    RuleBooleanExpression = 77,
-    RulePredicate = 78,
-    RuleValueExpression = 79,
-    RulePrimaryExpression = 80,
-    RuleString = 81,
-    RuleNullTreatment = 82,
-    RuleTimeZoneSpecifier = 83,
-    RuleComparisonOperator = 84,
-    RuleComparisonQuantifier = 85,
-    RuleBooleanValue = 86,
-    RuleInterval = 87,
-    RuleIntervalField = 88,
-    RuleNormalForm = 89,
-    RuleTypes = 90,
-    RuleType = 91,
-    RuleTypeParameter = 92,
-    RuleBaseType = 93,
-    RuleWhenClause = 94,
-    RuleFilter = 95,
-    RuleOver = 96,
-    RuleWindowSpecification = 97,
-    RuleWindowFrame = 98,
-    RuleFrameBound = 99,
-    RuleUpdateAssignment = 100,
-    RuleExplainOption = 101,
-    RuleTransactionMode = 102,
-    RuleLevelOfIsolation = 103,
-    RuleCallArgument = 104,
-    RulePrivilege = 105,
-    RuleQualifiedName = 106,
-    RuleTableVersionExpression = 107,
-    RuleTableVersionState = 108,
-    RuleGrantor = 109,
-    RulePrincipal = 110,
-    RuleRoles = 111,
-    RuleIdentifier = 112,
-    RuleNumber = 113,
-    RuleConstraintSpecification = 114,
-    RuleNamedConstraintSpecification = 115,
-    RuleUnnamedConstraintSpecification = 116,
-    RuleConstraintType = 117,
-    RuleConstraintQualifiers = 118,
-    RuleConstraintQualifier = 119,
-    RuleConstraintRely = 120,
-    RuleConstraintEnabled = 121,
-    RuleConstraintEnforced = 122,
-    RuleNonReserved = 123
+    RuleVectorIndexDefinition = 8,
+    RuleColumnDefinition = 9,
+    RuleLikeClause = 10,
+    RuleProperties = 11,
+    RuleProperty = 12,
+    RuleSqlParameterDeclaration = 13,
+    RuleRoutineCharacteristics = 14,
+    RuleRoutineCharacteristic = 15,
+    RuleAlterRoutineCharacteristics = 16,
+    RuleAlterRoutineCharacteristic = 17,
+    RuleRoutineBody = 18,
+    RuleReturnStatement = 19,
+    RuleExternalBodyReference = 20,
+    RuleLanguage = 21,
+    RuleDeterminism = 22,
+    RuleNullCallClause = 23,
+    RuleExternalRoutineName = 24,
+    RuleQueryNoWith = 25,
+    RuleQueryTerm = 26,
+    RuleQueryPrimary = 27,
+    RuleSortItem = 28,
+    RuleQuerySpecification = 29,
+    RuleWindowDefinition = 30,
+    RuleGroupBy = 31,
+    RuleGroupingElement = 32,
+    RuleGroupingSet = 33,
+    RuleNamedQuery = 34,
+    RuleNamedGraph = 35,
+    RuleVertexTable = 36,
+    RuleEdgeTable = 37,
+    RuleGraphElementKey = 38,
+    RuleEdgeEndpoint = 39,
+    RuleGraphElementLabels = 40,
+    RuleGraphElementProperties = 41,
+    RuleGraphElementProperty = 42,
+    RuleSetQuantifier = 43,
+    RuleSelectItem = 44,
+    RuleStarModifiers = 45,
+    RuleExcludeClause = 46,
+    RuleReplaceClause = 47,
+    RuleReplaceItem = 48,
+    RuleRelation = 49,
+    RuleJoinType = 50,
+    RuleJoinCriteria = 51,
+    RuleSampledRelation = 52,
+    RuleSampleType = 53,
+    RuleAliasedRelation = 54,
+    RuleColumnAliases = 55,
+    RuleRelationPrimary = 56,
+    RuleTableFunctionCall = 57,
+    RuleTableFunctionArgument = 58,
+    RuleTableArgument = 59,
+    RuleDescriptorArgument = 60,
+    RuleGraphColumn = 61,
+    RuleGraphPattern = 62,
+    RulePathPattern = 63,
+    RulePathPatternPrefix = 64,
+    RulePathMode = 65,
+    RulePathPatternExpression = 66,
+    RulePathFactor = 67,
+    RuleParenthesizedPathPattern = 68,
+    RuleNodePattern = 69,
+    RuleEdgePattern = 70,
+    RuleElementPatternFiller = 71,
+    RuleLabelExpression = 72,
+    RuleLabelTerm = 73,
+    RuleLabelFactor = 74,
+    RuleLabelPrimary = 75,
+    RuleGraphQuantifier = 76,
+    RuleExpression = 77,
+    RuleBooleanExpression = 78,
+    RulePredicate = 79,
+    RuleValueExpression = 80,
+    RulePrimaryExpression = 81,
+    RuleString = 82,
+    RuleNullTreatment = 83,
+    RuleTimeZoneSpecifier = 84,
+    RuleComparisonOperator = 85,
+    RuleComparisonQuantifier = 86,
+    RuleBooleanValue = 87,
+    RuleInterval = 88,
+    RuleIntervalField = 89,
+    RuleNormalForm = 90,
+    RuleTypes = 91,
+    RuleType = 92,
+    RuleTypeParameter = 93,
+    RuleBaseType = 94,
+    RuleWhenClause = 95,
+    RuleFilter = 96,
+    RuleOver = 97,
+    RuleWindowSpecification = 98,
+    RuleWindowFrame = 99,
+    RuleFrameBound = 100,
+    RuleUpdateAssignment = 101,
+    RuleExplainOption = 102,
+    RuleTransactionMode = 103,
+    RuleLevelOfIsolation = 104,
+    RuleCallArgument = 105,
+    RulePrivilege = 106,
+    RuleQualifiedName = 107,
+    RuleTableVersionExpression = 108,
+    RuleTableVersionState = 109,
+    RuleGrantor = 110,
+    RulePrincipal = 111,
+    RuleRoles = 112,
+    RuleIdentifier = 113,
+    RuleNumber = 114,
+    RuleConstraintSpecification = 115,
+    RuleNamedConstraintSpecification = 116,
+    RuleUnnamedConstraintSpecification = 117,
+    RuleConstraintType = 118,
+    RuleConstraintQualifiers = 119,
+    RuleConstraintQualifier = 120,
+    RuleConstraintRely = 121,
+    RuleConstraintEnabled = 122,
+    RuleConstraintEnforced = 123,
+    RuleNonReserved = 124
   };
 
   explicit PrestoSqlParser(antlr4::TokenStream* input);
@@ -465,6 +466,7 @@ class PrestoSqlParser : public antlr4::Parser {
   class WithContext;
   class WithElementContext;
   class TableElementContext;
+  class VectorIndexDefinitionContext;
   class ColumnDefinitionContext;
   class LikeClauseContext;
   class PropertiesContext;
@@ -678,12 +680,19 @@ class PrestoSqlParser : public antlr4::Parser {
    public:
     DropVectorIndexContext(StatementContext* ctx);
 
+    PrestoSqlParser::QualifiedNameContext* tableName = nullptr;
+    PrestoSqlParser::IdentifierContext* index = nullptr;
+    antlr4::tree::TerminalNode* ALTER();
+    antlr4::tree::TerminalNode* TABLE();
     antlr4::tree::TerminalNode* DROP();
     antlr4::tree::TerminalNode* VECTOR();
     antlr4::tree::TerminalNode* INDEX();
     QualifiedNameContext* qualifiedName();
-    antlr4::tree::TerminalNode* IF();
-    antlr4::tree::TerminalNode* EXISTS();
+    IdentifierContext* identifier();
+    std::vector<antlr4::tree::TerminalNode*> IF();
+    antlr4::tree::TerminalNode* IF(size_t i);
+    std::vector<antlr4::tree::TerminalNode*> EXISTS();
+    antlr4::tree::TerminalNode* EXISTS(size_t i);
     virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
 
@@ -874,6 +883,29 @@ class PrestoSqlParser : public antlr4::Parser {
     virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
   };
 
+  class AddVectorIndexContext : public StatementContext {
+   public:
+    AddVectorIndexContext(StatementContext* ctx);
+
+    PrestoSqlParser::QualifiedNameContext* tableName = nullptr;
+    antlr4::tree::TerminalNode* ALTER();
+    antlr4::tree::TerminalNode* TABLE();
+    antlr4::tree::TerminalNode* ADD();
+    antlr4::tree::TerminalNode* VECTOR();
+    antlr4::tree::TerminalNode* INDEX();
+    VectorIndexDefinitionContext* vectorIndexDefinition();
+    QualifiedNameContext* qualifiedName();
+    std::vector<antlr4::tree::TerminalNode*> IF();
+    antlr4::tree::TerminalNode* IF(size_t i);
+    std::vector<antlr4::tree::TerminalNode*> EXISTS();
+    antlr4::tree::TerminalNode* EXISTS(size_t i);
+    antlr4::tree::TerminalNode* NOT();
+    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
+  };
+
   class ShowCatalogsContext : public StatementContext {
    public:
     ShowCatalogsContext(StatementContext* ctx);
@@ -1031,27 +1063,6 @@ class PrestoSqlParser : public antlr4::Parser {
     antlr4::tree::TerminalNode* RESET();
     antlr4::tree::TerminalNode* SESSION();
     QualifiedNameContext* qualifiedName();
-    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
-    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
-  };
-
-  class CreateVectorIndexContext : public StatementContext {
-   public:
-    CreateVectorIndexContext(StatementContext* ctx);
-
-    antlr4::tree::TerminalNode* CREATE();
-    antlr4::tree::TerminalNode* VECTOR();
-    antlr4::tree::TerminalNode* INDEX();
-    QualifiedNameContext* qualifiedName();
-    std::vector<ColumnDefinitionContext*> columnDefinition();
-    ColumnDefinitionContext* columnDefinition(size_t i);
-    antlr4::tree::TerminalNode* IF();
-    antlr4::tree::TerminalNode* NOT();
-    antlr4::tree::TerminalNode* EXISTS();
-    antlr4::tree::TerminalNode* WITH();
-    PropertiesContext* properties();
     virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
 
@@ -1334,6 +1345,26 @@ class PrestoSqlParser : public antlr4::Parser {
     PropertiesContext* properties();
     antlr4::tree::TerminalNode* DATA();
     antlr4::tree::TerminalNode* NO();
+    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
+  };
+
+  class RefreshVectorIndexContext : public StatementContext {
+   public:
+    RefreshVectorIndexContext(StatementContext* ctx);
+
+    PrestoSqlParser::IdentifierContext* index = nullptr;
+    PrestoSqlParser::QualifiedNameContext* tableName = nullptr;
+    antlr4::tree::TerminalNode* REFRESH();
+    antlr4::tree::TerminalNode* VECTOR();
+    antlr4::tree::TerminalNode* INDEX();
+    antlr4::tree::TerminalNode* ON();
+    antlr4::tree::TerminalNode* WHERE();
+    BooleanExpressionContext* booleanExpression();
+    IdentifierContext* identifier();
+    QualifiedNameContext* qualifiedName();
     virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
     virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
 
@@ -1879,6 +1910,9 @@ class PrestoSqlParser : public antlr4::Parser {
         size_t invokingState);
     virtual size_t getRuleIndex() const override;
     ConstraintSpecificationContext* constraintSpecification();
+    antlr4::tree::TerminalNode* VECTOR();
+    antlr4::tree::TerminalNode* INDEX();
+    VectorIndexDefinitionContext* vectorIndexDefinition();
     ColumnDefinitionContext* columnDefinition();
     LikeClauseContext* likeClause();
 
@@ -1889,6 +1923,30 @@ class PrestoSqlParser : public antlr4::Parser {
   };
 
   TableElementContext* tableElement();
+
+  class VectorIndexDefinitionContext : public antlr4::ParserRuleContext {
+   public:
+    PrestoSqlParser::IdentifierContext* name = nullptr;
+    PrestoSqlParser::IdentifierContext* column = nullptr;
+    PrestoSqlParser::IdentifierContext* identifierContext = nullptr;
+    std::vector<IdentifierContext*> key;
+    VectorIndexDefinitionContext(
+        antlr4::ParserRuleContext* parent,
+        size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    std::vector<IdentifierContext*> identifier();
+    IdentifierContext* identifier(size_t i);
+    antlr4::tree::TerminalNode* KEY();
+    antlr4::tree::TerminalNode* WITH();
+    PropertiesContext* properties();
+
+    virtual void enterRule(antlr4::tree::ParseTreeListener* listener) override;
+    virtual void exitRule(antlr4::tree::ParseTreeListener* listener) override;
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor* visitor) override;
+  };
+
+  VectorIndexDefinitionContext* vectorIndexDefinition();
 
   class ColumnDefinitionContext : public antlr4::ParserRuleContext {
    public:

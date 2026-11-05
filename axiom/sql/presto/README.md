@@ -121,8 +121,8 @@ The `LogicalPlanNode` tree is wrapped in a `SqlStatement` subclass:
 | CREATE TABLE | `CreateTableStatement` |
 | CREATE TABLE AS SELECT | `CreateTableAsSelectStatement` |
 | DROP TABLE | `DropTableStatement` |
-| CREATE VECTOR INDEX | `CreateVectorIndexStatement` |
-| DROP VECTOR INDEX | `DropVectorIndexStatement` |
+| ALTER TABLE ADD VECTOR INDEX | `AddVectorIndexStatement` |
+| ALTER TABLE DROP VECTOR INDEX | `DropVectorIndexStatement` |
 | EXPLAIN | `ExplainStatement` |
 | USE | `UseStatement` |
 

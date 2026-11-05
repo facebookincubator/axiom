@@ -525,15 +525,15 @@ class SqlQueryRunner {
       const presto::AddColumnStatement& statement,
       bool explain);
 
-  /// Runs CREATE VECTOR INDEX and returns the message to show. With 'explain',
-  /// checks the statement without creating the index.
-  folly::coro::Task<std::string> co_createVectorIndex(
+  /// Runs ALTER TABLE ADD VECTOR INDEX and returns the message to show. With
+  /// 'explain', checks the statement without adding the index.
+  folly::coro::Task<std::string> co_addVectorIndex(
       const facebook::axiom::connector::ConnectorContextPtr& context,
-      const presto::CreateVectorIndexStatement& statement,
+      const presto::AddVectorIndexStatement& statement,
       bool explain);
 
-  /// Runs DROP VECTOR INDEX and returns the message to show. With 'explain',
-  /// checks the statement without dropping the index.
+  /// Runs ALTER TABLE DROP VECTOR INDEX and returns the message to show. With
+  /// 'explain', checks the statement without dropping the index.
   std::string dropVectorIndex(
       const facebook::axiom::connector::ConnectorContextPtr& context,
       const presto::DropVectorIndexStatement& statement,

@@ -212,6 +212,11 @@ class LogicalPlanMatcherBuilder {
       const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,
       const std::vector<std::string>& outputAliases);
 
+  /// Matches a VectorSearchNode with the specified build-side matcher.
+  LogicalPlanMatcherBuilder& vectorSearch(
+      const std::shared_ptr<LogicalPlanMatcher>& buildMatcher,
+      OnMatchCallback onMatch = nullptr);
+
   /// Matches a LateralJoinNode with the specified right-side matcher.
   LogicalPlanMatcherBuilder& lateralJoin(
       const std::shared_ptr<LogicalPlanMatcher>& rightMatcher,

@@ -231,7 +231,7 @@ class DotPrinterVisitor : public PlanNodeVisitor {
         context.out,
         fmt::format(
             "nearest {} to {}, k = {}",
-            escapeHtml(node.buildIndex()),
+            escapeHtml(node.buildEmbedding()),
             escapeHtml(node.probeEmbedding()),
             node.k()));
     printNodeEnd(context.out);

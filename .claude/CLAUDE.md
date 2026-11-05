@@ -47,7 +47,9 @@ bug leaves the rest of the behavior untested.
 
 Replace production table, column, CTE, and alias names with generic names.
 Use `t`, `u`, and `v` consistently for tables, CTEs, and relation aliases, and
-simple column names such as `a`, `b`, and `c`.
+simple column names such as `a`, `b`, and `c`. The rule is against arbitrary
+names: a test that models a real scenario may use realistic names that explain
+it, such as `queries` and `products` in a vector search test.
 
 Aim for tests resilient to future optimizations. Choose queries and data that
 keep the behavior under test observable after predictable simplifications,

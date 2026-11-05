@@ -96,8 +96,12 @@ const PlanObjectSet& NonNullOutput::get(NodeCP node) {
       addMatchedKeyColumns(search->probeKeys(), matched);
       addMatchedKeyColumns(search->buildKeys(), matched);
       matched.add(search->probeEmbedding());
-      matched.add(search->id());
-      matched.add(search->score());
+      if (search->id() != nullptr) {
+        matched.add(search->id());
+      }
+      if (search->score() != nullptr) {
+        matched.add(search->score());
+      }
       propagate(matched, search->outputColumns(), result);
     }
     return save(node, std::move(result));

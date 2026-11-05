@@ -174,6 +174,16 @@ class TestTableLayout : public TableLayout {
       const std::vector<const Column*>& columns,
       velox::connector::ConnectorTableHandlePtr tableHandle) const override;
 
+  /// The partitions of a table and of its index table are the values
+  /// setDiscreteValues records: the index covers each partition its index
+  /// table has. Without partition columns, the index covers the table once
+  /// its index table has rows, added or set by setStats.
+  folly::coro::Task<void> co_checkVectorIndexCoverage(
+      ConnectorSessionPtr session,
+      velox::connector::ConnectorTableHandlePtr tableHandle,
+      velox::core::ExpressionEvaluator& evaluator,
+      VectorIndexPtr index) const override;
+
   velox::connector::ColumnHandlePtr createColumnHandle(
       const ConnectorSessionPtr& session,
       const std::string& columnName,
@@ -224,6 +234,26 @@ class TestTable : public Table {
   const std::vector<const TableLayout*>& layouts() const override {
     return layouts_;
   }
+
+  /// The table's partition columns (see TestConnectorMetadata::kPartitionedBy).
+  const velox::RowTypePtr& partitionColumns() const {
+    return partitionColumns_;
+  }
+
+  const std::vector<VectorIndexPtr>& vectorIndexes() const override {
+    return vectorIndexes_;
+  }
+
+  /// Records that the table has 'index', whose storage tables
+  /// TestConnectorMetadata created. Tests add an index with
+  /// TestConnectorMetadata::co_addVectorIndex, or
+  /// TestConnector::addVectorIndex.
+  void linkVectorIndex(VectorIndexPtr index) {
+    vectorIndexes_.push_back(std::move(index));
+  }
+
+  /// Removes the record of the index 'name', which the table has.
+  void unlinkVectorIndex(std::string_view name);
 
   std::optional<uint64_t> numRows() const override {
     if (!collectStatistics_) {
@@ -295,10 +325,20 @@ class TestTable : public Table {
 
   /// Sets row count and column statistics without adding actual data.
   /// Use this to create tables with controlled statistics for optimizer
-  /// testing. Cannot be combined with addData on the same table.
-  void setStats(
+  /// testing. Cannot be combined with addData on the same table. Returns this
+  /// table.
+  TestTable& setStats(
       uint64_t numRows,
       const std::unordered_map<std::string, ColumnStatistics>& columnStats);
+
+  /// Records the values of 'columnNames' the table has, such as its
+  /// partitions (see TestTableLayout::setDiscreteValues). Returns this table.
+  TestTable& setDiscreteValues(
+      const std::vector<std::string>& columnNames,
+      const std::vector<velox::Variant>& values) {
+    exportedLayout_->setDiscreteValues(columnNames, values);
+    return *this;
+  }
 
  private:
   // Per-column state for incremental stat computation during addData.
@@ -324,6 +364,7 @@ class TestTable : public Table {
   velox::connector::Connector* connector_;
   std::vector<const TableLayout*> layouts_;
   std::unique_ptr<TestTableLayout> exportedLayout_;
+  std::vector<VectorIndexPtr> vectorIndexes_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   velox::RowTypePtr dataType_;
   std::vector<velox::RowVectorPtr> data_;
@@ -341,6 +382,8 @@ class TestTable : public Table {
   std::vector<ColumnTracker> columnTrackers_;
 
   std::optional<TestBucketSpec> bucketSpec_;
+  // The table's partition columns (see TestConnectorMetadata::kPartitionedBy).
+  velox::RowTypePtr partitionColumns_;
   std::unique_ptr<velox::core::PartitionFunction> partitionFunction_;
 };
 
@@ -670,6 +713,12 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Example: WITH (collect_statistics = false).
   static constexpr std::string_view kCollectStatistics = "collect_statistics";
 
+  /// CREATE TABLE property naming the table's partition columns, by which its
+  /// vector indexes are partitioned. A test table holds no partitions of data:
+  /// setDiscreteValues records the partitions it has.
+  /// Example: WITH (partitioned_by = ARRAY['ds']).
+  static constexpr std::string_view kPartitionedBy = "partitioned_by";
+
   explicit TestConnectorMetadata(TestConnector* connector)
       : connector_(connector),
         splitManager_(std::make_unique<TestSplitManager>(*this)) {}
@@ -856,6 +905,7 @@ class TestConnectorMetadata : public ConnectorMetadata {
         .columnComments = true,
         .tableComment = true,
         .primaryKey = true,
+        .vectorIndexes = true,
     };
   }
 
@@ -872,10 +922,38 @@ class TestConnectorMetadata : public ConnectorMetadata {
       ConnectorSessionPtr session,
       SchemaTableName tableName,
       TableDefinition definition,
+      std::vector<ResolvedVectorIndex> vectorIndexes,
       bool ifNotExists,
       bool explain) override;
 
+  /// Partitions the index as its table (see kPartitionedBy). Its properties
+  /// may include only the index's own.
+  folly::coro::Task<bool> co_doAddVectorIndex(
+      ConnectorSessionPtr session,
+      TablePtr table,
+      ResolvedVectorIndex index,
+      bool ifNotExists,
+      bool explain) override;
+
+  bool doDropVectorIndex(
+      const ConnectorSessionPtr& session,
+      const TablePtr& table,
+      std::string_view name,
+      bool ifExists,
+      bool explain) override;
+
  private:
+  // Creates the index 'index' of 'table', partitioned as the table, with its
+  // codec table and index table, named after the table and the index, e.g.
+  // products__i__codecs.
+  void createVectorIndex(TestTable& table, ResolvedVectorIndex index);
+
+  // Throws a user error if a table has the name of a storage table of the
+  // index 'name' of 'tableName'.
+  void checkStorageTablesFree(
+      const SchemaTableName& tableName,
+      std::string_view name) const;
+
   TestConnector* connector_;
   folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
   std::unique_ptr<TestSplitManager> splitManager_;
@@ -1079,6 +1157,23 @@ class TestConnector : public velox::connector::Connector {
       const std::string& name,
       const velox::RowTypePtr& schema,
       const folly::F14FastMap<std::string, velox::Variant>& options);
+
+  /// Adds the table 'name' of kDefaultSchema, partitioned by
+  /// 'partitionColumns' (see TestConnectorMetadata::kPartitionedBy).
+  std::shared_ptr<TestTable> addPartitionedTable(
+      const std::string& name,
+      const velox::RowTypePtr& schema,
+      const std::vector<std::string>& partitionColumns);
+
+  /// Adds the index 'definition' declares to the table 'tableName' of
+  /// kDefaultSchema, as ADD VECTOR INDEX does (see
+  /// ConnectorMetadata::co_addVectorIndex), and returns it.
+  VectorIndexPtr addVectorIndex(
+      const std::string& tableName,
+      VectorIndexDefinition definition);
+
+  /// Returns the table 'tableName', or nullptr if there is none.
+  std::shared_ptr<TestTable> findTable(const SchemaTableName& tableName);
 
   /// Registers a lookup-only table in the default schema.
   std::shared_ptr<TestTable> addLookupTable(

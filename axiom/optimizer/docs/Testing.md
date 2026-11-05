@@ -26,7 +26,7 @@ Two kinds of change need the shape. One is a change that improves plan quality: 
 
 A fix that makes a query plan at all is the case that does not need one. There is no intended shape to state, so the matcher records whatever the optimizer produces today and asserts no decision — a later mismatch tells the reader nothing about whether a regression occurred.
 
-**Guideline:** Assert the distributed plan when distribution is what you are asserting — shuffles, partitioning, fragment boundaries. Otherwise the single-node plan carries the property. The optimizer may produce different plans depending on the number of workers (e.g., single-node plans skip shuffles, distributed plans split aggregations into partial/final). When relevant, also test single-node multi-threaded plans, as local parallelism introduces local partitioning that can expose different issues.
+**Guideline:** Assert the distributed plan when distribution is what you are asserting — shuffles, partitioning, fragment boundaries. Otherwise the single-node plan carries the property. A test that asserts the distributed plan also asserts the single-node plan of the same query. The optimizer may produce different plans depending on the number of workers (e.g., single-node plans skip shuffles, distributed plans split aggregations into partial/final). When relevant, also test single-node multi-threaded plans, as local parallelism introduces local partitioning that can expose different issues.
 
 ---
 
@@ -34,7 +34,9 @@ A fix that makes a query plan at all is the case that does not need one. There i
 
 Replace production table, column, CTE, and alias names with generic names.
 Use `t`, `u`, and `v` consistently for tables, CTEs, and relation aliases, and
-simple column names such as `a`, `b`, and `c`.
+simple column names such as `a`, `b`, and `c`. The rule is against arbitrary
+names: a test that models a real scenario may use realistic names that explain
+it, such as `queries` and `products` in a vector search test.
 
 Aim for tests resilient to future optimizations. Choose queries and data that
 keep the behavior under test observable after predictable simplifications,

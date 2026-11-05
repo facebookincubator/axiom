@@ -165,6 +165,27 @@ bool extractCollectStatistics(
   return it == options.end() ? true : it->second.value<bool>();
 }
 
+// Returns the columns of 'schema' the 'partitioned_by' option of 'options'
+// names, in its order, or no columns without the option.
+velox::RowTypePtr extractPartitionColumns(
+    const velox::RowTypePtr& schema,
+    const folly::F14FastMap<std::string, velox::Variant>& options) {
+  const auto it =
+      options.find(std::string{TestConnectorMetadata::kPartitionedBy});
+  if (it == options.end()) {
+    return velox::ROW({});
+  }
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  for (const auto& name : it->second.array<std::string>()) {
+    VELOX_USER_CHECK(
+        schema->containsChild(name), "Partition column not found: {}", name);
+    names.push_back(name);
+    types.push_back(schema->findChild(name));
+  }
+  return velox::ROW(std::move(names), std::move(types));
+}
+
 velox::RowTypePtr makeTestTableDataType(const velox::RowTypePtr& schema) {
   return schema->unionWith(TestTable::kRowId, velox::BIGINT());
 }
@@ -193,7 +214,8 @@ TestTable::TestTable(
       connector_(connector),
       dataType_(makeTestTableDataType(schema)),
       collectStatistics_(extractCollectStatistics(options)),
-      bucketSpec_(std::move(bucketSpec)) {
+      bucketSpec_(std::move(bucketSpec)),
+      partitionColumns_(extractPartitionColumns(schema, options)) {
   VELOX_CHECK_NOT_NULL(connector);
   const auto& tableName = this->name().table;
   std::vector<const Column*> partitionColumns;
@@ -261,7 +283,7 @@ TestTable::TestTable(
   columnTrackers_.resize(schema->size());
 }
 
-void TestTable::setStats(
+TestTable& TestTable::setStats(
     uint64_t numRows,
     const std::unordered_map<std::string, ColumnStatistics>& columnStats) {
   VELOX_CHECK_EQ(
@@ -302,6 +324,7 @@ void TestTable::setStats(
           std::make_unique<ColumnStatistics>());
     }
   }
+  return *this;
 }
 
 namespace {
@@ -699,6 +722,13 @@ std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
   return it->second;
 }
 
+void TestTable::unlinkVectorIndex(std::string_view name) {
+  const auto it = std::ranges::find_if(
+      vectorIndexes_, [&](const auto& index) { return index->name == name; });
+  VELOX_CHECK(it != vectorIndexes_.end(), "No vector index: {}", name);
+  vectorIndexes_.erase(it);
+}
+
 TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
   return findTableInternal(tableName);
 }
@@ -923,6 +953,70 @@ std::unique_ptr<DiscretePredicates> TestTableLayout::discretePredicates(
       discreteValueColumns_, discreteValues_);
 }
 
+folly::coro::Task<void> TestTableLayout::co_checkVectorIndexCoverage(
+    ConnectorSessionPtr /*session*/,
+    velox::connector::ConnectorTableHandlePtr /*tableHandle*/,
+    velox::core::ExpressionEvaluator& /*evaluator*/,
+    VectorIndexPtr index) const {
+  auto* testConnector = dynamic_cast<TestConnector*>(connector());
+  VELOX_CHECK_NOT_NULL(testConnector);
+  const auto indexTable = std::dynamic_pointer_cast<const TestTable>(
+      testConnector->metadata()->findTable(index->indexTable));
+  VELOX_CHECK_NOT_NULL(
+      indexTable,
+      "Vector index table not found: {}",
+      index->indexTable.toString());
+  if (index->partitionColumns->size() == 0) {
+    if (indexTable->numRows().value_or(0) == 0) {
+      VELOX_USER_FAIL(
+          "Vector index does not cover its table: {} of {}",
+          index->name,
+          table().name().toString());
+    }
+    co_return;
+  }
+
+  // The table's partitions and the index's are the ones setDiscreteValues
+  // recorded.
+  const auto* indexLayout =
+      indexTable->primaryLayout()->asChecked<TestTableLayout>();
+  for (const auto* layout : {this, indexLayout}) {
+    if (!layout->discreteValueColumns_.empty()) {
+      std::vector<std::string> names;
+      for (const auto* column : layout->discreteValueColumns_) {
+        names.push_back(column->name());
+      }
+      VELOX_CHECK(
+          names == index->partitionColumns->names(),
+          "Recorded partitions must be of the vector index's partition columns: {}",
+          layout->table().name().toString());
+    }
+  }
+  const auto& partitionColumns = *index->partitionColumns;
+  for (const auto& partition : discreteValues_) {
+    if (std::ranges::find(indexLayout->discreteValues_, partition) !=
+        indexLayout->discreteValues_.end()) {
+      continue;
+    }
+    std::vector<std::string> values;
+    for (size_t i = 0; i < partition.row().size(); ++i) {
+      const auto& value = partition.row()[i];
+      values.push_back(
+          fmt::format(
+              "{}={}",
+              partitionColumns.nameOf(i),
+              value.isNull() ? "NULL"
+                             : value.toString(partitionColumns.childAt(i))));
+    }
+    VELOX_USER_FAIL(
+        "Vector index does not cover a partition the search reads: {} of {}, partition ({})",
+        index->name,
+        table().name().toString(),
+        folly::join(", ", values));
+  }
+  co_return;
+}
+
 velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
     const ConnectorSessionPtr& /*session*/,
     const std::string& columnName,
@@ -985,6 +1079,48 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addLookupTable(
   return it->second;
 }
 
+namespace {
+
+// Returns the names TestConnector gives the codec table and the index table of
+// the index 'name' of 'table', the same as local Hive's, e.g.
+// products__product_index__codecs.
+std::pair<SchemaTableName, SchemaTableName> storageTableNames(
+    const SchemaTableName& table,
+    std::string_view name) {
+  return {
+      {table.schema, fmt::format("{}__{}__codecs", table.table, name)},
+      {table.schema, fmt::format("{}__{}__index", table.table, name)},
+  };
+}
+
+} // namespace
+
+void TestConnectorMetadata::createVectorIndex(
+    TestTable& table,
+    ResolvedVectorIndex index) {
+  const auto& tableName = table.name();
+  const auto& partitionColumns = table.partitionColumns();
+  auto [codecTable, indexTable] = storageTableNames(tableName, index.name);
+  addTable(
+      codecTable,
+      VectorIndex::codecTableType(partitionColumns),
+      velox::ROW({}));
+  addTable(
+      indexTable,
+      VectorIndex::indexTableType(partitionColumns),
+      velox::ROW({}));
+  table.linkVectorIndex(
+      std::make_shared<const VectorIndex>(VectorIndex{
+          .name = std::move(index.name),
+          .keyColumn = std::move(index.keyColumn),
+          .embeddingColumn = std::move(index.embeddingColumn),
+          .partitionColumns = partitionColumns,
+          .properties = std::move(index.properties),
+          .codecTable = std::move(codecTable),
+          .indexTable = std::move(indexTable),
+      }));
+}
+
 std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     SchemaTableName tableName,
     const velox::RowTypePtr& schema,
@@ -1005,10 +1141,24 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
   return it->second;
 }
 
+namespace {
+
+// Throws a user error if 'index' has properties for its storage tables, which
+// the test connector's storage tables take none of.
+void checkNoStorageProperties(const ResolvedVectorIndex& index) {
+  VELOX_USER_CHECK(
+      index.storageProperties.empty(),
+      "TestConnector does not support vector index property: {}",
+      index.storageProperties.begin()->first);
+}
+
+} // namespace
+
 folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
     ConnectorSessionPtr /*session*/,
     SchemaTableName tableName,
     TableDefinition definition,
+    std::vector<ResolvedVectorIndex> vectorIndexes,
     bool ifNotExists,
     bool explain) {
   const auto rowType = definition.rowType();
@@ -1028,7 +1178,7 @@ folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
   for (const auto& [key, value] : options) {
     VELOX_USER_CHECK(
         key == kHidden || key == kExplainIo || key == kCollectStatistics ||
-            key == kLookupKeys,
+            key == kLookupKeys || key == kPartitionedBy,
         "TestConnector does not support CREATE TABLE property: {}",
         key);
   }
@@ -1063,12 +1213,19 @@ folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
       definition.columnComments(),
       std::move(definition.comment),
       std::move(definition.primaryKey));
+  // The table is created with its indexes or not at all.
+  for (const auto& index : vectorIndexes) {
+    checkNoStorageProperties(index);
+    checkStorageTablesFree(tableName, index.name);
+  }
   if (explain) {
     co_return table;
   }
-  auto [it, ok] = tables_.emplace(tableName, std::move(table));
-  VELOX_CHECK(ok);
-  co_return it->second;
+  VELOX_CHECK(tables_.emplace(tableName, table).second);
+  for (auto& index : vectorIndexes) {
+    createVectorIndex(*table, std::move(index));
+  }
+  co_return table;
 }
 
 ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
@@ -1192,11 +1349,106 @@ velox::ContinueFuture TestConnectorMetadata::abortDelete(
   return {};
 }
 
+void TestConnectorMetadata::checkStorageTablesFree(
+    const SchemaTableName& tableName,
+    std::string_view name) const {
+  const auto [codecTable, indexTable] = storageTableNames(tableName, name);
+  for (const auto& storageTable : {codecTable, indexTable}) {
+    VELOX_USER_CHECK(
+        !tables_.contains(storageTable),
+        "Table already exists: {}",
+        storageTable.toString());
+  }
+}
+
+folly::coro::Task<bool> TestConnectorMetadata::co_doAddVectorIndex(
+    ConnectorSessionPtr /*session*/,
+    TablePtr table,
+    ResolvedVectorIndex index,
+    bool ifNotExists,
+    bool explain) {
+  if (table->findVectorIndex(index.name) != nullptr) {
+    VELOX_USER_CHECK(
+        ifNotExists,
+        "Vector index already exists: {} of {}",
+        index.name,
+        table->name().toString());
+    co_return false;
+  }
+  checkNoStorageProperties(index);
+  checkStorageTablesFree(table->name(), index.name);
+  if (!explain) {
+    // 'table' is the caller's read-only view; the metadata owns the table.
+    createVectorIndex(*tables_.at(table->name()), std::move(index));
+  }
+  co_return true;
+}
+
+namespace {
+
+// Drops the storage tables of 'index' from 'tables'.
+void dropStorageTables(
+    folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>>& tables,
+    const VectorIndex& index) {
+  tables.erase(index.codecTable);
+  tables.erase(index.indexTable);
+}
+
+} // namespace
+
+bool TestConnectorMetadata::doDropVectorIndex(
+    const ConnectorSessionPtr& /*session*/,
+    const TablePtr& table,
+    std::string_view name,
+    bool ifExists,
+    bool explain) {
+  const auto index = table->findVectorIndex(name);
+  if (index == nullptr) {
+    VELOX_USER_CHECK(
+        ifExists,
+        "Vector index does not exist: {} of {}",
+        name,
+        table->name().toString());
+    return false;
+  }
+  if (!explain) {
+    // 'table' is the caller's read-only view; the metadata owns the table.
+    tables_.at(table->name())->unlinkVectorIndex(name);
+    dropStorageTables(tables_, *index);
+  }
+  return true;
+}
+
+namespace {
+
+// Throws a user error if 'tableName' is a storage table of a vector index of
+// one of 'tables': it goes only with its index.
+void checkNotVectorIndexStorage(
+    const folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>>&
+        tables,
+    const SchemaTableName& tableName) {
+  for (const auto& [name, table] : tables) {
+    for (const auto& index : table->vectorIndexes()) {
+      for (const auto& storageTable : {index->codecTable, index->indexTable}) {
+        VELOX_USER_CHECK(
+            tableName != storageTable,
+            "A vector index's storage table must be dropped with its index: {}, index {} of {}",
+            tableName.toString(),
+            index->name,
+            name.toString());
+      }
+    }
+  }
+}
+
+} // namespace
+
 bool TestConnectorMetadata::dropTable(
     const ConnectorSessionPtr& /* session */,
     const SchemaTableName& tableName,
     bool ifExists,
     bool explain) {
+  checkNotVectorIndexStorage(tables_, tableName);
   if (explain) {
     const bool exists = tables_.contains(tableName);
     if (!exists) {
@@ -1206,6 +1458,11 @@ bool TestConnectorMetadata::dropTable(
     return exists;
   }
 
+  if (const auto it = tables_.find(tableName); it != tables_.end()) {
+    for (const auto& index : it->second->vectorIndexes()) {
+      dropStorageTables(tables_, *index);
+    }
+  }
   const bool dropped = tables_.erase(tableName) == 1;
   if (!ifExists) {
     VELOX_USER_CHECK(dropped, "Table doesn't exist: {}", tableName.toString());
@@ -1275,6 +1532,7 @@ folly::coro::Task<std::optional<bool>> TestConnectorMetadata::co_doAddColumn(
   auto comment = it->second->comment();
   auto primaryKey = it->second->primaryKey();
   auto bucketSpec = it->second->bucketSpec();
+  auto vectorIndexes = it->second->vectorIndexes();
   tables_.erase(it);
 
   auto newTable = std::make_shared<TestTable>(
@@ -1287,6 +1545,9 @@ folly::coro::Task<std::optional<bool>> TestConnectorMetadata::co_doAddColumn(
       std::move(columnComments),
       std::move(comment),
       std::move(primaryKey));
+  for (auto& index : vectorIndexes) {
+    newTable->linkVectorIndex(std::move(index));
+  }
   tables_[tableName] = std::move(newTable);
   co_return true;
 }
@@ -1308,7 +1569,7 @@ void TestConnectorMetadata::setDiscreteValues(
   VELOX_CHECK(
       it != tables_.end(), "Table doesn't exist: {}", tableName.toString());
 
-  it->second->mutableLayout()->setDiscreteValues(columnNames, values);
+  it->second->setDiscreteValues(columnNames, values);
 }
 
 void TestConnectorMetadata::setStats(
@@ -1449,6 +1710,43 @@ std::shared_ptr<TestTable> TestConnector::addTable(
       TableDefinition::create(schema, options),
       /*ifNotExists=*/false,
       /*explain=*/false));
+  return std::static_pointer_cast<TestTable>(
+      metadata_->findTableInternal(tableName));
+}
+
+std::shared_ptr<TestTable> TestConnector::addPartitionedTable(
+    const std::string& name,
+    const velox::RowTypePtr& schema,
+    const std::vector<std::string>& partitionColumns) {
+  std::vector<velox::Variant> names;
+  names.reserve(partitionColumns.size());
+  for (const auto& column : partitionColumns) {
+    names.emplace_back(column);
+  }
+  return addTable(
+      name,
+      schema,
+      {{std::string(TestConnectorMetadata::kPartitionedBy),
+        velox::Variant::array(std::move(names))}});
+}
+
+VectorIndexPtr TestConnector::addVectorIndex(
+    const std::string& tableName,
+    VectorIndexDefinition definition) {
+  const SchemaTableName table{std::string(kDefaultSchema), tableName};
+  const auto name = definition.name;
+  folly::coro::blockingWait(metadata_->co_addVectorIndex(
+      nullptr,
+      table,
+      std::move(definition),
+      /*ifTableExists=*/false,
+      /*ifNotExists=*/false,
+      /*explain=*/false));
+  return metadata_->findTable(table)->findVectorIndex(name);
+}
+
+std::shared_ptr<TestTable> TestConnector::findTable(
+    const SchemaTableName& tableName) {
   return std::static_pointer_cast<TestTable>(
       metadata_->findTableInternal(tableName));
 }
