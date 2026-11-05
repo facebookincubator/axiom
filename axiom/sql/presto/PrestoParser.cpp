@@ -2952,8 +2952,12 @@ SqlStatementPtr parseRefreshVectorIndex(
       VectorIndexRefresh::plan(
           tableName, *index, connectorId, planner.builder()),
       planner.views(),
-      // TODO: Report the index as the statement's output, marked as an index.
-      lp::ReferencedTables{.inputTables = std::move(inputTables)});
+      // The refresh writes the index, which belongs to the table, so writing
+      // the index takes permission to write the table.
+      lp::ReferencedTables{
+          .inputTables = std::move(inputTables),
+          .outputTable =
+              facebook::axiom::CatalogSchemaTableName{connectorId, tableName}});
 }
 
 SqlStatementPtr parseInsert(

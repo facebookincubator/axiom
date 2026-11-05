@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Conv.h>
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -22,6 +23,7 @@
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
 #include "axiom/optimizer/tests/utils/DfFunctions.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -1080,6 +1082,62 @@ TEST_P(PlanTest, outputNames) {
 
   // Empty output names.
   test(R"(SELECT a AS "", b FROM t)", {"", "b"});
+}
+
+// A plan numbers its nodes, those of nested plans included, from
+// firstPlanNodeId, and maxPlanNodeId() is the largest of them.
+TEST_P(PlanTest, firstPlanNodeId) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  const auto planNodeIds = [](const MultiFragmentPlan& plan) {
+    std::vector<int32_t> ids;
+    std::function<void(const core::PlanNode&)> collect =
+        [&](const core::PlanNode& node) {
+          ids.push_back(folly::to<int32_t>(node.id()));
+          for (const auto& source : node.sources()) {
+            collect(*source);
+          }
+          if (const auto* fixedPoint = node.as<core::FixedPointNode>()) {
+            for (const auto& nested : fixedPoint->nestedPlans()) {
+              collect(*nested);
+            }
+          }
+        };
+    for (const auto& stage : plan.stages()) {
+      collect(*stage.plan);
+    }
+    return ids;
+  };
+
+  constexpr int32_t kOffset{100};
+  for (const auto* sql :
+       {"SELECT a, sum(b) FROM t GROUP BY a",
+        "WITH RECURSIVE counter(n) AS ("
+        "VALUES 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 10) "
+        "SELECT * FROM counter"}) {
+    SCOPED_TRACE(sql);
+    const auto logicalPlan = parseSelect(sql, kTestConnectorId);
+    MultiFragmentPlan::Options options{
+        .maxRemotePartitions = 4, .maxLocalPartitions = 4};
+    const auto plan = planVelox(logicalPlan, options).plan;
+    options.firstPlanNodeId = kOffset;
+    const auto shiftedPlan = planVelox(logicalPlan, options).plan;
+
+    auto expectedIds = planNodeIds(*plan);
+    EXPECT_EQ(
+        plan->maxPlanNodeId(),
+        *std::max_element(expectedIds.begin(), expectedIds.end()));
+    for (auto& id : expectedIds) {
+      id += kOffset;
+    }
+    EXPECT_THAT(
+        planNodeIds(*shiftedPlan), testing::ElementsAreArray(expectedIds));
+    EXPECT_EQ(plan->maxPlanNodeId() + kOffset, shiftedPlan->maxPlanNodeId());
+  }
 }
 
 AXIOM_INSTANTIATE_V1_V2(PlanTest);

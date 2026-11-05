@@ -577,7 +577,10 @@ TEST_F(DdlParserTest, refreshVectorIndex) {
                 kConnectorId, {"default", "t"}},
             facebook::axiom::CatalogSchemaTableName{
                 kConnectorId, {"default", "t__i__codecs"}}));
-    EXPECT_FALSE(tables.outputTable.has_value());
+    EXPECT_EQ(
+        tables.outputTable,
+        (facebook::axiom::CatalogSchemaTableName{
+            kConnectorId, {"default", "t"}}));
   }
 
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(

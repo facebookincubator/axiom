@@ -200,6 +200,9 @@ class MultiFragmentPlan {
     /// additional nodes are added.
     bool remoteOutput{false};
 
+    /// The id of the plan's first node. The plan numbers its nodes from it.
+    int32_t firstPlanNodeId{0};
+
     /// Returns options for single-node, single-threaded local execution.
     /// Used by constant folding and join sampling which always run via
     /// LocalRunner regardless of the query's distributed options.
@@ -237,6 +240,10 @@ class MultiFragmentPlan {
   const Options& options() const {
     return options_;
   }
+
+  /// Returns the largest id of this plan's nodes, or firstPlanNodeId - 1 for
+  /// a plan without stages.
+  int32_t maxPlanNodeId() const;
 
   /// @param detailed If true, includes details of each plan node. Otherwise,
   /// only node types are included.
