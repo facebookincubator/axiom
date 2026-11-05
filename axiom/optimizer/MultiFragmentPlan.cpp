@@ -15,12 +15,15 @@
  */
 
 #include "axiom/optimizer/MultiFragmentPlan.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
 
+#include <folly/Conv.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -665,6 +668,33 @@ const std::vector<velox::core::Stage>& MultiFragmentPlan::stages() const {
 const FragmentScans& MultiFragmentPlan::scans(int32_t stageId) const {
   const auto it = scans_.find(stageId);
   return it == scans_.end() ? noScans() : it->second;
+}
+
+namespace {
+
+// Returns the largest id of 'node' and the nodes under it, including those of
+// a fixed point's nested plans. The optimizer gives plan nodes integer ids.
+int32_t maxNodeId(const velox::core::PlanNode& node) {
+  auto result = folly::to<int32_t>(node.id());
+  for (const auto& source : node.sources()) {
+    result = std::max(result, maxNodeId(*source));
+  }
+  if (const auto* fixedPoint = node.as<velox::core::FixedPointNode>()) {
+    for (const auto& nested : fixedPoint->nestedPlans()) {
+      result = std::max(result, maxNodeId(*nested));
+    }
+  }
+  return result;
+}
+
+} // namespace
+
+int32_t MultiFragmentPlan::maxPlanNodeId() const {
+  auto result = options_.firstPlanNodeId - 1;
+  for (const auto& stage : stages()) {
+    result = std::max(result, maxNodeId(*stage.plan));
+  }
+  return result;
 }
 
 std::string MultiFragmentPlan::toString(

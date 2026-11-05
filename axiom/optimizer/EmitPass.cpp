@@ -611,7 +611,7 @@ class Emitter {
   velox::core::ExpressionEvaluator& evaluator_;
   ExprEmitter exprEmitter_;
   const MultiFragmentPlan::Options options_;
-  int32_t nextNodeId_{0};
+  int32_t nextNodeId_{options_.firstPlanNodeId};
 
   // The fixed point whose step or convergence is being emitted, with the
   // states that hold their parts that read no recursive state.
