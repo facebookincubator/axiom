@@ -62,7 +62,7 @@ $ ./axiom_sql --query "select count(*) from sf1.orders"
 
 **[Hive](../connectors/hive/README.md)** (`hive.default`) — Registered via `--data_path` or configured through `.properties` files.
 Reads and writes Parquet, DWRF, or TEXT (including CSV) files in a local directory with Hive-style partitioning. Supports
-`CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, `DROP TABLE`, and `ALTER TABLE ADD/DROP VECTOR INDEX`.
+`CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, `DROP TABLE`, `ALTER TABLE ADD/DROP VECTOR INDEX`, and `REFRESH VECTOR INDEX`.
 
 Using `--data_path`:
 

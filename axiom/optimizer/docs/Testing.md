@@ -370,7 +370,8 @@ Setup statements run via Axiom's PrestoParser:
 
 - `CREATE TABLE name(col TYPE, ...)` registers a table (with any table properties).
 - `INSERT INTO name VALUES (...), ...`, `INSERT INTO name SELECT ...`, and `CREATE TABLE name AS SELECT ...` install rows.
-- All statements are also mirrored into DuckDB so result comparison works against the same data — with Presto table properties (`WITH (...)`) stripped, since DuckDB doesn't understand them. There is no `-- duckdb:` override for setup statements; setup SQL must otherwise be valid in both Presto and DuckDB. Stick to portable types (`BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`, `DATE`, …) and literal `VALUES`.
+- `ALTER TABLE t ADD VECTOR INDEX i (...) WITH (...)` adds a vector index to a table, and `REFRESH VECTOR INDEX i ON t WHERE ...` builds it. DuckDB has no vector search, so these two run only in Axiom, and queries that search the index hard-code their expected rows with `-- duckdb: VALUES ...`.
+- All other statements are also mirrored into DuckDB so result comparison works against the same data — with Presto table properties (`WITH (...)`) stripped, since DuckDB doesn't understand them. There is no `-- duckdb:` override for setup statements; setup SQL must otherwise be valid in both Presto and DuckDB. Stick to portable types (`BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`, `DATE`, …) and literal `VALUES`.
 
 Most files share the standard table `t` via the project-wide setup file:
 

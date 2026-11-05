@@ -30,6 +30,7 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/system/InformationSchema.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/ColumnExprs.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/CteScope.h"
 #include "axiom/sql/presto/DisplayNames.h"
@@ -41,6 +42,7 @@
 #include "axiom/sql/presto/RecursiveCteValidator.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
+#include "axiom/sql/presto/VectorIndexRefresh.h"
 #include "axiom/sql/presto/VectorSearchPlanner.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
@@ -259,6 +261,44 @@ class RelationPlanner : public AstVisitor {
 
     displayNames_.lastNames.clear();
     builder_->tableDelete(connectorId, table.schema, table.table);
+  }
+
+  // Plans the rows 'node' refreshes 'index' with: the key, the embedding and
+  // the partition columns of the rows of its table that its condition selects.
+  void planVectorIndexRows(
+      const RefreshVectorIndex& node,
+      const facebook::axiom::connector::VectorIndex& index) {
+    processTable(node.location(), *node.tableName());
+    addFilter(node.where());
+    if (node.where() != nullptr) {
+      // A refresh writes whole partitions: a condition on other columns would
+      // index only some rows of a partition the index then covers.
+      folly::F14FastSet<std::string> partitionColumns;
+      const auto scope = builder_->scope();
+      for (const auto& name : index.partitionColumns->names()) {
+        partitionColumns.insert(
+            scope(std::nullopt, name)->as<lp::InputReferenceExpr>()->name());
+      }
+      auto plan = lp::PlanBuilder(*builder_).build();
+      while (plan->kind() != lp::NodeKind::kFilter) {
+        plan = plan->onlyInput();
+      }
+      plan->as<lp::FilterNode>()->predicate()->forEachInputReference(
+          [&](const lp::InputReferenceExpr& column) {
+            AXIOM_PRESTO_SEMANTIC_CHECK(
+                partitionColumns.contains(column.name()),
+                node.where()->location(),
+                column.name(),
+                "REFRESH VECTOR INDEX supports only conditions on partition columns: {}",
+                column.name());
+          });
+    }
+
+    displayNames_.lastNames.clear();
+    builder_->project(
+        ColumnExprs::concat(
+            {lp::Col(index.keyColumn), lp::Col(index.embeddingColumn)},
+            ColumnExprs::of(index.partitionColumns->names())));
   }
 
   const ViewMap& views() const {
@@ -2864,6 +2904,58 @@ std::vector<lp::ExprApi> toColumnExprs(
   return exprs;
 }
 
+// Plans REFRESH VECTOR INDEX (see VectorIndexRefresh).
+SqlStatementPtr parseRefreshVectorIndex(
+    const ParserSessionPtr& session,
+    const RefreshVectorIndex& refresh,
+    const std::string& defaultConnectorId,
+    const std::string& defaultSchema,
+    const std::function<std::shared_ptr<axiom::sql::presto::Statement>(
+        std::string_view /*sql*/)>& parseSql) {
+  const auto [connectorId, tableName] = toConnectorTable(
+      session, *refresh.tableName(), defaultConnectorId, defaultSchema);
+  const auto table =
+      findTable(session, *refresh.tableName(), connectorId, tableName);
+  const auto indexName =
+      normalizeIdentifier(session, connectorId, refresh.name()->value());
+  const auto index = table->findVectorIndex(indexName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      index != nullptr,
+      refresh.name()->location(),
+      refresh.name()->value(),
+      "Vector index not found: {} of {}",
+      indexName,
+      refresh.tableName()->fullyQualifiedName());
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      index->properties.codecPolicy ==
+          facebook::axiom::connector::VectorIndexCodecPolicy::kPerPartition,
+      refresh.location(),
+      indexName,
+      "Refreshing a vector index with codec_policy 'shared' is not supported yet: {}",
+      indexName);
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      index->partitionColumns->size() > 0,
+      refresh.location(),
+      indexName,
+      "Refreshing a vector index of a table with no partition columns is not supported yet: {}",
+      indexName);
+
+  RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
+  planner.planVectorIndexRows(refresh, *index);
+
+  // The plans read the table, and the codec table to find each row's cluster.
+  auto inputTables = planner.inputTables();
+  inputTables.insert({connectorId, index->codecTable});
+  return std::make_shared<RefreshVectorIndexStatement>(
+      connectorId,
+      index,
+      VectorIndexRefresh::plan(
+          tableName, *index, connectorId, planner.builder()),
+      planner.views(),
+      // TODO: Report the index as the statement's output, marked as an index.
+      lp::ReferencedTables{.inputTables = std::move(inputTables)});
+}
+
 SqlStatementPtr parseInsert(
     const ParserSessionPtr& session,
     const Insert& insert,
@@ -3710,12 +3802,12 @@ SqlStatementPtr doPlan(
   }
 
   if (query->is(NodeType::kRefreshVectorIndex)) {
-    const auto* refresh = query->as<RefreshVectorIndex>();
-    AXIOM_PRESTO_SEMANTIC_FAIL(
-        refresh->location(),
-        "REFRESH",
-        "REFRESH VECTOR INDEX is not supported yet: {}",
-        refresh->name()->value());
+    return parseRefreshVectorIndex(
+        parserSession,
+        *query->as<RefreshVectorIndex>(),
+        defaultConnectorId,
+        defaultSchema,
+        parseSql);
   }
 
   if (query->is(NodeType::kDropVectorIndex)) {

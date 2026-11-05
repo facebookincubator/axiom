@@ -213,7 +213,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
     int32_t numWorkers,
     int32_t numDrivers,
-    bool syntacticJoinOrder) {
+    bool syntacticJoinOrder,
+    const std::vector<velox::Variant>& placeholderValues) {
   return makeLocalRunnerImpl(
       logicalPlan,
       executor,
@@ -224,15 +225,17 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
       numWorkers,
       numDrivers,
       syntacticJoinOrder,
-      [](const logical_plan::LogicalPlanNode& logicalPlan,
-         const connector::SchemaResolver& schemaResolver,
-         velox::core::ExpressionEvaluator& evaluator,
-         const MultiFragmentPlan::Options& options,
-         const std::shared_ptr<OptimizerSession>& optimizerSession,
-         const std::shared_ptr<runner::RunnerSession>& /*runnerSession*/,
-         const std::shared_ptr<core::QueryCtx>& queryCtx) {
+      [&placeholderValues](
+          const logical_plan::LogicalPlanNode& logicalPlan,
+          const connector::SchemaResolver& schemaResolver,
+          velox::core::ExpressionEvaluator& evaluator,
+          const MultiFragmentPlan::Options& options,
+          const std::shared_ptr<OptimizerSession>& optimizerSession,
+          const std::shared_ptr<runner::RunnerSession>& /*runnerSession*/,
+          const std::shared_ptr<core::QueryCtx>& queryCtx) {
         return Optimizer(
                    logicalPlan,
+                   placeholderValues,
                    schemaResolver,
                    *optimizerSession,
                    evaluator,
@@ -265,8 +268,18 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
 
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     const logical_plan::LogicalPlanNodePtr& logicalPlan) {
-  const auto buildRunner = useV2_ ? makeLocalRunnerV2 : makeLocalRunner;
-  return buildRunner(
+  if (useV2_) {
+    return makeLocalRunnerV2(
+        logicalPlan,
+        executor_.get(),
+        cache::AsyncDataCache::getInstance(),
+        rootPool_,
+        optimizerPool_,
+        numWorkers_,
+        numDrivers_,
+        syntacticJoinOrder_);
+  }
+  return makeLocalRunner(
       logicalPlan,
       executor_.get(),
       cache::AsyncDataCache::getInstance(),

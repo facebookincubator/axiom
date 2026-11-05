@@ -21,6 +21,7 @@
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaProcedureName.h"
 #include "axiom/connectors/TableDefinition.h"
+#include "axiom/connectors/VectorIndex.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "axiom/logical_plan/ReferencedTables.h"
 #include "velox/type/Variant.h"
@@ -41,6 +42,7 @@ enum class SqlStatementKind {
   kCreateTable,
   kCreateTableAsSelect,
   kInsert,
+  kRefreshVectorIndex,
   kDelete,
   kDropTable,
   kAddVectorIndex,
@@ -83,6 +85,10 @@ class SqlStatement {
 
   bool isInsert() const {
     return kind_ == SqlStatementKind::kInsert;
+  }
+
+  bool isRefreshVectorIndex() const {
+    return kind_ == SqlStatementKind::kRefreshVectorIndex;
   }
 
   bool isDelete() const {
@@ -220,6 +226,59 @@ class InsertStatement : public SqlStatement {
 
  private:
   const facebook::axiom::logical_plan::LogicalPlanNodePtr plan_;
+};
+
+/// REFRESH VECTOR INDEX: builds a vector index for the partitions of its table
+/// a condition selects. A host runs it as one index write (see
+/// connector::ConnectorMetadata::co_beginVectorIndexWrite): it begins the
+/// write, runs the statement's plans in order with the write's codec id as
+/// the value of ?1, committing each before the next starts, and finishes the
+/// write, or aborts it on a failure. The statement's result is the number of
+/// embeddings the write wrote, which the finish returns.
+class RefreshVectorIndexStatement : public SqlStatement {
+ public:
+  /// The plans of the refresh, in the order a host runs them. Each has one
+  /// placeholder, ?1 of type BIGINT, the codec id of the index write (see
+  /// connector::VectorIndexWriteHandle).
+  struct Plans {
+    /// Trains a codec for each partition the refresh reads and writes them to
+    /// the codec table.
+    facebook::axiom::logical_plan::LogicalPlanNodePtr trainPlan;
+    /// Assigns each row to the nearest cluster of its partition's codec,
+    /// builds the local indexes and writes them to the index table.
+    facebook::axiom::logical_plan::LogicalPlanNodePtr buildPlan;
+  };
+
+  RefreshVectorIndexStatement(
+      std::string connectorId,
+      facebook::axiom::connector::VectorIndexPtr index,
+      Plans plans,
+      ViewMap views,
+      facebook::axiom::logical_plan::ReferencedTables referencedTables)
+      : SqlStatement(
+            SqlStatementKind::kRefreshVectorIndex,
+            std::move(views),
+            std::move(referencedTables)),
+        connectorId_{std::move(connectorId)},
+        index_{std::move(index)},
+        plans_{std::move(plans)} {}
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  const facebook::axiom::connector::VectorIndexPtr& index() const {
+    return index_;
+  }
+
+  const Plans& plans() const {
+    return plans_;
+  }
+
+ private:
+  const std::string connectorId_;
+  const facebook::axiom::connector::VectorIndexPtr index_;
+  const Plans plans_;
 };
 
 /// DELETE statement. 'plan' is a TableWriteNode with WriteKind::kDelete over

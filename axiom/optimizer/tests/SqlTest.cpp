@@ -31,6 +31,7 @@
 #include "axiom/optimizer/tests/TestDataPath.h"
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/PrestoParser.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -116,14 +117,16 @@ std::string stripTablePropertiesForDuckDb(const std::string& sql) {
 // registers the (possibly partitioned) table with any table properties; INSERT
 // / CTAS write data through the connector's write path. Works for any connector
 // whose metadata implements createTable (TestConnector, LocalHive). DuckDB
-// installation is done by the caller.
-void runSetupStatement(
+// installation is done by the caller. Returns false for a statement DuckDB has
+// no counterpart of: one that adds or refreshes a vector index.
+bool runSetupStatement(
     const std::string& sql,
     const std::string& connectorId,
     const std::string& defaultSchema,
     connector::ConnectorMetadata& metadata,
     const std::function<std::shared_ptr<runner::LocalRunner>(
-        const logical_plan::LogicalPlanNodePtr&)>& runnerFactory) {
+        const logical_plan::LogicalPlanNodePtr&,
+        const std::vector<velox::Variant>& placeholderValues)>& runnerFactory) {
   ::axiom::sql::presto::PrestoParser parser(
       connectorId,
       defaultSchema,
@@ -149,7 +152,36 @@ void runSetupStatement(
         create.definition(optimizer::ConstantExprEvaluator::evaluateProperties),
         /*ifNotExists=*/false,
         /*explain=*/false));
-    return;
+    return true;
+  }
+
+  if (stmt->isAddVectorIndex()) {
+    const auto& add =
+        *stmt->as<::axiom::sql::presto::AddVectorIndexStatement>();
+    folly::coro::blockingWait(metadata.co_addVectorIndex(
+        session,
+        add.tableName(),
+        add.index().definition(
+            optimizer::ConstantExprEvaluator::evaluateProperties),
+        add.ifTableExists(),
+        add.ifNotExists(),
+        /*explain=*/false));
+    return false;
+  }
+
+  if (stmt->isRefreshVectorIndex()) {
+    const auto& refresh =
+        *stmt->as<::axiom::sql::presto::RefreshVectorIndexStatement>();
+    const auto handle = folly::coro::blockingWait(
+        metadata.co_beginVectorIndexWrite(session, refresh.index()));
+    for (const auto& plan :
+         {refresh.plans().trainPlan, refresh.plans().buildPlan}) {
+      runnerFactory(plan, {velox::Variant(handle->codecId())})
+          ->drain([](velox::RowVectorPtr) {});
+    }
+    folly::coro::blockingWait(
+        metadata.co_finishVectorIndexWrite(session, handle));
+    return false;
   }
 
   logical_plan::LogicalPlanNodePtr plan;
@@ -169,8 +201,9 @@ void runSetupStatement(
     VELOX_USER_FAIL("Unsupported setup statement: {}", sql);
   }
 
-  auto runner = runnerFactory(plan);
+  auto runner = runnerFactory(plan, /*placeholderValues=*/{});
   runner->drain([](velox::RowVectorPtr) {});
+  return true;
 }
 
 // Per-.sql-file, per-optimizer gtest fixture. Each (file, optimizer) pair is a
@@ -212,18 +245,32 @@ class SqlTest : public SqlTestBase {
 
     // Setup statements install tables; a file's queries are what it tests.
     // Running them single-node keeps a CTAS off the remote-exchange path.
-    auto runnerFactory = [](const logical_plan::LogicalPlanNodePtr& plan) {
-      const auto buildRunner = UseV2 ? makeLocalRunnerV2 : makeLocalRunner;
-      return buildRunner(
-          plan,
-          suiteExecutor_.get(),
-          /*asyncDataCache=*/nullptr,
-          suiteRootPool_,
-          suiteOptimizerPool_,
-          /*numWorkers=*/1,
-          /*numDrivers=*/1,
-          /*syntacticJoinOrder=*/false);
-    };
+    auto runnerFactory =
+        [](const logical_plan::LogicalPlanNodePtr& plan,
+           const std::vector<velox::Variant>& placeholderValues) {
+          if (!UseV2) {
+            VELOX_CHECK(placeholderValues.empty());
+            return makeLocalRunner(
+                plan,
+                suiteExecutor_.get(),
+                /*asyncDataCache=*/nullptr,
+                suiteRootPool_,
+                suiteOptimizerPool_,
+                /*numWorkers=*/1,
+                /*numDrivers=*/1,
+                /*syntacticJoinOrder=*/false);
+          }
+          return makeLocalRunnerV2(
+              plan,
+              suiteExecutor_.get(),
+              /*asyncDataCache=*/nullptr,
+              suiteRootPool_,
+              suiteOptimizerPool_,
+              /*numWorkers=*/1,
+              /*numDrivers=*/1,
+              /*syntacticJoinOrder=*/false,
+              placeholderValues);
+        };
 
     connector::ConnectorMetadata* metadata = nullptr;
     if (connectorKind == TestConnectorKind::kLocalHive) {
@@ -257,9 +304,14 @@ class SqlTest : public SqlTestBase {
             suiteSystemConnector_.get()));
 
     for (const auto& statement : setupStatements) {
-      suiteDuckDbRunner_->execute(stripTablePropertiesForDuckDb(statement));
-      runSetupStatement(
-          statement, connectorId(), defaultSchema(), *metadata, runnerFactory);
+      if (runSetupStatement(
+              statement,
+              connectorId(),
+              defaultSchema(),
+              *metadata,
+              runnerFactory)) {
+        suiteDuckDbRunner_->execute(stripTablePropertiesForDuckDb(statement));
+      }
     }
 
     if (pushdownTable.has_value()) {
@@ -618,6 +670,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"unionAll">();
   registerQueryFile<"unionAllFlatten">();
   registerQueryFile<"unnest">();
+  registerQueryFile<"vectorSearch">(/*v2Only=*/true);
   registerQueryFile<"window">();
 
   return RUN_ALL_TESTS();

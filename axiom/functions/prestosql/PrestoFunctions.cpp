@@ -164,6 +164,7 @@ void PrestoFunctions::registerAll(
       .countIf = fullName("count_if"),
       .approxDistinct = fullName("approx_distinct"),
       .sumDataSize = fullName("sum_data_size_for_stats"),
+      .vectorCount = fullName("vector_count"),
   });
 
   registry.registerAggregateEmptyResultResolver(

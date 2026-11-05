@@ -81,6 +81,8 @@ WriteStatsBuilder::WriteStatsBuilder(
       getAggregateSignatures(statsAggs->approxDistinct);
   const auto sumDataSizeSignatures =
       getAggregateSignatures(statsAggs->sumDataSize);
+  const auto vectorCountSignatures =
+      getAggregateSignatures(statsAggs->vectorCount);
 
   // When there are grouping keys, add a count(*) aggregate (no input
   // columns) as the first stats channel to provide exact per-group row
@@ -130,37 +132,46 @@ WriteStatsBuilder::WriteStatsBuilder(
     mapping.fields.push_back(ColumnStatField::kCount);
     addAggregate(*countName, velox::BIGINT());
 
-    switch (colType->kind()) {
-      case velox::TypeKind::BOOLEAN:
-        addAggregateIfSupported(
-            countIfSignatures,
-            ColumnStatField::kCountIf,
-            statsAggs->countIf,
-            velox::BIGINT());
-        break;
+    // Min, max and distinct count mean nothing for a vector index.
+    if (colType->equivalent(*velox::VECTOR_INDEX())) {
+      addAggregateIfSupported(
+          vectorCountSignatures,
+          ColumnStatField::kVectorCount,
+          statsAggs->vectorCount,
+          velox::BIGINT());
+    } else {
+      switch (colType->kind()) {
+        case velox::TypeKind::BOOLEAN:
+          addAggregateIfSupported(
+              countIfSignatures,
+              ColumnStatField::kCountIf,
+              statsAggs->countIf,
+              velox::BIGINT());
+          break;
 
-      case velox::TypeKind::TINYINT:
-      case velox::TypeKind::SMALLINT:
-      case velox::TypeKind::INTEGER:
-      case velox::TypeKind::BIGINT:
-      case velox::TypeKind::REAL:
-      case velox::TypeKind::DOUBLE:
-      case velox::TypeKind::TIMESTAMP:
-      case velox::TypeKind::VARCHAR:
-      case velox::TypeKind::VARBINARY:
-        addAggregateIfSupported(
-            minSignatures, ColumnStatField::kMin, statsAggs->min, colType);
-        addAggregateIfSupported(
-            maxSignatures, ColumnStatField::kMax, statsAggs->max, colType);
-        addAggregateIfSupported(
-            approxDistinctSignatures,
-            ColumnStatField::kApproxDistinct,
-            statsAggs->approxDistinct,
-            velox::BIGINT());
-        break;
+        case velox::TypeKind::TINYINT:
+        case velox::TypeKind::SMALLINT:
+        case velox::TypeKind::INTEGER:
+        case velox::TypeKind::BIGINT:
+        case velox::TypeKind::REAL:
+        case velox::TypeKind::DOUBLE:
+        case velox::TypeKind::TIMESTAMP:
+        case velox::TypeKind::VARCHAR:
+        case velox::TypeKind::VARBINARY:
+          addAggregateIfSupported(
+              minSignatures, ColumnStatField::kMin, statsAggs->min, colType);
+          addAggregateIfSupported(
+              maxSignatures, ColumnStatField::kMax, statsAggs->max, colType);
+          addAggregateIfSupported(
+              approxDistinctSignatures,
+              ColumnStatField::kApproxDistinct,
+              statsAggs->approxDistinct,
+              velox::BIGINT());
+          break;
 
-      default:
-        break;
+        default:
+          break;
+      }
     }
 
     if (!colType->isFixedWidth()) {

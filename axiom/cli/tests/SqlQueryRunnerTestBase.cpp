@@ -16,6 +16,8 @@
 
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 
+#include "velox/dwio/common/Options.h"
+
 using namespace facebook::velox;
 
 namespace axiom::sql {
@@ -66,6 +68,19 @@ SqlQueryRunnerTestHandle<> SqlQueryRunnerTestBase::makeRunner(
       std::move(queryIdGenerator));
 
   return runner;
+}
+
+SqlQueryRunnerTestHandle<> SqlQueryRunnerTestBase::makeLocalHiveRunner(
+    const std::string& dataPath) {
+  return makeRunner([&](facebook::axiom::Connectors& connectors) {
+    connectors.registerLocalHiveConnector(
+        dataPath,
+        std::string(
+            dwio::common::FileFormatName::toName(
+                dwio::common::FileFormat::DWRF)),
+        "hive");
+    return std::make_pair(std::string("hive"), std::string("default"));
+  });
 }
 
 SqlQueryRunner::SqlResult SqlQueryRunnerTestBase::run(std::string_view sql) {

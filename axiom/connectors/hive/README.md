@@ -45,8 +45,8 @@ a local directory.
 - `CREATE TABLE AS SELECT`.
 - `INSERT INTO`.
 - `DROP TABLE`.
-- Vector indexes: `VECTOR INDEX` elements of `CREATE TABLE`, and
-  `ALTER TABLE ADD/DROP VECTOR INDEX`.
+- Vector indexes: `VECTOR INDEX` elements of `CREATE TABLE`,
+  `ALTER TABLE ADD/DROP VECTOR INDEX` and `REFRESH VECTOR INDEX`.
 - Per-column statistics (`.stats` files) are persisted on write for use by
   the optimizer.
 
@@ -337,6 +337,10 @@ DROP TABLE t;
 
 ### Vector indexes
 
+See "Vector Indexes" in `axiom/sql/presto/docs/PrestoSqlExtensions.md` for
+adding, refreshing and dropping indexes and for `vector_search`. This section
+covers how the local Hive connector stores an index.
+
 ```sql
 CREATE TABLE products (
     id BIGINT,
@@ -345,34 +349,49 @@ CREATE TABLE products (
     VECTOR INDEX product_index (embedding) KEY (id) WITH (
         distance_metric = 'cosine',
         index_type = 'flat',
-        num_clusters = 1000))
+        num_clusters = 1000,
+        dimension = 768))
 WITH (partitioned_by = ARRAY['ds']);
 
-ALTER TABLE products ADD VECTOR INDEX product_ivf (embedding) KEY (id)
-WITH (distance_metric = 'cosine', index_type = 'ivf_flat', num_clusters = 1000);
+REFRESH VECTOR INDEX product_index ON products WHERE ds = '2026-10-31';
 
-ALTER TABLE products DROP VECTOR INDEX product_ivf;
+ALTER TABLE products DROP VECTOR INDEX product_index;
 ```
 
-An index's properties:
-
-- `distance_metric`, required: `cosine`.
-- `index_type`, required: `flat`, `ivf_flat`, `ivf_sq` or `hnsw_sq`.
-- `num_clusters`, required: a positive integer.
-- `codec_policy`, optional: `per_partition` (the default) or `shared`.
-- `index_options`, optional: a `MAP(VARCHAR, VARCHAR)` of local index settings,
-  such as `ivf.nlist`.
-
-Any other property is a table property of both of its storage tables. The
-index's partitions are its table's, so `partitioned_by`, `bucketed_by`,
-`bucket_count` and `sorted_by` are not supported.
+Any property other than the index's own is a table property of both of its
+storage tables. The index's partitions are its table's, so `partitioned_by`,
+`bucketed_by`, `bucket_count` and `sorted_by` are not supported.
 
 The table's `.schema` records each index's settings. The index is stored as two
-tables named after the table and the index, `products__product_index__codecs`
-and `products__product_index__index`, partitioned as the table is. Dropping the
-index removes its record, then both tables; dropping the table drops its
-indexes' tables too. A DELETE of partitions of the table removes the same
-partitions from both tables of each of its indexes.
+tables named after the table and the index:
+
+- `products__product_index__codecs` holds one codec per partition and refresh:
+  - `codec VECTOR_INDEX`
+  - the partition columns (partition keys)
+  - `codec_id BIGINT` (partition key)
+- `products__product_index__index` holds one local index per group of a
+  cluster:
+  - `codec_id BIGINT`
+  - `cluster_id BIGINT`
+  - `group_id BIGINT`
+  - `local_index VECTOR_INDEX`
+  - the partition columns (partition keys)
+
+Dropping the index removes its record, then both tables; dropping the table
+drops its indexes' tables too. A DELETE of partitions of the table removes the
+same partitions from both tables of each of its indexes.
+`"products$product_index$centroids"` presents the index's clusters to
+`vector_search`.
+
+A refresh writes its codecs to the codec table under a new codec id, then its
+local indexes to the index table. Finishing the write deletes the other codecs
+of the partitions the refresh wrote. A failed refresh deletes its own codecs.
+The refresh's result comes from the statistics the index write recorded.
+
+The index covers a partition once the index table has it. A refresh writes a
+NULL codec and a NULL local index for a partition with no valid rows, so the
+index covers it too. A search that reads a partition the index does not cover
+fails when it is planned.
 
 ## Statistics
 

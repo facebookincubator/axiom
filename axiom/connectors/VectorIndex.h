@@ -26,6 +26,7 @@
 
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
+#include "velox/common/Casts.h"
 #include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
 #include "velox/type/Variant.h"
@@ -54,6 +55,7 @@ struct VectorIndexProperties {
   static constexpr std::string_view kDistanceMetric{"distance_metric"};
   static constexpr std::string_view kIndexType{"index_type"};
   static constexpr std::string_view kNumClusters{"num_clusters"};
+  static constexpr std::string_view kDimension{"dimension"};
   static constexpr std::string_view kCodecPolicy{"codec_policy"};
   static constexpr std::string_view kIndexOptions{"index_options"};
 
@@ -65,6 +67,9 @@ struct VectorIndexProperties {
 
   /// The number of clusters of each codec. Positive.
   int64_t numClusters{0};
+
+  /// The length of every embedding the index holds. Positive.
+  int64_t dimension{0};
 
   /// How often the index trains a codec.
   VectorIndexCodecPolicy codecPolicy{VectorIndexCodecPolicy::kPerPartition};
@@ -114,8 +119,11 @@ struct ResolvedVectorIndex {
 /// table (see Table::vectorIndexes()).
 ///
 /// The index belongs to its table, and its name is unique within the table. It
-/// holds every row of the table whose key and embedding are valid for it. A
-/// vector search of the table that uses the index reads the index's storage
+/// holds every row of the table whose key and embedding are valid for it:
+///   - The key is not NULL.
+///   - The embedding is not NULL, has 'properties.dimension' elements, none of
+///     them NULL, NaN or infinite, and is not all zeros.
+/// A vector search of the table that uses the index reads the index's storage
 /// tables and returns each match's key and partition columns. The key is the
 /// table's primary key, or, for a table that declares none, columns whose
 /// values identify each row: a match's key finds the row it came from. For
@@ -162,6 +170,16 @@ struct ResolvedVectorIndex {
 ///   local_index, partition columns). Each row is one local index of the
 ///   cluster 'cluster_id' of the codec its partition columns and 'codec_id'
 ///   identify.
+///
+/// A partition with no valid rows has a NULL codec and one index row with a
+/// NULL cluster_id, group_id and local_index. It matches nothing, and the
+/// index covers the partition.
+///
+/// The index's centroids table presents its clusters to a vector search, a row
+/// per cluster: (partition columns, codec_id, cluster_id, centroid). It is
+/// named after the table and the index, e.g.
+/// "products$product_index$centroids". It is not stored: a search of it reads
+/// the codec table (see centroidsTableName()).
 struct VectorIndex {
   // The columns of the codec and index tables, which store the index.
 
@@ -183,9 +201,16 @@ struct VectorIndex {
   /// VECTOR_INDEX. A column of the index table: a local index.
   static constexpr std::string_view kLocalIndex{"local_index"};
 
+  /// ARRAY(REAL). A column of the centroids table only: a cluster's centroid.
+  static constexpr std::string_view kCentroid{"centroid"};
+
+  /// The suffix of the name of a centroids table (see centroidsTableName()).
+  static constexpr std::string_view kCentroidsSuffix{"$centroids"};
+
   /// Returns the type of the stored codec table: 'kCodec', the columns of
   /// 'partitionColumns', then 'kCodecId'. Throws a user error when a partition
-  /// column takes the name of a column the codec or index table adds.
+  /// column takes the name of a column the codec, index or centroids table
+  /// adds.
   static velox::RowTypePtr codecTableType(
       const velox::RowTypePtr& partitionColumns);
 
@@ -194,6 +219,26 @@ struct VectorIndex {
   /// 'partitionColumns'. Throws a user error as codecTableType() does.
   static velox::RowTypePtr indexTableType(
       const velox::RowTypePtr& partitionColumns);
+
+  /// Returns the name of the centroids table of the index 'name' of 'table':
+  /// the table's name, '$', the index's name, then kCentroidsSuffix. A
+  /// connector that supports vector indexes resolves the name in findTable to a
+  /// table of centroidColumns(). The engine reserves the name: only a vector
+  /// search reads the table, which the engine turns into a search of the codec
+  /// table, and nothing writes it.
+  static SchemaTableName centroidsTableName(
+      const SchemaTableName& table,
+      std::string_view name);
+
+  /// Returns the table and the name of the index that 'name', the name of a
+  /// centroids table (see centroidsTableName()), names, or std::nullopt if
+  /// 'name' is not of that form.
+  static std::optional<std::pair<SchemaTableName, std::string>>
+  parseCentroidsTableName(const SchemaTableName& name);
+
+  /// Returns the columns of the centroids table, in order: 'partitionColumns',
+  /// 'kCodecId', 'kClusterId' and 'kCentroid'.
+  velox::RowTypePtr centroidColumns() const;
 
   /// The index's name, unique within 'table'.
   std::string name;
@@ -218,5 +263,32 @@ struct VectorIndex {
 };
 
 using VectorIndexPtr = std::shared_ptr<const VectorIndex>;
+
+/// A write into a vector index (see
+/// ConnectorMetadata::co_beginVectorIndexWrite): its codec id, which the
+/// engine writes the codecs and local indexes with, and what the connector
+/// needs to finish or abort it, in a subclass.
+class VectorIndexWriteHandle {
+ public:
+  explicit VectorIndexWriteHandle(int64_t codecId) : codecId_{codecId} {}
+
+  virtual ~VectorIndexWriteHandle() = default;
+
+  /// The id of the codecs the write trains, new for each write.
+  int64_t codecId() const {
+    return codecId_;
+  }
+
+  /// Returns this object as type 'T'. Throws if it is not of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return velox::checkedPointerCast<const T>(this);
+  }
+
+ private:
+  const int64_t codecId_;
+};
+
+using VectorIndexWriteHandlePtr = std::shared_ptr<const VectorIndexWriteHandle>;
 
 } // namespace facebook::axiom::connector

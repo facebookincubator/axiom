@@ -111,6 +111,9 @@ struct ColumnStatistics {
   /// Count of non-nulls.
   int64_t numValues{0};
 
+  /// For a VECTOR_INDEX column, the number of embeddings in its indexes.
+  std::optional<int64_t> numEmbeddings;
+
   /// For complex type columns, statistics of children. For array, contains one
   /// element describing the array elements. For struct, has one element for
   /// each member. For map, has an element for keys and one for values. For flat
@@ -1729,6 +1732,44 @@ class ConnectorMetadata {
       bool ifTableExists,
       bool ifExists,
       bool explain);
+
+  /// Begins a write into 'index': an insert of codecs into its codec table,
+  /// then an insert of local indexes into its index table, both with the
+  /// write's codec id, which the connector generates. Each insert commits on
+  /// its own; the engine ends the write with co_finishVectorIndexWrite, or with
+  /// co_abortVectorIndexWrite on failure. A write the engine never ends, e.g.
+  /// because the coordinator failed, leaves only states a search tolerates: a
+  /// codec no index row names is unused, and every index row names its codec.
+  /// The next write of those partitions drops such codecs. Returns the write's
+  /// handle, which carries its codec id.
+  virtual folly::coro::Task<VectorIndexWriteHandlePtr> co_beginVectorIndexWrite(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] VectorIndexPtr index) {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement co_beginVectorIndexWrite");
+    co_return nullptr;
+  }
+
+  /// Finishes the write of 'handle' after both of its inserts committed. In the
+  /// partitions the write wrote, drops the codecs no index row names. Returns
+  /// the number of embeddings the write wrote. Reads no data, only what the
+  /// inserts recorded.
+  virtual folly::coro::Task<int64_t> co_finishVectorIndexWrite(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] VectorIndexWriteHandlePtr handle) {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement co_finishVectorIndexWrite");
+    co_return 0;
+  }
+
+  /// Aborts the write of 'handle': drops its codecs that no index row names.
+  virtual folly::coro::Task<void> co_abortVectorIndexWrite(
+      [[maybe_unused]] ConnectorSessionPtr session,
+      [[maybe_unused]] VectorIndexWriteHandlePtr handle) {
+    VELOX_FAIL(
+        "A connector that supports vector indexes must implement co_abortVectorIndexWrite");
+    co_return;
+  }
 
   /// Adds 'column' to an existing table. Checks that the connector creates
   /// tables and supports every part of 'column' (see supportsCreateTable()),

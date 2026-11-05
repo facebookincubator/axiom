@@ -450,6 +450,12 @@ ResolvedVectorIndex resolveVectorIndex(
     VectorIndexDefinition definition,
     const velox::RowType& columns,
     const std::vector<std::string>& primaryKey) {
+  // The name of the index's centroids table ends with '$', the index's name
+  // and VectorIndex::kCentroidsSuffix.
+  VELOX_USER_CHECK(
+      definition.name.find('$') == std::string::npos,
+      "Vector index name must not contain '$': {}",
+      definition.name);
   VELOX_USER_CHECK(
       columns.containsChild(definition.column),
       "Vector index column not found: {}",

@@ -161,6 +161,15 @@ void extractStatField(
       }
       break;
     }
+    case ColumnStatField::kVectorCount: {
+      // A group whose indexes are all NULL holds no embeddings.
+      auto* values = statsVector->asUnchecked<velox::SimpleVector<int64_t>>();
+      for (auto i = 0; i < numRows; ++i) {
+        stats[startRow + i][column].numEmbeddings =
+            values->isNullAt(i) ? 0 : values->valueAt(i);
+      }
+      break;
+    }
     case ColumnStatField::kSumDataSize: {
       auto* values = statsVector->asUnchecked<velox::SimpleVector<int64_t>>();
       for (auto i = 0; i < numRows; ++i) {
@@ -369,6 +378,7 @@ const auto& columnStatFieldNames() {
       {ColumnStatField::kMax, "MAX"},
       {ColumnStatField::kApproxDistinct, "APPROX_DISTINCT"},
       {ColumnStatField::kSumDataSize, "SUM_DATA_SIZE"},
+      {ColumnStatField::kVectorCount, "VECTOR_COUNT"},
   };
   return kNames;
 }

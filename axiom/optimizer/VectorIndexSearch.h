@@ -23,39 +23,52 @@
 
 namespace facebook::axiom::optimizer {
 
-/// Plans a search of embeddings through a vector index of the table its build
-/// side reads (see connector::Table::vectorIndexes()): the index on the
-/// searched column with the search's metric that the index hint names, or else
-/// the first by name. The index is stored as a codec table, with the centroids
-/// of each partition's clusters, and an index table, with the local index of
-/// each cluster. The search assigns each probe row to its nearest clusters,
-/// searches their local indexes, and keeps the 'k' nearest rows:
+/// Plans a vector search of a table as searches of one of its vector indexes
+/// (see connector::Table::vectorIndexes()). The index is the one on the
+/// searched column with the search's metric: the one the index hint names, or
+/// else the only one. Its codec table holds the centroids of each
+/// partition's clusters, and its index table the local indexes of each
+/// cluster. The plan assigns each probe row to its nearest clusters, searches
+/// their local indexes, and keeps the 'k' nearest rows:
 ///
 ///   VectorSearch(probe, build=Filter(ds = 'x', Scan(t)), embedding, k)
 ///
 /// becomes
 ///
-///   Filter: row_number <= k, by query_id ordered by score DESC
-///     VectorSearch: (partitions, codec_id, cluster_id) =, local_index, k
-///       VectorSearch: codec, k = numProbes
-///         AssignUniqueId query_id
-///           probe
-///         Filter: ds = 'x' / Scan <codec table>
-///       Filter: ds = 'x' / Scan <index table>
+///   Filter: rank <= k
+///     Window: rank := row_number() by query_id ordered by score DESC
+///       VectorSearch: (partitions, codec_id, cluster_id) =, local_index, k
+///         VectorSearch: codec, k = numProbes
+///           AssignUniqueId query_id
+///             probe
+///           Filter: ds = 'x' / Scan <codec table>
+///         Filter: ds = 'x' / Scan <index table>
+///
+/// A later pass fuses the Window and the Filter into a TopNRowNumber.
 ///
 /// The search returns the table's key and partition columns of each match. It
 /// fails when the index does not cover a partition the filters select (see
 /// connector::TableLayout::co_checkVectorIndexCoverage()).
+///
+/// A search of an index's centroids table (see
+/// connector::VectorIndex::centroidsTableName()) is one search of the codecs of
+/// the partitions the filters select, which returns each match's cluster.
 class VectorIndexSearch {
  public:
   /// Returns the plan of 'search', a search of embeddings, over the storage
-  /// tables of its index. Its build side is a scan of a table, optionally
+  /// tables of an index. Its build side is a scan of a table, optionally
   /// filtered, under projections. 'probe' produces the probe's rows. The plan
   /// serves filters on the table's partition columns: it reads only the
-  /// partitions they select. Throws a user error for a condition on other
-  /// columns, which would need a filtered search inside a local index, for
-  /// keys, and for reading a column other than the key and the partition
-  /// columns, which are not supported yet.
+  /// partitions they select. Throws a user error:
+  ///   - Without an index on the searched column with the search's metric, or
+  ///     with more than one and no index hint.
+  ///   - For a condition on another column, which would need a filtered search
+  ///     inside a local index.
+  ///   - For a search of a table through its index: for a join other than
+  ///     INNER, for keys, and for reading a column other than the key and the
+  ///     partition columns, which are not supported yet.
+  ///   - For a search of a centroids table with a metric other than the
+  ///     index's.
   static NodeCP plan(
       const VectorSearch& search,
       NodeCP probe,

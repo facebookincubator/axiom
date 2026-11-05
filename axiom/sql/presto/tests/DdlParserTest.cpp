@@ -509,12 +509,118 @@ TEST_F(DdlParserTest, vectorIndex) {
           "VECTOR INDEX I (e))"),
       "Duplicate vector index name: i");
 
-  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
-      parseSql("REFRESH VECTOR INDEX i ON t WHERE ds = 'x'"),
-      "REFRESH VECTOR INDEX is not supported yet: i");
-
   // 'vector' and 'index' remain usable as names.
   ASSERT_TRUE(parseSql("SELECT 1 AS vector, 2 AS index")->isSelect());
+}
+
+// A refresh of a vector index plans two writes: the codecs, then the local
+// indexes, of the rows of its table that its condition selects.
+TEST_F(DdlParserTest, refreshVectorIndex) {
+  using facebook::axiom::connector::VectorIndexCodecPolicy;
+  const auto addIndexedTable = [&](const std::string& table,
+                                   const RowTypePtr& partitionColumns,
+                                   VectorIndexCodecPolicy codecPolicy) {
+    connector_->addPartitionedTable(
+        table,
+        ROW({{"id", BIGINT()}, {"embedding", ARRAY(REAL())}})
+            ->unionWith(partitionColumns),
+        partitionColumns->names());
+    connector_->addVectorIndex(
+        table,
+        {.name = "i",
+         .column = "embedding",
+         .key = {"id"},
+         .properties = {
+             {"distance_metric", Variant("cosine")},
+             {"index_type", Variant("flat")},
+             {"num_clusters", Variant(int64_t{4})},
+             {"dimension", Variant(int64_t{2})},
+             {"codec_policy",
+              Variant(
+                  std::string(
+                      facebook::axiom::connector::VectorIndexCodecPolicyName::
+                          toName(codecPolicy)))},
+         }});
+  };
+  addIndexedTable(
+      "t", ROW("ds", VARCHAR()), VectorIndexCodecPolicy::kPerPartition);
+  const auto expectInsert = [](const lp::LogicalPlanNodePtr& plan,
+                               std::string_view table,
+                               const std::vector<std::string>& columns) {
+    const auto* write = plan->as<lp::TableWriteNode>();
+    ASSERT_NE(write, nullptr);
+    EXPECT_EQ(write->tableName().table, table);
+    EXPECT_EQ(write->writeKind(), lp::WriteKind::kInsert);
+    EXPECT_EQ(write->columnNames(), columns);
+  };
+
+  // The index and table names match ignoring case.
+  {
+    auto statement =
+        parseSql("REFRESH VECTOR INDEX I ON T WHERE ds = '2026-01-01'");
+    ASSERT_TRUE(statement->isRefreshVectorIndex());
+    const auto* refresh = statement->as<RefreshVectorIndexStatement>();
+    EXPECT_EQ("i", refresh->index()->name);
+
+    const auto& plans = refresh->plans();
+    expectInsert(plans.trainPlan, "t__i__codecs", {"codec", "ds", "codec_id"});
+    expectInsert(
+        plans.buildPlan,
+        "t__i__index",
+        {"codec_id", "cluster_id", "group_id", "local_index", "ds"});
+
+    const auto& tables = refresh->referencedTables();
+    EXPECT_THAT(
+        tables.inputTables,
+        testing::UnorderedElementsAre(
+            facebook::axiom::CatalogSchemaTableName{
+                kConnectorId, {"default", "t"}},
+            facebook::axiom::CatalogSchemaTableName{
+                kConnectorId, {"default", "t__i__codecs"}}));
+    EXPECT_FALSE(tables.outputTable.has_value());
+  }
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX j ON t WHERE ds = '2026-01-01'"),
+      "Vector index not found: j of t");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX i ON no_such_table WHERE ds = 'x'"),
+      "Table not found: no_such_table");
+
+  // A refresh writes whole partitions, so its condition reads only partition
+  // columns.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX i ON t WHERE ds = 'x' AND id > 5"),
+      "REFRESH VECTOR INDEX supports only conditions on partition columns: id");
+
+  addIndexedTable(
+      "t_hourly",
+      ROW({"ds", "hr"}, VARCHAR()),
+      VectorIndexCodecPolicy::kPerPartition);
+  {
+    auto statement =
+        parseSql("REFRESH VECTOR INDEX i ON t_hourly WHERE ds = 'x'");
+    const auto& plans = statement->as<RefreshVectorIndexStatement>()->plans();
+    expectInsert(
+        plans.trainPlan,
+        "t_hourly__i__codecs",
+        {"codec", "ds", "hr", "codec_id"});
+    expectInsert(
+        plans.buildPlan,
+        "t_hourly__i__index",
+        {"codec_id", "cluster_id", "group_id", "local_index", "ds", "hr"});
+  }
+
+  addIndexedTable(
+      "t_shared", ROW("ds", VARCHAR()), VectorIndexCodecPolicy::kShared);
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX i ON t_shared WHERE ds = 'x'"),
+      "Refreshing a vector index with codec_policy 'shared' is not supported yet: i");
+
+  addIndexedTable("t_global", ROW({}), VectorIndexCodecPolicy::kPerPartition);
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("REFRESH VECTOR INDEX i ON t_global WHERE id > 0"),
+      "Refreshing a vector index of a table with no partition columns is not supported yet: i");
 }
 
 TEST_F(DdlParserTest, view) {

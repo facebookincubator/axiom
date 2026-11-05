@@ -608,7 +608,8 @@ class SqlQueryRunner {
       bool explain,
       std::shared_ptr<facebook::velox::BaseRuntimeStatWriter> statsWriter);
 
-  // Runs 'operation' on a v2 Optimizer over 'logicalPlan'. The optimizer's
+  // Runs 'operation' on a v2 Optimizer over 'logicalPlan' with
+  // 'placeholderValues', the values of its placeholders. The optimizer's
   // arena, session and evaluator live for the duration of the call, so
   // 'operation' must not let the optimizer's output escape it.
   template <typename Operation>
@@ -620,6 +621,7 @@ class SqlQueryRunner {
       const std::shared_ptr<facebook::axiom::connector::SchemaResolver>&
           schemaResolver,
       bool explain,
+      const std::vector<facebook::velox::Variant>& placeholderValues,
       Operation&& operation);
 
   std::string runExplain(
@@ -629,7 +631,8 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver = nullptr,
+      const std::vector<facebook::velox::Variant>& placeholderValues = {});
 
   // Optimizes 'logicalPlan' and renders EXPLAIN (TYPE IO) output. Synchronous
   // (no execution), so it is kept out of the co_run() coroutine chain.
@@ -668,6 +671,8 @@ class SqlQueryRunner {
   // @param checkBestPlan Optional lambda to call towards the end of
   // optimization after best plan is found. If returns 'false', the optimization
   // stops and returns an empty result.
+  // @param placeholderValues The values of the plan's placeholders in order of
+  // position. Only the v2 optimizer binds placeholders.
   facebook::axiom::optimizer::PlanAndStats optimize(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const std::shared_ptr<facebook::velox::core::QueryCtx>& queryCtx,
@@ -681,7 +686,8 @@ class SqlQueryRunner {
           nullptr,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver = nullptr,
-      bool explain = false);
+      bool explain = false,
+      const std::vector<facebook::velox::Variant>& placeholderValues = {});
 
   std::shared_ptr<facebook::axiom::runner::LocalRunner> makeLocalRunner(
       facebook::axiom::optimizer::PlanAndStats& planAndStats,
@@ -725,6 +731,16 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString);
 
+  // Runs a REFRESH VECTOR INDEX inside an index write and returns the
+  // number of embeddings it wrote.
+  folly::coro::Task<facebook::velox::RowVectorPtr> co_runRefreshVectorIndex(
+      const presto::RefreshVectorIndexStatement& refresh,
+      std::string_view queryId,
+      const RunOptions& options,
+      const facebook::axiom::connector::ConnectorContextPtr& context,
+      QueryTiming& timing,
+      std::string& planString);
+
   // Executes a CREATE, DROP, or ALTER statement and returns its status message.
   folly::coro::Task<std::string> co_runDataDefinitionStatement(
       const presto::SqlStatement& statement,
@@ -748,8 +764,9 @@ class SqlQueryRunner {
       std::string& planString);
 
   // Optimizes and executes a logical plan, yielding each result batch as it is
-  // produced. Writes timing and plan string directly into the passed-in
-  // references so values survive exceptions.
+  // produced. 'placeholderValues' are the values of the plan's placeholders in
+  // order of position. Writes timing and plan string directly into the
+  // passed-in references so values survive exceptions.
   folly::coro::CleanableAsyncGenerator<facebook::velox::RowVectorPtr>
   co_runLogicalPlan(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
@@ -758,7 +775,8 @@ class SqlQueryRunner {
       QueryTiming& timing,
       std::string& planString,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver,
+      std::vector<facebook::velox::Variant> placeholderValues);
 
   // Returns the query's session for `connectorId`, made on first use and
   // shared by every caller of the query.

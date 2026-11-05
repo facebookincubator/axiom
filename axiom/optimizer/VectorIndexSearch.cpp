@@ -54,8 +54,47 @@ class Planner {
         session_{session},
         evaluator_{evaluator} {}
 
-  // Appends to 'sources' each partition column of 'table' that a column of
-  // 'scan', a storage table of 'index', stores, and that column to 'targets'.
+  // Returns whether the storage tables of 'index' store the column 'name' of
+  // 'table', the table of 'index' or its centroids table, under the same name:
+  // a partition column, or, in the centroids table, 'codec_id'.
+  static bool isStored(
+      const BaseTable& table,
+      const connector::VectorIndex& index,
+      std::string_view name) {
+    if (index.partitionColumns->containsChild(name)) {
+      return true;
+    }
+    return name == connector::VectorIndex::kCodecId &&
+        connector::VectorIndex::parseCentroidsTableName(
+            table.schemaTable->name())
+            .has_value();
+  }
+
+  // Fails unless each of 'filters', over the columns of 'table', is
+  // deterministic and reads only columns the storage tables of 'index' store
+  // (see isStored). The filters apply to each storage table, so they must
+  // select the same partitions each time.
+  static void checkFilters(
+      const BaseTable& table,
+      const connector::VectorIndex& index,
+      const ExprVector& filters) {
+    for (ExprCP filter : filters) {
+      VELOX_USER_CHECK(
+          !filter->containsNonDeterministic(),
+          "A vector search may filter its table only by deterministic conditions: {}",
+          table.schemaTable->name());
+      filter->columns().forEach<Column>([&](ColumnCP column) {
+        VELOX_USER_CHECK(
+            isStored(table, index, column->schemaColumn()->name()),
+            "A vector search may filter its table only on partition columns: {}",
+            table.schemaTable->name());
+      });
+    }
+  }
+
+  // Appends to 'sources' each column of 'table' that a column of 'scan', a
+  // storage table of 'index', stores (see isStored), and that column to
+  // 'targets'.
   static void mapColumns(
       const BaseTable& table,
       const connector::VectorIndex& index,
@@ -64,7 +103,7 @@ class Planner {
       ExprVector& targets) {
     for (ColumnCP column : table.columns) {
       const std::string_view name = column->schemaColumn()->name();
-      if (!index.partitionColumns->containsChild(name)) {
+      if (!isStored(table, index, name)) {
         continue;
       }
       const auto it = scan.columns.find(name);
@@ -76,8 +115,8 @@ class Planner {
   }
 
   // Returns a scan of 'storageTable', a storage table of 'index', of
-  // 'columns'. 'filters', over the columns of 'table', the table of 'index',
-  // apply to the scan's columns that store them (see mapColumns).
+  // 'columns'. 'filters', which passed checkFilters, apply to the scan's
+  // columns that store them (see mapColumns).
   StorageScan scanStorage(
       const BaseTable& table,
       const connector::VectorIndex& index,
@@ -108,22 +147,8 @@ class Planner {
     ColumnVector sources;
     ExprVector targets;
     mapColumns(table, index, scan, sources, targets);
-    const auto predicates = exprs_.substitute(filters, sources, targets);
-    for (ExprCP predicate : predicates) {
-      // The filters apply to each storage table, so a filter must select the
-      // same partitions each time.
-      VELOX_USER_CHECK(
-          !predicate->containsNonDeterministic(),
-          "A vector search may filter its table only by deterministic conditions: {}",
-          table.schemaTable->name());
-      predicate->columns().forEach<Column>([&](ColumnCP column) {
-        VELOX_USER_CHECK(
-            column->relation() != &table,
-            "A vector search may filter its table only on partition columns: {}",
-            table.schemaTable->name());
-      });
-    }
-    scan.node = builder_.make<Filter>({scan.node, predicates});
+    scan.node = builder_.make<Filter>(
+        {scan.node, exprs_.substitute(filters, sources, targets)});
     return scan;
   }
 
@@ -186,15 +211,49 @@ class Planner {
     };
     ExprCP embedding = resolve(node->buildIndex());
     VELOX_USER_CHECK(
-        embedding->isColumn() && embedding->as<Column>()->relation() == &table,
+        embedding->isColumn(),
         "A vector search must search a column of its table: {}",
         table.schemaTable->name());
+    // The build side is projections and filters over the scan, so every
+    // column its expressions read is the scan's.
+    VELOX_CHECK(embedding->as<Column>()->relation() == &table);
+
+    if (const auto centroidsIndex = findCentroidsIndex(table)) {
+      const auto& index = *centroidsIndex;
+      VELOX_USER_CHECK(
+          node->metric() == index.properties.metric,
+          "A vector search of a vector index's centroids must use the index's metric: {}",
+          velox::common::vectorindex::VectorIndexMetricName::toName(
+              index.properties.metric));
+      // The centroid is the centroids table's only ARRAY(REAL) column.
+      VELOX_CHECK_EQ(
+          embedding->as<Column>()->schemaColumn()->name(),
+          connector::VectorIndex::kCentroid);
+      checkFilters(table, index, filters);
+      return planCentroidsSearch(node, probe, table, index, filters, resolve);
+    }
+
     const auto index = findIndex(
         table,
         embedding->as<Column>()->schemaColumn()->name(),
         node->metric(),
         node->index());
+    checkFilters(table, *index, filters);
     return planSearch(node, probe, table, index, filters, resolve);
+  }
+
+  // Returns the index whose centroids table 'table' is (see
+  // connector::VectorIndex::centroidsTableName()), or nullptr if 'table' is
+  // not a centroids table.
+  connector::VectorIndexPtr findCentroidsIndex(const BaseTable& table) const {
+    if (const auto centroids = connector::VectorIndex::parseCentroidsTableName(
+            table.schemaTable->name())) {
+      if (const auto* indexedTable = schema_.findTable(
+              table.schemaTable->connectorId(), centroids->first)) {
+        return indexedTable->connectorTable->findVectorIndex(centroids->second);
+      }
+    }
+    return nullptr;
   }
 
   // Returns the vector index of 'table' that a search of 'column' by 'metric'
@@ -356,18 +415,8 @@ class Planner {
              exprs_.makeLiteral(velox::Variant(k), toType(velox::BIGINT())))}});
   }
 
-  // Plans a search of 'table' through 'index': each probe row is assigned
-  // to the 'numProbes' clusters nearest to it of the codec of every partition
-  // the filters select, those clusters' local indexes are searched for its
-  // 'k' nearest rows, and the 'k' nearest of all are kept:
-  //
-  //   Filter: row_number <= k, by query_id ordered by score DESC
-  //     VectorSearch: (partitions, codec_id, cluster_id) =, local_index, k
-  //       VectorSearch: codec, k = numProbes
-  //         AssignUniqueId query_id
-  //           <probe>
-  //         Filter: <filters> / Scan <codec table>
-  //       Filter: <filters> / Scan <index table>
+  // Plans a search of 'table' through 'index', as VectorIndexSearch
+  // describes.
   NodeCP planSearch(
       const VectorSearch* node,
       NodeCP probe,
@@ -478,6 +527,122 @@ class Planner {
       return substituteIndexColumns(
           resolve(column), table, *index, sources, targets);
     });
+  }
+
+  // Plans a search of the centroids of a vector index: one search of the
+  // codecs of the partitions the filters select, matching each probe row with
+  // the codecs whose partition columns equal its keys. The search options are
+  // options of the local indexes, which this search does not read. The build
+  // side's columns other than the cluster are computed below the search, over
+  // the codecs, so that a left search null-extends them.
+  NodeCP planCentroidsSearch(
+      const VectorSearch* node,
+      NodeCP probe,
+      const BaseTable& table,
+      const connector::VectorIndex& index,
+      const ExprVector& filters,
+      const std::function<ExprCP(ColumnCP)>& resolve) {
+    StorageScan codecs = scanCodecs(table, index, filters);
+    ColumnCP codec = codecs.columns.at(connector::VectorIndex::kCodec);
+
+    ColumnVector sources;
+    ExprVector targets;
+    mapColumns(table, index, codecs, sources, targets);
+    ColumnCP indexClusterId = nullptr;
+    for (ColumnCP column : table.columns) {
+      if (column->schemaColumn()->name() ==
+          connector::VectorIndex::kClusterId) {
+        indexClusterId = column;
+      }
+    }
+
+    // The build side's columns and keys over the codecs, except the cluster,
+    // which is the entry the search finds.
+    const PlanObjectSet probeColumns =
+        PlanObjectSet::fromObjects(node->probe()->outputColumns());
+    ExprVector buildExprs{codec};
+    ColumnVector buildColumns{codec};
+    // A probe row matches the codec of each partition its keys select, and
+    // each gives its 'k' nearest clusters, so the search keeps the 'k' nearest
+    // of each query.
+    ColumnCP queryId =
+        Column::create("__query_id", Value(toType(velox::BIGINT())));
+    NodeCP queries = builder_.make<AssignUniqueId>({probe, queryId});
+    ColumnVector outputColumns = queries->outputColumns();
+    ColumnVector sourceColumns = queries->outputColumns();
+    folly::F14FastMap<ColumnCP, ExprCP> outputs;
+    for (size_t i = 0; i < node->sourceColumns().size(); ++i) {
+      ColumnCP source = node->sourceColumns()[i];
+      if (source == node->score() || probeColumns.contains(source) ||
+          resolve(source) == indexClusterId) {
+        continue;
+      }
+      buildExprs.push_back(substituteIndexColumns(
+          resolve(source), table, index, sources, targets));
+      buildColumns.push_back(source);
+      // The search outputs the column as 'node' does: under a fresh identity
+      // in a left search.
+      ColumnCP output = node->outputColumns()[i];
+      outputColumns.push_back(output);
+      sourceColumns.push_back(source);
+      outputs.emplace(source, output);
+    }
+    ExprVector buildKeys;
+    for (ExprCP key : node->buildKeys()) {
+      ExprCP resolved = key->isColumn() ? resolve(key->as<Column>()) : key;
+      VELOX_USER_CHECK(
+          resolved != indexClusterId,
+          "A vector search of the centroids of a vector index supports keys "
+          "only on its partition columns and codec_id");
+      ExprCP keyExpr =
+          substituteIndexColumns(resolved, table, index, sources, targets);
+      // A key the build side already computes reads that column.
+      if (const auto it = std::ranges::find(buildExprs, keyExpr);
+          it != buildExprs.end()) {
+        buildKeys.push_back(buildColumns[it - buildExprs.begin()]);
+        continue;
+      }
+      ColumnCP keyColumn = keyExpr->isColumn()
+          ? keyExpr->as<Column>()
+          : Column::create("__key", key->value());
+      buildExprs.push_back(keyExpr);
+      buildColumns.push_back(keyColumn);
+      buildKeys.push_back(keyColumn);
+    }
+    NodeCP build = builder_.make<Project>(
+        {codecs.node, std::move(buildExprs), std::move(buildColumns)});
+
+    ColumnCP clusterId =
+        Column::create("__cluster_id", Value(toType(velox::BIGINT())));
+    ColumnCP score = Column::create("__score", Value(toType(velox::REAL())));
+    outputColumns.push_back(clusterId);
+    sourceColumns.push_back(clusterId);
+    outputColumns.push_back(score);
+    sourceColumns.push_back(score);
+    NodeCP searched = builder_.make<VectorSearch>({
+        .probe = queries,
+        .build = build,
+        .joinType = node->joinType(),
+        .probeKeys = node->probeKeys(),
+        .buildKeys = std::move(buildKeys),
+        .probeEmbedding = node->probeEmbedding(),
+        .buildIndex = codec,
+        .metric = index.properties.metric,
+        .k = node->k(),
+        .id = clusterId,
+        .score = score,
+        .outputColumns = std::move(outputColumns),
+        .sourceColumns = std::move(sourceColumns),
+    });
+
+    NodeCP nearest = keepNearest(searched, queryId, score, node->k());
+    return projectSearchOutputs(
+        node, nearest, score, [&](ColumnCP column) -> ExprCP {
+          if (resolve(column) == indexClusterId) {
+            return clusterId;
+          }
+          return outputs.at(column);
+        });
   }
 
  private:
