@@ -93,6 +93,12 @@ class ConnectorContext {
     return metadataRegistry_;
   }
 
+  /// Records whether the query writes. The engine calls it once, after it
+  /// parses the query and before it plans or runs it. Every session of this
+  /// context shares the kind: one made before this call reports it from then
+  /// on, as does one made after.
+  void setQueryKind(QueryKind kind);
+
   /// Returns 'connectorId's session, made on first use. Concurrent callers get
   /// the same one, and it is the same one for the life of this context. The
   /// writer provider is called at most once per successful build; a throw from
@@ -117,6 +123,9 @@ class ConnectorContext {
   const ConnectorProperties properties_;
   const StatWriterProvider statWriterProvider_;
   const ConnectorMetadataRegistry::Registry& metadataRegistry_;
+  // Shared with every session of this context.
+  const std::shared_ptr<QueryKindState> queryKind_{
+      std::make_shared<QueryKindState>()};
   // The lock guards the map alone; a session is built under its entry's flag.
   folly::Synchronized<folly::F14FastMap<std::string, std::shared_ptr<Entry>>>
       sessions_;

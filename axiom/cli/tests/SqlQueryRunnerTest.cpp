@@ -528,6 +528,33 @@ TEST_F(SqlQueryRunnerTest, parseAndRunMixedStatementTypes) {
       lastResult.results[0], makeRowVector({makeFlatVector<int32_t>({7})}));
 }
 
+// The connector sees whether the query writes, including an EXPLAIN ANALYZE of
+// a write.
+TEST_F(SqlQueryRunnerTest, queryKind) {
+  using facebook::axiom::connector::QueryKind;
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+
+  std::vector<std::optional<QueryKind>> kinds;
+  testConnector_->setOnListPartitions(
+      [&](const facebook::axiom::connector::ConnectorSession& session) {
+        kinds.push_back(session.queryKind());
+      });
+
+  const std::vector<std::pair<std::string_view, QueryKind>> statements = {
+      {"SELECT a FROM t", QueryKind::kRead},
+      {"INSERT INTO t SELECT a FROM t", QueryKind::kWrite},
+      {"EXPLAIN ANALYZE SELECT a FROM t", QueryKind::kRead},
+      {"EXPLAIN ANALYZE INSERT INTO t SELECT a FROM t", QueryKind::kWrite},
+  };
+  for (const auto& [sql, kind] : statements) {
+    SCOPED_TRACE(sql);
+    kinds.clear();
+    run(sql);
+    ASSERT_EQ(kinds.size(), 1);
+    EXPECT_EQ(kinds[0], kind);
+  }
+}
+
 TEST_F(SqlQueryRunnerTest, multipleRunnerInstances) {
   auto a = makeRunner("test_a");
   auto b = makeRunner("test_b");

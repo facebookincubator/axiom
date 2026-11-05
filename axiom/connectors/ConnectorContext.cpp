@@ -43,7 +43,25 @@ Properties propertiesFor(
   }
   return it->second;
 }
+
+const auto& queryKindNames() {
+  static const folly::F14FastMap<QueryKind, std::string_view> kNames = {
+      {QueryKind::kRead, "READ"},
+      {QueryKind::kWrite, "WRITE"},
+  };
+  return kNames;
+}
 } // namespace
+
+AXIOM_DEFINE_ENUM_NAME(QueryKind, queryKindNames);
+
+void ConnectorContext::setQueryKind(QueryKind kind) {
+  VELOX_CHECK(
+      !queryKind_->load().has_value(),
+      "Query kind is already set: {}",
+      queryId_);
+  queryKind_->store(kind);
+}
 
 StatWriterProvider ConnectorContext::noopStatWriterProvider() {
   return [](std::string_view) {
@@ -75,7 +93,8 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
-        std::move(statsWriter));
+        std::move(statsWriter),
+        queryKind_);
   });
 
   return entry->session;

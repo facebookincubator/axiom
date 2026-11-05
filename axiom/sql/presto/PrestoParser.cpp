@@ -2478,6 +2478,20 @@ SqlStatementPtr parseExplain(
       sqlStatement, /*analyze=*/false, type, format, std::move(settings));
 }
 
+// Fails with a semantic error naming 'name' when 'table' is null.
+static void checkTableFound(
+    const facebook::axiom::connector::TablePtr& table,
+    const QualifiedName& name) {
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      table != nullptr,
+      name.location(),
+      // Use suffix (unqualified name) as token — the user rarely writes the
+      // fully qualified form.
+      name.suffix(),
+      "Table not found: {}",
+      name.fullyQualifiedName());
+}
+
 static facebook::axiom::connector::TablePtr findTable(
     const ParserSessionPtr& session,
     const QualifiedName& name,
@@ -2489,15 +2503,7 @@ static facebook::axiom::connector::TablePtr findTable(
   auto metadata = session->connectorMetadata(connectorId);
 
   auto table = metadata->findTable(connectorTable);
-
-  AXIOM_PRESTO_SEMANTIC_CHECK(
-      table != nullptr,
-      name.location(),
-      // Use suffix (unqualified name) as token — the user rarely writes the
-      // fully qualified form.
-      name.suffix(),
-      "Table not found: {}",
-      name.fullyQualifiedName());
+  checkTableFound(table, name);
   return table;
 }
 
@@ -2508,12 +2514,22 @@ static facebook::axiom::connector::TablePtr findTable(
     const facebook::axiom::SchemaTableName& connectorTable) {
   auto table =
       session->connectorMetadata(connectorId)->findTable(connectorTable);
-  AXIOM_PRESTO_SEMANTIC_CHECK(
-      table != nullptr,
-      name.location(),
-      name.suffix(),
-      "Table not found: {}",
-      name.fullyQualifiedName());
+  checkTableFound(table, name);
+  return table;
+}
+
+// Resolves the table a statement modifies. See
+// ConnectorMetadata::findTableForWrite.
+static facebook::axiom::connector::TablePtr findTableForWrite(
+    const ParserSessionPtr& session,
+    const QualifiedName& name,
+    const std::string& connectorId,
+    const facebook::axiom::SchemaTableName& connectorTable) {
+  auto table =
+      session->connectorMetadata(connectorId)
+          ->findTableForWrite(
+              session->context()->sessionFor(connectorId), connectorTable);
+  checkTableFound(table, name);
   return table;
 }
 
@@ -2915,7 +2931,7 @@ SqlStatementPtr parseRefreshVectorIndex(
   const auto [connectorId, tableName] = toConnectorTable(
       session, *refresh.tableName(), defaultConnectorId, defaultSchema);
   const auto table =
-      findTable(session, *refresh.tableName(), connectorId, tableName);
+      findTableForWrite(session, *refresh.tableName(), connectorId, tableName);
   const auto indexName =
       normalizeIdentifier(session, connectorId, refresh.name()->value());
   const auto index = table->findVectorIndex(indexName);
@@ -2970,18 +2986,8 @@ SqlStatementPtr parseInsert(
   const auto [connectorId, connectorTable] = toConnectorTable(
       session, *insert.target(), defaultConnectorId, defaultSchema);
 
-  auto insertMetadata = session->connectorMetadata(connectorId);
-
-  const auto table = insertMetadata->findTable(connectorTable);
-
-  AXIOM_PRESTO_SEMANTIC_CHECK(
-      table != nullptr,
-      insert.location(),
-      // Use suffix (unqualified name) as token — the user rarely writes the
-      // fully qualified form.
-      insert.target()->suffix(),
-      "Table not found: {}",
-      insert.target()->fullyQualifiedName());
+  const auto table =
+      findTableForWrite(session, *insert.target(), connectorId, connectorTable);
 
   const auto& columns = insert.columns();
 
@@ -3038,7 +3044,7 @@ SqlStatementPtr parseDelete(
 
   // Reject a missing target before planning the scan, which would otherwise
   // resolve a view of that name and write to a table that does not exist.
-  findTable(session, *deleteNode.table(), connectorId, connectorTable);
+  findTableForWrite(session, *deleteNode.table(), connectorId, connectorTable);
 
   RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
   planner.planDelete(deleteNode, connectorId, connectorTable);

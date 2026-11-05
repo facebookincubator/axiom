@@ -106,6 +106,39 @@ std::string_view SqlStatement::kindName() const {
   return SqlStatementKindName::toName(kind_);
 }
 
+facebook::axiom::connector::QueryKind SqlStatement::queryKind() const {
+  using facebook::axiom::connector::QueryKind;
+  switch (kind_) {
+    case SqlStatementKind::kSelect:
+    case SqlStatementKind::kShowStatsForQuery:
+    case SqlStatementKind::kShowSession:
+    case SqlStatementKind::kSetSession:
+    case SqlStatementKind::kResetSession:
+    case SqlStatementKind::kUse:
+      return QueryKind::kRead;
+    case SqlStatementKind::kExplain: {
+      // EXPLAIN ANALYZE runs the statement; the others only plan it.
+      const auto* explain = as<ExplainStatement>();
+      return explain->isAnalyze() ? explain->statement()->queryKind()
+                                  : QueryKind::kRead;
+    }
+    case SqlStatementKind::kCreateTable:
+    case SqlStatementKind::kCreateTableAsSelect:
+    case SqlStatementKind::kInsert:
+    case SqlStatementKind::kRefreshVectorIndex:
+    case SqlStatementKind::kDelete:
+    case SqlStatementKind::kDropTable:
+    case SqlStatementKind::kAddVectorIndex:
+    case SqlStatementKind::kDropVectorIndex:
+    case SqlStatementKind::kCreateSchema:
+    case SqlStatementKind::kDropSchema:
+    case SqlStatementKind::kAddColumn:
+    case SqlStatementKind::kCall:
+      return QueryKind::kWrite;
+  }
+  VELOX_UNREACHABLE();
+}
+
 facebook::axiom::connector::VectorIndexDefinition
 VectorIndexDeclaration::definition(const PropertyEvaluator& evaluate) const {
   return {

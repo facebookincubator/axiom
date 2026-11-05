@@ -637,6 +637,12 @@ TestSplitManager::co_listPartitions(
   }
 
   const auto& testTable = findTestTableForHandle(metadata_, tableHandle);
+  auto* testConnector =
+      dynamic_cast<TestConnector*>(testTable.layouts().front()->connector());
+  VELOX_CHECK_NOT_NULL(testConnector);
+  if (const auto& inspector = testConnector->onListPartitions()) {
+    inspector(*session);
+  }
   if (!testTable.bucketSpec().has_value()) {
     co_return std::vector<PartitionHandlePtr>{
         std::make_shared<PartitionHandle>()};
