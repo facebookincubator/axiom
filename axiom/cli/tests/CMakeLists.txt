@@ -22,6 +22,7 @@ add_executable(
   SqlQueryRunnerTest.cpp
   SqlQueryRunnerTestBase.cpp
   StdinReaderTest.cpp
+  VectorIndexRefreshTest.cpp
   ConsoleTest.cpp
   LiveProgressDisplayTest.cpp
   QueryIdGeneratorTest.cpp

@@ -486,6 +486,11 @@ Translated Translator::translateTableWrite(
       tableWrite.connectorId());
   const auto* connectorTable = schemaTable->connectorTable;
   VELOX_CHECK_NOT_NULL(connectorTable);
+  VELOX_USER_CHECK(
+      !connector::VectorIndex::parseCentroidsTableName(tableWrite.tableName())
+           .has_value(),
+      "A vector index's centroids can only be read by a vector search: {}",
+      tableWrite.tableName().toString());
   const auto& tableSchema = *connectorTable->type();
 
   LpNameSet childRequired;

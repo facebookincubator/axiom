@@ -758,12 +758,13 @@ TEST_F(SqlQueryRunnerTest, tableSampleSystem) {
   }
 
   auto sample = [&](double percentage) {
-    return fetchSingleValue<int64_t>(fmt::format(
-        "SELECT count(*) FROM sampled TABLESAMPLE SYSTEM ({})", percentage));
+    return fetchSingleInt64(
+        fmt::format(
+            "SELECT count(*) FROM sampled TABLESAMPLE SYSTEM ({})",
+            percentage));
   };
 
-  EXPECT_EQ(
-      fetchSingleValue<int64_t>("SELECT count(*) FROM sampled"), kNumSplits);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM sampled"), kNumSplits);
 
   // 0% produces an empty result; 100% is a no-op passthrough.
   EXPECT_EQ(sample(0), 0);
@@ -1574,7 +1575,7 @@ TEST_F(SqlQueryRunnerTest, vectorIndex) {
 
   run("CREATE TABLE t (id BIGINT, e ARRAY(REAL), PRIMARY KEY (id), "
       "VECTOR INDEX i (e) WITH (distance_metric = 'cosine', "
-      "index_type = 'flat', num_clusters = 4))");
+      "index_type = 'flat', num_clusters = 4, dimension = 2))");
   ASSERT_NE(findTable("t")->findVectorIndex("i"), nullptr);
   EXPECT_EQ("id", findTable("t")->findVectorIndex("i")->keyColumn);
   EXPECT_NE(findTable("t__i__codecs"), nullptr);
@@ -1585,16 +1586,24 @@ TEST_F(SqlQueryRunnerTest, vectorIndex) {
       run("DROP TABLE t__i__index"),
       "A vector index's storage table must be dropped with its index");
 
+  // Only a vector search reads the index's centroids, and nothing writes them.
+  VELOX_ASSERT_THROW(
+      run("SELECT * FROM \"t$i$centroids\""),
+      "A vector index's centroids can only be read by a vector search");
+  VELOX_ASSERT_THROW(
+      run("INSERT INTO \"t$i$centroids\" VALUES (1, 1, ARRAY[REAL '1'])"),
+      "A vector index's centroids can only be read by a vector search");
+
   VELOX_ASSERT_THROW(
       run("ALTER TABLE t ADD VECTOR INDEX j (e) WITH (distance_metric = "
-          "'cosine', index_type = 'flat', num_clusters = 4, format = 'x')"),
+          "'cosine', index_type = 'flat', num_clusters = 4, dimension = 2, format = 'x')"),
       "TestConnector does not support vector index property: format");
   EXPECT_EQ(findTable("t")->findVectorIndex("j"), nullptr);
   EXPECT_EQ(findTable("t__j__codecs"), nullptr);
 
   auto result =
       run("ALTER TABLE t ADD VECTOR INDEX j (e) WITH (distance_metric = "
-          "'cosine', index_type = 'flat', num_clusters = 4)");
+          "'cosine', index_type = 'flat', num_clusters = 4, dimension = 2)");
   EXPECT_EQ(
       result.message.value(), R"(Added vector index 'j' to "default"."t")");
 
@@ -1609,7 +1618,7 @@ TEST_F(SqlQueryRunnerTest, vectorIndex) {
   // EXPLAIN shows the statement and changes nothing.
   constexpr std::string_view kAddK{
       "ADD VECTOR INDEX k (e) WITH (distance_metric = 'cosine', "
-      "index_type = 'flat', num_clusters = 4)"};
+      "index_type = 'flat', num_clusters = 4, dimension = 2)"};
   result = run(fmt::format("EXPLAIN ALTER TABLE t {}", kAddK));
   EXPECT_EQ(
       result.message.value(),

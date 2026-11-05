@@ -31,6 +31,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kCreateTable, "CREATE TABLE"},
       {SqlStatementKind::kCreateTableAsSelect, "CREATE TABLE AS SELECT"},
       {SqlStatementKind::kInsert, "INSERT"},
+      {SqlStatementKind::kRefreshVectorIndex, "REFRESH VECTOR INDEX"},
       {SqlStatementKind::kDelete, "DELETE"},
       {SqlStatementKind::kDropTable, "DROP TABLE"},
       {SqlStatementKind::kAddVectorIndex, "ADD VECTOR INDEX"},

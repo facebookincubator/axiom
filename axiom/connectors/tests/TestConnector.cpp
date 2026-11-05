@@ -730,7 +730,33 @@ void TestTable::unlinkVectorIndex(std::string_view name) {
 }
 
 TablePtr TestConnectorMetadata::findTable(const SchemaTableName& tableName) {
-  return findTableInternal(tableName);
+  if (auto table = findTableInternal(tableName)) {
+    return table;
+  }
+  // The centroids table of an index: a table of no rows, which only a vector
+  // search reads (see VectorIndex::centroidsTableName()).
+  const auto centroids = VectorIndex::parseCentroidsTableName(tableName);
+  if (!centroids.has_value()) {
+    return nullptr;
+  }
+  const auto table = findTableInternal(centroids->first);
+  if (table == nullptr) {
+    return nullptr;
+  }
+  const auto index = table->findVectorIndex(centroids->second);
+  if (index == nullptr) {
+    return nullptr;
+  }
+  auto& centroidsTable = centroidsTables_[tableName];
+  if (centroidsTable == nullptr) {
+    centroidsTable = std::make_shared<TestTable>(
+        tableName,
+        index->centroidColumns(),
+        velox::ROW({}),
+        connector_,
+        folly::F14FastMap<std::string, velox::Variant>{});
+  }
+  return centroidsTable;
 }
 
 void TestConnectorMetadata::setPushdownMatcher(PushdownMatcher matcher) {
@@ -1386,12 +1412,19 @@ folly::coro::Task<bool> TestConnectorMetadata::co_doAddVectorIndex(
 
 namespace {
 
-// Drops the storage tables of 'index' from 'tables'.
+using TestTables =
+    folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>>;
+
+// Drops the storage tables of 'index', an index of 'table', from 'tables', and
+// its centroids table from 'centroidsTables'.
 void dropStorageTables(
-    folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>>& tables,
+    TestTables& tables,
+    TestTables& centroidsTables,
+    const SchemaTableName& table,
     const VectorIndex& index) {
   tables.erase(index.codecTable);
   tables.erase(index.indexTable);
+  centroidsTables.erase(VectorIndex::centroidsTableName(table, index.name));
 }
 
 } // namespace
@@ -1414,7 +1447,7 @@ bool TestConnectorMetadata::doDropVectorIndex(
   if (!explain) {
     // 'table' is the caller's read-only view; the metadata owns the table.
     tables_.at(table->name())->unlinkVectorIndex(name);
-    dropStorageTables(tables_, *index);
+    dropStorageTables(tables_, centroidsTables_, table->name(), *index);
   }
   return true;
 }
@@ -1460,7 +1493,7 @@ bool TestConnectorMetadata::dropTable(
 
   if (const auto it = tables_.find(tableName); it != tables_.end()) {
     for (const auto& index : it->second->vectorIndexes()) {
-      dropStorageTables(tables_, *index);
+      dropStorageTables(tables_, centroidsTables_, tableName, *index);
     }
   }
   const bool dropped = tables_.erase(tableName) == 1;

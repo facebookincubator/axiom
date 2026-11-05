@@ -61,6 +61,9 @@ folly::dynamic columnStatsToJson(const ColumnStatistics& stats) {
   if (stats.avgSizeInBytes.has_value()) {
     json["avgSizeInBytes"] = stats.avgSizeInBytes.value();
   }
+  if (stats.numEmbeddings.has_value()) {
+    json["numEmbeddings"] = stats.numEmbeddings.value();
+  }
   return json;
 }
 
@@ -98,6 +101,9 @@ ColumnStatistics columnStatsFromJson(const folly::dynamic& json) {
   if (json.count("avgSizeInBytes")) {
     stats.avgSizeInBytes = json["avgSizeInBytes"].asInt();
   }
+  if (json.count("numEmbeddings")) {
+    stats.numEmbeddings = json["numEmbeddings"].asInt();
+  }
   return stats;
 }
 
@@ -129,6 +135,10 @@ void mergeColumnStatsValues(
   if (source.numDistinct.has_value()) {
     target.numDistinct =
         std::max(target.numDistinct.value_or(0), source.numDistinct.value());
+  }
+  if (source.numEmbeddings.has_value()) {
+    target.numEmbeddings =
+        target.numEmbeddings.value_or(0) + source.numEmbeddings.value();
   }
 }
 

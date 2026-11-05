@@ -63,6 +63,11 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {});
 
+  // Builds a SqlQueryRunner over a local Hive connector 'hive' that stores DWRF
+  // files under 'dataPath', wired as the default connector with schema
+  // 'default'.
+  SqlQueryRunnerTestHandle<> makeLocalHiveRunner(const std::string& dataPath);
+
   // Runs 'sql' on runner_ with default options.
   SqlQueryRunner::SqlResult run(std::string_view sql);
 
@@ -76,6 +81,17 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   template <typename T>
   T fetchSingleValue(std::string_view sql) {
     return fetchSingleRow(sql)->childAt(0)->variantAt(0).value<T>();
+  }
+
+  // Runs 'sql', which must return a single row and a single BIGINT column, and
+  // returns that value.
+  int64_t fetchSingleInt64(
+      std::string_view sql,
+      const SqlQueryRunner::RunOptions& options = {}) {
+    return fetchSingleRow(sql, options)
+        ->childAt(0)
+        ->variantAt(0)
+        .value<int64_t>();
   }
 
   // Default schema of the TestConnectors makeRunner() creates.

@@ -19,7 +19,6 @@
 
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace axiom::sql {
@@ -31,21 +30,9 @@ using namespace facebook::velox;
 // temporary directory. Hive removes the rows by dropping partitions.
 class DeleteTest : public SqlQueryRunnerTestBase {
  protected:
-  static constexpr std::string_view kConnectorId = "hive";
-  static constexpr std::string_view kHiveSchema = "default";
-  static constexpr auto kFileFormat = dwio::common::FileFormat::DWRF;
-
   void SetUp() override {
     dataPath_ = exec::test::TempDirectoryPath::create();
-
-    runner_ = makeRunner([&](facebook::axiom::Connectors& connectors) {
-      connectors.registerLocalHiveConnector(
-          dataPath_->getPath(),
-          std::string(dwio::common::FileFormatName::toName(kFileFormat)),
-          std::string(kConnectorId));
-      return std::make_pair(
-          std::string(kConnectorId), std::string(kHiveSchema));
-    });
+    runner_ = makeLocalHiveRunner(dataPath_->getPath());
   }
 
   // Parses and re-serializes JSON with sorted keys so the comparison does not
@@ -74,8 +61,7 @@ class DeleteTest : public SqlQueryRunnerTestBase {
   // Returns the number of rows selected by 'fromClause', e.g. "FROM test
   // WHERE pk = 1".
   int64_t runCount(std::string_view fromClause) {
-    return fetchSingleValue<int64_t>(
-        fmt::format("SELECT count(*) {}", fromClause));
+    return fetchSingleInt64(fmt::format("SELECT count(*) {}", fromClause));
   }
 
   std::shared_ptr<exec::test::TempDirectoryPath> dataPath_;
@@ -140,7 +126,7 @@ TEST_F(DeleteTest, partitionPredicate) {
   // EXPLAIN is side-effect-free.
   EXPECT_EQ(6, runCount("FROM test"));
 
-  EXPECT_EQ(2, fetchSingleValue<int64_t>("DELETE FROM test WHERE pk = 1"));
+  EXPECT_EQ(2, fetchSingleInt64("DELETE FROM test WHERE pk = 1"));
   EXPECT_EQ(4, runCount("FROM test"));
   EXPECT_EQ(0, runCount("FROM test WHERE pk = 1"));
 
@@ -167,7 +153,7 @@ TEST_F(DeleteTest, partitionPredicate) {
               ]
             })"));
 
-  EXPECT_EQ(4, fetchSingleValue<int64_t>("DELETE FROM test"));
+  EXPECT_EQ(4, fetchSingleInt64("DELETE FROM test"));
   EXPECT_EQ(0, runCount("FROM test"));
 }
 
@@ -176,13 +162,13 @@ TEST_F(DeleteTest, partitionPredicate) {
 TEST_F(DeleteTest, vectorIndex) {
   run("CREATE TABLE t (id BIGINT, e ARRAY(REAL), pk BIGINT, PRIMARY KEY (id), "
       "VECTOR INDEX i (e) WITH (distance_metric = 'cosine', "
-      "index_type = 'flat', num_clusters = 4)) "
+      "index_type = 'flat', num_clusters = 4, dimension = 2)) "
       "WITH (partitioned_by = ARRAY['pk'])");
   run("INSERT INTO t VALUES (1, ARRAY[1, 0], 1), (2, ARRAY[0, 1], 2)");
   run("INSERT INTO t__i__codecs VALUES (NULL, 1, 0), (NULL, 2, 0)");
   run("INSERT INTO t__i__index VALUES (0, 0, 0, NULL, 1), (0, 0, 0, NULL, 2)");
 
-  EXPECT_EQ(1, fetchSingleValue<int64_t>("DELETE FROM t WHERE pk = 1"));
+  EXPECT_EQ(1, fetchSingleInt64("DELETE FROM t WHERE pk = 1"));
   for (const auto* table : {"t", "t__i__codecs", "t__i__index"}) {
     SCOPED_TRACE(table);
     EXPECT_EQ(0, runCount(fmt::format("FROM {} WHERE pk = 1", table)));

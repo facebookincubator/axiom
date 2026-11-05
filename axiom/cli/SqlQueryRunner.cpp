@@ -1170,6 +1170,34 @@ SqlQueryRunner::co_runExplainStatement(
       co_yield SqlResultChunk{std::move(message)};
     }
     co_return;
+  } else if (statement->isRefreshVectorIndex()) {
+    VELOX_USER_CHECK(
+        !explain.isAnalyze(),
+        "EXPLAIN ANALYZE is not supported for REFRESH VECTOR INDEX");
+    VELOX_USER_CHECK(
+        explain.type() != presto::ExplainStatement::Type::kIo,
+        "EXPLAIN (TYPE IO) is not supported for REFRESH VECTOR INDEX");
+    const auto* refresh = statement->as<presto::RefreshVectorIndexStatement>();
+    // The connector chooses the codec id when the write begins; EXPLAIN
+    // begins no write, so it binds an arbitrary one.
+    const std::vector<velox::Variant> placeholderValues{
+        velox::Variant(int64_t{0})};
+    const auto explainPlan = [&](const logical_plan::LogicalPlanNodePtr& plan) {
+      return runExplain(
+          plan,
+          explain,
+          options,
+          context,
+          timing,
+          schemaResolver,
+          placeholderValues);
+    };
+    const auto& plans = refresh->plans();
+    co_yield SqlResultChunk{fmt::format(
+        "Train plan:\n{}\nBuild plan:\n{}",
+        explainPlan(plans.trainPlan),
+        explainPlan(plans.buildPlan))};
+    co_return;
   } else if (statement->isCall()) {
     // EXPLAIN must be side-effect-free: echo the resolved call without
     // invoking the procedure.
@@ -1261,7 +1289,13 @@ SqlQueryRunner::co_runPlanStatement(
   auto&& [generator] = co_await folly::coro::co_scope_exit(
       folly::coro::co_cleanup,
       co_runLogicalPlan(
-          logicalPlan, options, context, timing, planString, schemaResolver));
+          logicalPlan,
+          options,
+          context,
+          timing,
+          planString,
+          schemaResolver,
+          /*placeholderValues=*/{}));
   bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
     yieldedBatch = true;
@@ -1384,6 +1418,81 @@ SqlQueryRunner::co_runSessionStatement(
       "Unexpected session statement: {}", sqlStatement.kindName());
 }
 
+folly::coro::Task<velox::RowVectorPtr> SqlQueryRunner::co_runRefreshVectorIndex(
+    const presto::RefreshVectorIndexStatement& refresh,
+    std::string_view queryId,
+    const RunOptions& options,
+    const connector::ConnectorContextPtr& context,
+    QueryTiming& timing,
+    std::string& planString) {
+  auto metadata = context->metadataRegistry().get(refresh.connectorId());
+  auto session = makeConnectorSession(context, refresh.connectorId());
+  const auto& plans = refresh.plans();
+  checkLogicalPlan(*plans.trainPlan);
+  checkLogicalPlan(*plans.buildPlan);
+  // Each plan runs as a query of its own, which ends, releasing its runner,
+  // before the next starts. Each puts its plan's text in 'text'.
+  const auto runPlan = [&](const logical_plan::LogicalPlanNodePtr& plan,
+                           std::string_view name,
+                           int64_t codecId,
+                           std::string& text) -> folly::coro::Task<void> {
+    auto planOptions = options;
+    planOptions.queryId = fmt::format("{}_{}", queryId, name);
+    std::vector<velox::Variant> placeholderValues;
+    placeholderValues.emplace_back(codecId);
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup,
+        co_runLogicalPlan(
+            plan,
+            planOptions,
+            context,
+            timing,
+            text,
+            /*schemaResolver=*/nullptr,
+            std::move(placeholderValues)));
+    while (co_await generator.next()) {
+    }
+  };
+  const auto handle =
+      co_await metadata->co_beginVectorIndexWrite(session, refresh.index());
+  std::string trainPlanString;
+  std::string buildPlanString;
+  folly::Try<int64_t> result = co_await folly::coro::co_awaitTry(
+      folly::coro::co_invoke([&]() -> folly::coro::Task<int64_t> {
+        co_await folly::coro::co_invoke(
+            runPlan,
+            plans.trainPlan,
+            std::string_view{"train"},
+            handle->codecId(),
+            std::ref(trainPlanString));
+        co_await folly::coro::co_invoke(
+            runPlan,
+            plans.buildPlan,
+            std::string_view{"build"},
+            handle->codecId(),
+            std::ref(buildPlanString));
+        co_return co_await metadata->co_finishVectorIndexWrite(session, handle);
+      }));
+  planString = fmt::format(
+      "Train plan:\n{}\nBuild plan:\n{}", trainPlanString, buildPlanString);
+  if (result.hasException()) {
+    // Best-effort abort. The write's error is the one to report.
+    const auto aborted = co_await folly::coro::co_awaitTry(
+        metadata->co_abortVectorIndexWrite(session, handle));
+    if (aborted.hasException()) {
+      LOG(WARNING) << "Failed to abort a vector index write: "
+                   << aborted.exception().what();
+    }
+    co_yield folly::coro::co_error(std::move(result.exception()));
+  }
+
+  co_return std::dynamic_pointer_cast<velox::RowVector>(
+      velox::BaseVector::createFromVariants(
+          velox::ROW("rows", velox::BIGINT()),
+          {velox::Variant::row({velox::Variant(result.value())})},
+          optimizerPool_.get()));
+}
+
 folly::coro::CleanableAsyncGenerator<SqlQueryRunner::SqlResultChunk>
 SqlQueryRunner::co_runUnchecked(
     const presto::SqlStatement& sqlStatement,
@@ -1415,6 +1524,17 @@ SqlQueryRunner::co_runUnchecked(
     while (auto chunk = co_await generator.next()) {
       co_yield std::move(*chunk);
     }
+    co_return;
+  }
+
+  if (sqlStatement.isRefreshVectorIndex()) {
+    co_yield SqlResultChunk{co_await co_runRefreshVectorIndex(
+        *sqlStatement.as<presto::RefreshVectorIndexStatement>(),
+        queryId,
+        options,
+        context,
+        timing,
+        planString)};
     co_return;
   }
 
@@ -1524,6 +1644,7 @@ auto SqlQueryRunner::withOptimizerV2(
     const std::shared_ptr<velox::core::QueryCtx>& queryCtx,
     const std::shared_ptr<connector::SchemaResolver>& schemaResolver,
     bool explain,
+    const std::vector<velox::Variant>& placeholderValues,
     Operation&& operation) {
   auto resolver = orDefaultSchemaResolver(schemaResolver, context);
   auto session = makeOptimizerSession(
@@ -1536,7 +1657,7 @@ auto SqlQueryRunner::withOptimizerV2(
       queryCtx.get(), optimizerPool_.get());
 
   optimizer::Optimizer optimizer(
-      logicalPlan, *resolver, *session, evaluator, queryCtx);
+      logicalPlan, placeholderValues, *resolver, *session, evaluator, queryCtx);
   return operation(optimizer);
 }
 
@@ -1566,6 +1687,7 @@ std::string SqlQueryRunner::runExplainIo(
         queryCtx,
         schemaResolver,
         /*explain=*/true,
+        /*placeholderValues=*/{},
         [&](auto& optimizer) {
           return optimizer.explainIo(std::move(outputTable));
         });
@@ -1677,7 +1799,8 @@ std::string SqlQueryRunner::runExplain(
     const RunOptions& options,
     const connector::ConnectorContextPtr& context,
     QueryTiming& timing,
-    std::shared_ptr<connector::SchemaResolver> schemaResolver) {
+    std::shared_ptr<connector::SchemaResolver> schemaResolver,
+    const std::vector<velox::Variant>& placeholderValues) {
   const bool explain = schemaResolver != nullptr;
 
   const auto type = explainStatement.type();
@@ -1743,7 +1866,8 @@ std::string SqlQueryRunner::runExplain(
             },
             nullptr,
             schemaResolver,
-            explain);
+            explain,
+            placeholderValues);
       }
       return text;
     }
@@ -1768,6 +1892,7 @@ std::string SqlQueryRunner::runExplain(
             queryCtx,
             schemaResolver,
             explain,
+            placeholderValues,
             [&](auto& optimizer) {
               const auto plan = optimizer.debugPlanTo(opts, lastPass);
               return optimizer::NodePrinter::toText(
@@ -1801,7 +1926,8 @@ std::string SqlQueryRunner::runExplain(
               return false; // Stop optimization.
             },
             schemaResolver,
-            explain);
+            explain,
+            placeholderValues);
       }
       return text;
     }
@@ -1824,7 +1950,8 @@ std::string SqlQueryRunner::runExplain(
             nullptr,
             nullptr,
             schemaResolver,
-            explain);
+            explain,
+            placeholderValues);
       }
       if (summary.summary) {
         using Printer = optimizer::MultiFragmentPlanPrinter;
@@ -2128,7 +2255,8 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
         checkDerivedTable,
     const std::function<bool(const optimizer::v1::RelationOp&)>& checkBestPlan,
     std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
-    bool explain) {
+    bool explain,
+    const std::vector<velox::Variant>& placeholderValues) {
   optimizer::MultiFragmentPlan::Options opts;
   opts.maxRemotePartitions = options.numWorkers;
   opts.maxLocalPartitions = options.numDrivers;
@@ -2156,12 +2284,17 @@ optimizer::PlanAndStats SqlQueryRunner::optimize(
         "DerivedTable / RelationOp inspection hooks are not supported by the v2 optimizer");
     return optimizer::Optimizer(
                *logicalPlan,
+               placeholderValues,
                *schemaResolver,
                *optimizerSession,
                evaluator,
                queryCtx)
         .optimize(opts);
   }
+
+  VELOX_USER_CHECK(
+      placeholderValues.empty(),
+      "The v1 optimizer does not support placeholders");
 
   auto history = std::make_unique<optimizer::v1::VeloxHistory>();
   optimizer::v1::Optimization optimization(
@@ -2223,7 +2356,14 @@ SqlQueryRunner::co_showSession(
   // not write and cannot rephrase.
   auto&& [generator] = co_await folly::coro::co_scope_exit(
       folly::coro::co_cleanup,
-      co_runLogicalPlan(plan, options, context, timing, planString));
+      co_runLogicalPlan(
+          plan,
+          options,
+          context,
+          timing,
+          planString,
+          /*schemaResolver=*/nullptr,
+          /*placeholderValues=*/{}));
   bool yieldedBatch{false};
   while (auto batch = co_await generator.next()) {
     yieldedBatch = true;
@@ -2241,8 +2381,8 @@ SqlQueryRunner::co_runLogicalPlan(
     const connector::ConnectorContextPtr& context,
     QueryTiming& timing,
     std::string& planString,
-    std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-        schemaResolver) {
+    std::shared_ptr<facebook::axiom::connector::SchemaResolver> schemaResolver,
+    std::vector<velox::Variant> placeholderValues) {
   auto queryCtx = newQuery(options);
 
   optimizer::PlanAndStats planAndStats;
@@ -2261,7 +2401,8 @@ SqlQueryRunner::co_runLogicalPlan(
         nullptr,
         nullptr,
         std::move(schemaResolver),
-        /*explain=*/false);
+        /*explain=*/false,
+        placeholderValues);
   }
 
   planString = planAndStats.toString();
@@ -2325,6 +2466,7 @@ std::vector<velox::RowVectorPtr> SqlQueryRunner::runShowStatsForQuery(
         newQuery(options),
         /*schemaResolver=*/nullptr,
         /*explain=*/false,
+        /*placeholderValues=*/{},
         [](auto& optimizer) {
           const auto stats = optimizer.estimateQueryStats();
 

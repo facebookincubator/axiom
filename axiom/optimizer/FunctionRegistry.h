@@ -278,6 +278,11 @@ struct StatsAggregates {
   /// are null. Used for variable-width types to estimate the average size of
   /// a column's values, so an approximate size is acceptable.
   std::string sumDataSize;
+
+  /// vector_count(VECTOR_INDEX) -> bigint: the number of embeddings in the
+  /// vector indexes. Used for VECTOR_INDEX columns, in place of min, max and
+  /// approx_distinct.
+  std::string vectorCount;
 };
 
 /// Function semantics the optimizer plans with. An application creates one,
