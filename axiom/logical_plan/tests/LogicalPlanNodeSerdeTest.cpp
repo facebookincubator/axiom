@@ -52,7 +52,10 @@ class LogicalPlanNodeSerdeTest : public testing::Test {
     // means every round trip in this file also proves the two coexist.
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    functions::prestosql::registerAllScalarFunctions();
+    functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 

@@ -35,7 +35,10 @@ namespace {
 class ExprTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    velox::functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     velox::aggregate::prestosql::registerAllAggregateFunctions();
     velox::window::prestosql::registerAllWindowFunctions();
   }
@@ -165,7 +168,7 @@ TEST_F(ExprTest, conjunctInputTypes) {
 TEST_F(ExprTest, timestampAtTimeZone) {
   auto timestamp = resolveAtTimeZone(
       atTimeZone(Col("timestamp"), Lit("America/Los_Angeles")));
-  VELOX_EXPECT_EQ_TYPES(timestamp->type(), TIMESTAMP_WITH_TIME_ZONE());
+  VELOX_EXPECT_EQ_TYPES(timestamp->type(), TIMESTAMP());
   EXPECT_TRUE(timestamp->isSpecialForm());
   EXPECT_EQ(timestamp->as<SpecialFormExpr>()->form(), SpecialForm::kAtTimeZone);
   EXPECT_EQ(
@@ -173,8 +176,7 @@ TEST_F(ExprTest, timestampAtTimeZone) {
 
   auto timestampWithTimeZone = resolveAtTimeZone(
       atTimeZone(Col("timestamp_with_time_zone"), Lit("America/New_York")));
-  VELOX_EXPECT_EQ_TYPES(
-      timestampWithTimeZone->type(), TIMESTAMP_WITH_TIME_ZONE());
+  VELOX_EXPECT_EQ_TYPES(timestampWithTimeZone->type(), TIMESTAMP());
   EXPECT_TRUE(timestampWithTimeZone->isSpecialForm());
   EXPECT_EQ(
       timestampWithTimeZone->as<SpecialFormExpr>()->form(),
@@ -215,7 +217,7 @@ TEST_F(ExprTest, atTimezoneFunctionCoercion) {
   // Ordinary function calls retain the general coercion rule.
   VELOX_EXPECT_EQ_TYPES(
       resolveAtTimeZone(Call("at_timezone", Col("date"), Lit("UTC")))->type(),
-      TIMESTAMP_WITH_TIME_ZONE());
+      TIMESTAMP());
 }
 
 TEST_F(ExprTest, inArray) {

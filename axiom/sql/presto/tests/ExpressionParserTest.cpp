@@ -538,12 +538,12 @@ TEST_F(ExpressionParserTest, atTimeZone) {
   test(
       "from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'",
       "AT_TIME_ZONE(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), America/New_York)",
-      TIMESTAMP_WITH_TIME_ZONE());
+      TIMESTAMP());
 
   test(
       "CAST('2024-01-01 00:00:00' AS TIMESTAMP) AT TIME ZONE 'America/Los_Angeles'",
       "AT_TIME_ZONE(CAST(2024-01-01 00:00:00 AS TIMESTAMP), America/Los_Angeles)",
-      TIMESTAMP_WITH_TIME_ZONE());
+      TIMESTAMP());
 
   test(
       "CAST('10:30:00' AS TIME) AT TIME ZONE '+08:00'",

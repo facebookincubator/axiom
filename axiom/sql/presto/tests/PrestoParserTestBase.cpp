@@ -32,7 +32,10 @@ namespace lp = facebook::axiom::logical_plan;
 void PrestoParserTestBase::SetUpTestCase() {
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
-  functions::prestosql::registerAllScalarFunctions();
+  functions::prestosql::registerAllScalarFunctions(
+      /*prefix=*/{},
+      /*defaultOwner=*/{},
+      /*ignoreTimeZoneLabel=*/true);
   aggregate::prestosql::registerAllAggregateFunctions();
   window::prestosql::registerAllWindowFunctions();
 }

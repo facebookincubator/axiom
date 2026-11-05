@@ -35,7 +35,10 @@ class ExprSerdeTest : public testing::Test {
     velox::Type::registerSerDe();
     Expr::registerSerDe();
     LogicalPlanNode::registerSerDe();
-    velox::functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     velox::aggregate::prestosql::registerAllAggregateFunctions();
     velox::window::prestosql::registerAllWindowFunctions();
   }

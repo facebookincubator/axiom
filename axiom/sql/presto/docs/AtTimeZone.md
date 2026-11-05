@@ -20,6 +20,10 @@ Each host must use the same `ignoreTimeZoneLabel` value for function
 registration and its Velox query config. Both modes remain supported by the
 operator.
 
+The Axiom SQL runner uses the `true` mode for both function registration and
+query execution. This is a process-level choice, so
+`ignore_time_zone_label` is not exposed as a session property.
+
 Type resolution checks the value against the operand types the Presto parser
 supplies, casts `TIME` to `TIME WITH TIME ZONE`, the type Velox's time overload
 takes, and resolves the `at_timezone` overload by exact signature. The result

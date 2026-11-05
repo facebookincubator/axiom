@@ -1377,6 +1377,44 @@ TEST_F(SqlQueryRunnerTest, sessionProperties) {
       "Unknown session property");
 }
 
+TEST_F(SqlQueryRunnerTest, ignoreTimeZoneLabel) {
+  runner_->sessionConfig().set(
+      "execution.session_timezone", "America/Los_Angeles");
+
+  const auto result = run(
+      "SELECT "
+      "CAST('2024-01-01 00:00:00' AS TIMESTAMP) AT TIME ZONE 'UTC' AS plain, "
+      "from_unixtime(0, 'UTC') AT TIME ZONE 'America/New_York' AS zoned");
+  VELOX_EXPECT_EQ_TYPES(
+      result.resultType, ROW({"plain", "zoned"}, TIMESTAMP()));
+  const auto values = run(
+      "SELECT "
+      "CAST(CAST('2024-01-01 00:00:00' AS TIMESTAMP) AT TIME ZONE 'UTC' AS VARCHAR) AS plain, "
+      "CAST(from_unixtime(0, 'UTC') AT TIME ZONE 'America/New_York' AS VARCHAR) AS zoned");
+  ASSERT_EQ(values.results.size(), 1);
+  test::assertEqualVectors(
+      makeRowVector(
+          {"plain", "zoned"},
+          {makeFlatVector<std::string>({"2024-01-01 08:00:00.000"}),
+           makeFlatVector<std::string>({"1969-12-31 19:00:00.000"})}),
+      values.results.front());
+}
+
+TEST_F(SqlQueryRunnerTest, ignoreTimeZoneLabelHidden) {
+  constexpr std::string_view kProperty = "execution.ignore_time_zone_label";
+
+  const auto result = run(fmt::format("SHOW SESSION LIKE '{}'", kProperty));
+  EXPECT_FALSE(result.message.has_value());
+  EXPECT_TRUE(result.results.empty());
+
+  VELOX_ASSERT_THROW(
+      run(fmt::format("SET SESSION {} = false", kProperty)),
+      "Unknown session property");
+  VELOX_ASSERT_THROW(
+      runner_->sessionConfig().set(kProperty, "false"),
+      "Unknown session property");
+}
+
 TEST_F(SqlQueryRunnerTest, showSession) {
   auto fetchNames = [&](std::string_view query) {
     auto sqlResult = run(query);

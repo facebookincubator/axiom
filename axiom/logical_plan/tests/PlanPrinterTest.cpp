@@ -44,7 +44,10 @@ class PlanPrinterTest : public testing::Test {
 
   void SetUp() override {
     context_.connectorContext = connector::makeTestContext("test");
-    functions::prestosql::registerAllScalarFunctions();
+    functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     aggregate::prestosql::registerAllAggregateFunctions();
     window::prestosql::registerAllWindowFunctions();
 
