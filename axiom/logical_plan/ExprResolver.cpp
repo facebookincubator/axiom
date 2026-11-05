@@ -882,6 +882,41 @@ ExprPtr ExprResolver::tryResolveConstantIn(
   return in;
 }
 
+ExprPtr ExprResolver::tryResolveAtTimeZone(
+    const velox::core::IExpr& expr,
+    const InputNameResolver& inputNameResolver) const {
+  if (!expr.is(velox::core::IExpr::Kind::kAtTimeZone)) {
+    return nullptr;
+  }
+
+  VELOX_USER_CHECK(
+      !expr.inputAt(0)->is(velox::core::IExpr::Kind::kLambda),
+      "AT TIME ZONE requires a time or timestamp value, but got a lambda");
+
+  auto inputs = resolveScalarInputs(expr.inputs(), inputNameResolver);
+
+  const auto& operandTypes =
+      expr.as<velox::core::AtTimeZoneExpr>()->operandTypes();
+  auto& value = inputs.at(0);
+  const auto& valueType = value->type();
+  if (valueType->equivalent(*operandTypes.time)) {
+    value = std::make_shared<SpecialFormExpr>(
+        operandTypes.timeWithTimeZone, SpecialForm::kCast, value);
+  } else {
+    VELOX_USER_CHECK(
+        valueType->equivalent(*operandTypes.timestamp) ||
+            valueType->equivalent(*operandTypes.timestampWithTimeZone) ||
+            valueType->equivalent(*operandTypes.timeWithTimeZone),
+        "AT TIME ZONE requires a time or timestamp value, but got: {}",
+        valueType->toString());
+  }
+
+  const auto type =
+      resolveScalarFunction("at_timezone", inputs, /*coercer=*/nullptr);
+  return std::make_shared<SpecialFormExpr>(
+      type, SpecialForm::kAtTimeZone, std::move(inputs));
+}
+
 ExprPtr ExprResolver::tryFoldCast(
     const velox::TypePtr& type,
     const ExprPtr& input) const {
@@ -1142,6 +1177,10 @@ ExprPtr ExprResolver::resolveScalarTypes(
 
   if (auto in = tryResolveConstantIn(*expr, inputNameResolver)) {
     return in;
+  }
+
+  if (auto atTimeZone = tryResolveAtTimeZone(*expr, inputNameResolver)) {
+    return atTimeZone;
   }
 
   std::vector<ExprPtr> inputs;

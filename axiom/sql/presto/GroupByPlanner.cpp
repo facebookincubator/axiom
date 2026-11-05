@@ -221,6 +221,7 @@ void findAggregates(
       }
       return;
     }
+    case core::IExpr::Kind::kAtTimeZone:
     case core::IExpr::Kind::kConcat:
       for (const auto& input : expr->inputs()) {
         findAggregates(input, aggregates, aggregateSet);

@@ -557,6 +557,16 @@ enum class SpecialForm {
   /// Example:
   ///   ROW(1, 'a') => ROW_CONSTRUCTOR(1, 'a')
   kRowConstructor = 14,
+
+  /// Applies a time zone to a time or timestamp value, with or without a time
+  /// zone. The output type depends on the input type and the function
+  /// registration mode.
+  ///
+  /// Takes exactly two inputs: the temporal value and the time zone.
+  ///
+  /// Example:
+  ///   ts AT TIME ZONE 'UTC' => AT_TIME_ZONE(ts, 'UTC')
+  kAtTimeZone = 15,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SpecialForm)

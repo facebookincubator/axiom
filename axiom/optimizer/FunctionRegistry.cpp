@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/FunctionRegistry.h"
 
+#include "axiom/optimizer/QueryGraph.h"
+
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
 
@@ -308,7 +310,10 @@ FunctionSet functionBits(Name name, bool specialForm) {
   FunctionSet bits;
 
   if (specialForm) {
-    bits = bits | FunctionSet::kNonDefaultNullBehavior;
+    // AT TIME ZONE lowers to a function that returns NULL for a NULL input.
+    if (name != SpecialFormCallNames::kAtTimeZone) {
+      bits = bits | FunctionSet::kNonDefaultNullBehavior;
+    }
   } else if (
       const auto inference =
           velox::exec::rpc::AsyncRPCFunctionRegistry::find(name)) {
