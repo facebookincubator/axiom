@@ -468,9 +468,10 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
       for (const auto& expected : plans) {
         numPlans += expected->shuffleBoundaryCount() + 1;
       }
-      EXPECT_EQ(plan.plans().size(), numPlans);
+      const auto bodyPlans = plansOf(plan.body());
+      EXPECT_EQ(bodyPlans.size(), numPlans);
       AXIOM_TEST_RETURN_IF_FAILURE
-      auto next = plan.plans().begin();
+      auto next = bodyPlans.begin();
       for (const auto& expected : plans) {
         const auto end = next + expected->shuffleBoundaryCount() + 1;
         if (!matchPlanChain({next, end}, *expected, stateSymbols)) {
@@ -482,14 +483,16 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
 
     if (match_->stopWhenDeltaEmpty()) {
       EXPECT_TRUE(plan.convergenceConfig().stopWhenDeltaEmpty);
-      EXPECT_TRUE(plan.convergenceConfig().plans.empty());
+      EXPECT_FALSE(plan.convergenceConfig().plan.has_value());
     }
 
     if (match_->stopWhenEmptyEverywhere()) {
       const auto& convergence = plan.convergenceConfig();
       EXPECT_FALSE(convergence.stopWhenDeltaEmpty);
-      EXPECT_EQ(convergence.plans.size(), 1);
-      EXPECT_NE(convergence.verdict, nullptr);
+      EXPECT_TRUE(convergence.verdictOnWorkerZero());
+      AXIOM_TEST_RETURN_IF_FAILURE
+      const auto convergencePlans = plansOf(*convergence.plan);
+      EXPECT_EQ(convergencePlans.size(), 2);
       AXIOM_TEST_RETURN_IF_FAILURE
       const auto countRows =
           PlanMatcherBuilder()
@@ -499,10 +502,7 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
               .finalAggregation()
               .project()
               .build();
-      if (!matchPlanChain(
-              {convergence.plans[0], convergence.verdict},
-              *countRows,
-              stateSymbols)) {
+      if (!matchPlanChain(convergencePlans, *countRows, stateSymbols)) {
         return MatchResult::failure();
       }
     }
@@ -510,13 +510,12 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
     if (match_->convergence() != nullptr) {
       const auto& convergence = plan.convergenceConfig();
       EXPECT_FALSE(convergence.stopWhenDeltaEmpty);
+      EXPECT_TRUE(convergence.plan.has_value());
       AXIOM_TEST_RETURN_IF_FAILURE
-      auto convergencePlans = convergence.plans;
-      if (convergence.verdict != nullptr) {
-        convergencePlans.push_back(convergence.verdict);
-      }
       if (!matchPlanChain(
-              convergencePlans, *match_->convergence(), stateSymbols)) {
+              plansOf(*convergence.plan),
+              *match_->convergence(),
+              stateSymbols)) {
         return MatchResult::failure();
       }
     }
@@ -524,11 +523,15 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
     if (match_->workerZeroVerdict() != nullptr) {
       const auto& convergence = plan.convergenceConfig();
       EXPECT_FALSE(convergence.stopWhenDeltaEmpty);
-      EXPECT_TRUE(convergence.plans.empty());
-      EXPECT_NE(convergence.verdict, nullptr);
+      EXPECT_TRUE(convergence.verdictOnWorkerZero());
+      AXIOM_TEST_RETURN_IF_FAILURE
+      EXPECT_EQ(convergence.plan->stages().size(), 1);
       AXIOM_TEST_RETURN_IF_FAILURE
       if (!match_->workerZeroVerdict()
-               ->match(convergence.verdict, stateSymbols, /*context=*/nullptr)
+               ->match(
+                   convergence.plan->root().plan,
+                   stateSymbols,
+                   /*context=*/nullptr)
                .match) {
         return MatchResult::failure();
       }
@@ -550,6 +553,16 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
   }
 
  private:
+  // The plans of a fixed point's stages, in the order they were given.
+  static std::vector<PlanNodePtr> plansOf(const MultiStagePlan& stages) {
+    std::vector<PlanNodePtr> plans;
+    plans.reserve(stages.stages().size());
+    for (const auto& stage : stages.stages()) {
+      plans.push_back(stage.plan);
+    }
+    return plans;
+  }
+
   // Matches 'plans', which run in order with each plan after the first reading
   // the one before it through an Exchange, against 'chain', whose shuffles mark
   // those boundaries.

@@ -349,8 +349,9 @@ In pipeline order:
   (`ConvergenceConfig::converging`). Over a replicated state, worker 0 runs
   the convergence over its own copy and shares its answer
   (`ConvergenceConfig::workerZeroVerdict`), and only worker 0 emits the output
-  (`FixedPointNode::outputOnWorkerZero`). Velox requires each body plan after the
-  first to read exactly one exchange, as its primary input. PlanPhysical placed
+  (`FixedPointNode::outputOnWorkerZero`). Emit builds the body and the
+  convergence as chains, in which each plan after the first reads exactly one
+  exchange, as its primary input. PlanPhysical placed
   every exchange, and Emit translates them. Emit declares the state append or
   replace as the fixed point's mode says, and emits each `WorkingTable` as its
   own `StateSourceNode`. An exchange across the drivers of a task stays inside
