@@ -505,6 +505,10 @@ SqlFile SqlFile::parse(
     }
   }
 
+  for (auto& statement : result.setupStatements) {
+    statement = expandMacros(statement, macros);
+  }
+
   result.entries = parseQueries(
       content.substr(bytesConsumed), /*lineOffset=*/consumedLines + 1);
   for (auto& entry : result.entries) {

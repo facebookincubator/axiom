@@ -120,7 +120,8 @@ struct SqlFile {
   ///       Ends an inline setup block.
   ///   -- define <name>
   ///       Begins the body of macro 'name', which ends at '-- end_define'.
-  ///       Each '${name}' in a query or its '-- duckdb:' SQL is replaced
+  ///       Each '${name}' in a setup statement, a query or its '-- duckdb:'
+  ///       SQL is replaced
   ///       with the body verbatim, including inside string literals. A
   ///       '${name}' inside a macro body is not expanded. A reference to an
   ///       undefined macro, or a name defined twice, fails the parse.

@@ -381,7 +381,8 @@ TEST_F(SqlFileTest, setupBlockPreservesQueryAnnotations) {
   EXPECT_EQ(file.entries[0].sql, "SELECT * FROM t ORDER BY a");
 }
 
-// A macro's body replaces each reference to it in queries and in DuckDB SQL.
+// A macro's body replaces each reference to it in setup statements, queries
+// and DuckDB SQL.
 TEST_F(SqlFileTest, macros) {
   auto file = SqlFile::parse(
       "-- define rows\n"
@@ -391,10 +392,15 @@ TEST_F(SqlFileTest, macros) {
       "-- define one\n"
       "1\n"
       "-- end_define\n"
+      "-- setup\n"
+      "INSERT INTO t VALUES (${one})\n"
+      "-- end_setup\n"
       "\n"
       "-- duckdb: SELECT ${one}\n"
       "SELECT ${one} FROM (${rows}) t(a)",
       /*baseDir=*/"");
+  EXPECT_THAT(
+      file.setupStatements, testing::ElementsAre("INSERT INTO t VALUES (1)"));
   ASSERT_THAT(file.entries, testing::SizeIs(1));
   EXPECT_EQ(file.entries[0].sql, "SELECT 1 FROM (VALUES\n  (1), (2)) t(a)");
   EXPECT_EQ(file.entries[0].duckDbSql, std::optional<std::string>("SELECT 1"));
