@@ -1392,6 +1392,20 @@ TEST_F(SqlQueryRunnerTest, sessionProperties) {
       "Unknown session property");
 }
 
+TEST_F(SqlQueryRunnerTest, queryMaxMemoryPerNode) {
+  // query_max_memory_per_node caps the memory of each query.
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          100'000, [](auto row) { return static_cast<int64_t>(row); })}));
+  constexpr auto kQuery = "SELECT count(*) FROM (SELECT c FROM t GROUP BY c)";
+  test::assertEqualVectors(
+      run(kQuery).results.front(),
+      makeRowVector({makeFlatVector<int64_t>({100'000})}));
+
+  run("SET SESSION execution.query_max_memory_per_node = '1kB'");
+  VELOX_ASSERT_THROW(run(kQuery), "Exceeded memory pool capacity");
+}
+
 TEST_F(SqlQueryRunnerTest, showSession) {
   auto fetchNames = [&](std::string_view query) {
     auto sqlResult = run(query);

@@ -1620,12 +1620,18 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
     }
   }
 
+  velox::core::QueryConfig config(std::move(queryConfig));
+  const auto maxMemory = config.queryMaxMemoryPerNode();
+  auto pool = velox::memory::memoryManager()->addRootPool(
+      velox::core::QueryCtx::generatePoolName(queryId),
+      maxMemory > 0 ? maxMemory : velox::memory::kMaxMemory);
+
   auto queryCtx = velox::core::QueryCtx::create(
       executor_.get(),
-      velox::core::QueryConfig(std::move(queryConfig)),
+      std::move(config),
       std::move(connectorConfigs),
       velox::cache::AsyncDataCache::getInstance(),
-      /*pool=*/nullptr,
+      std::move(pool),
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
