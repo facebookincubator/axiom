@@ -36,7 +36,10 @@ class LogicalPlanNodeEqualityTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    functions::prestosql::registerAllScalarFunctions();
+    functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 

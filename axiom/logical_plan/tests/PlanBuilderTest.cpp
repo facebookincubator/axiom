@@ -36,7 +36,10 @@ class PlanBuilderTest : public testing::Test {
   }
 
   void SetUp() override {
-    functions::prestosql::registerAllScalarFunctions();
+    functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     aggregate::prestosql::registerAllAggregateFunctions();
   }
 

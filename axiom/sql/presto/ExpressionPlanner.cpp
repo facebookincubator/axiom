@@ -1122,11 +1122,17 @@ lp::ExprApi ExpressionPlanner::toExpr(
     }
 
     case NodeType::kAtTimeZone: {
-      auto* atTimeZone = node->as<AtTimeZone>();
-      return lp::Call(
-          "at_timezone",
-          toExpr(atTimeZone->value(), options),
-          toExpr(atTimeZone->timeZone(), options));
+      const auto* atTimeZone = node->as<AtTimeZone>();
+      return lp::ExprApi{std::make_shared<const core::AtTimeZoneExpr>(
+          toExpr(atTimeZone->value(), options).expr(),
+          toExpr(atTimeZone->timeZone(), options).expr(),
+          core::AtTimeZoneExpr::OperandTypes{
+              .timestamp = TIMESTAMP(),
+              .timestampWithTimeZone = TIMESTAMP_WITH_TIME_ZONE(),
+              .time = TIME(),
+              .timeWithTimeZone = TIME_WITH_TIME_ZONE(),
+          },
+          /*alias=*/std::nullopt)};
     }
 
     case NodeType::kSimpleCaseExpression: {

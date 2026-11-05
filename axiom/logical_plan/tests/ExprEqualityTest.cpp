@@ -32,7 +32,10 @@ namespace {
 class ExprEqualityTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    velox::functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/true);
     velox::aggregate::prestosql::registerAllAggregateFunctions();
     velox::window::prestosql::registerAllWindowFunctions();
   }

@@ -832,6 +832,7 @@ const auto& specialFormNames() {
       {SpecialForm::kNullIf, "NULLIF"},
       {SpecialForm::kInArray, "IN_ARRAY"},
       {SpecialForm::kRowConstructor, "ROW_CONSTRUCTOR"},
+      {SpecialForm::kAtTimeZone, "AT_TIME_ZONE"},
   };
   return kNames;
 }
@@ -1149,6 +1150,10 @@ SpecialFormExpr::SpecialFormExpr(
             inputs_[i]->type(),
             type_->childAt(i));
       }
+      break;
+    case SpecialForm::kAtTimeZone:
+      VELOX_USER_CHECK_EQ(
+          inputs_.size(), 2, "AT_TIME_ZONE must have exactly two inputs");
       break;
   }
 }

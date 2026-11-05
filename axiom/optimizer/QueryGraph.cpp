@@ -50,6 +50,8 @@ const char* SpecialFormCallNames::kNullIf = "__nullif";
 const char* SpecialFormCallNames::kDereference = "__dereference";
 // static
 const char* SpecialFormCallNames::kRowConstructor = "__row_constructor";
+// static
+const char* SpecialFormCallNames::kAtTimeZone = "__at_time_zone";
 
 // static
 ColumnCP Column::createForSymbol(Name symbol, const Value& value) {

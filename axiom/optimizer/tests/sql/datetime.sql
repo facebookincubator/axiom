@@ -1,3 +1,10 @@
 -- setup_file: common_setup.sql
 
 SELECT day(DATE '2026-07-14' + INTERVAL '1' DAY * n) FROM (VALUES (1), (2)) _(n)
+----
+-- duckdb: VALUES (TRUE), (CAST(NULL AS BOOLEAN))
+SELECT (a AT TIME ZONE 'UTC') =
+  (TIMESTAMP '2024-01-01 00:00:00' AT TIME ZONE 'UTC')
+FROM (VALUES
+  (TIMESTAMP '2024-01-01 00:00:00'),
+  (CAST(NULL AS TIMESTAMP))) t(a)

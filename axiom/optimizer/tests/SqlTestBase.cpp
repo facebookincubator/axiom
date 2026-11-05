@@ -31,6 +31,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/axiom/Register.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -43,7 +44,14 @@ using namespace facebook::velox;
 void SqlTestBase::SetUpTestCase() {
   OperatorTestBase::SetUpTestCase();
 
-  velox::functions::prestosql::registerAllScalarFunctions();
+  // OperatorTestBase registers 'at_timezone' with the time zone label kept.
+  // Those overloads differ from the ones below only in return type, so they
+  // would coexist and make resolution ambiguous.
+  velox::removeFunction("at_timezone");
+  velox::functions::prestosql::registerDateTimeFunctions(
+      /*prefix=*/{},
+      /*defaultOwner=*/{},
+      /*ignoreTimeZoneLabel=*/true);
   aggregate::prestosql::registerAllAggregateFunctions();
   window::prestosql::registerAllWindowFunctions();
   functionRegistry_ = functions::prestosql::PrestoFunctions::makeRegistry();
@@ -104,7 +112,7 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
   auto queryId = fmt::format("sql_test_{}", ++queryCounter);
   auto queryCtx = core::QueryCtx::create(
       executor,
-      core::QueryConfig{{}},
+      core::QueryConfig{{{core::QueryConfig::kIgnoreTimeZoneLabel, "true"}}},
       {},
       asyncDataCache,
       rootPool->addAggregateChild(queryId),

@@ -223,6 +223,24 @@ std::optional<CatalogSchemaTableName> explainIoOutputTable(
 
 namespace axiom::sql {
 
+namespace {
+
+// Provides query settings that the CLI may expose for configuration.
+class SqlQueryRunnerQueryConfigProvider final
+    : public velox::core::QueryConfigProvider {
+ public:
+  // Excludes settings that must match process-wide function registration.
+  std::vector<velox::config::ConfigProperty> properties() const override {
+    auto properties = QueryConfigProvider::properties();
+    std::erase_if(properties, [](const auto& property) {
+      return property.name == velox::core::QueryConfig::kIgnoreTimeZoneLabel;
+    });
+    return properties;
+  }
+};
+
+} // namespace
+
 SqlQueryRunner::SqlResultChunk::SqlResultChunk(std::string message)
     : message{std::move(message)} {}
 
@@ -277,7 +295,10 @@ void SqlQueryRunner::initialize(
   static folly::once_flag kInitialized;
 
   folly::call_once(kInitialized, []() {
-    velox::functions::prestosql::registerAllScalarFunctions();
+    velox::functions::prestosql::registerAllScalarFunctions(
+        /*prefix=*/{},
+        /*defaultOwner=*/{},
+        /*ignoreTimeZoneLabel=*/kIgnoreTimeZoneLabelMode);
     velox::aggregate::prestosql::registerAllAggregateFunctions();
     velox::window::prestosql::registerAllWindowFunctions();
     velox::functions::axiom::registerFunctions("axiom_");
@@ -328,8 +349,7 @@ void SqlQueryRunner::initialize(
   configRegistry_->add(
       kParserPrefix, std::make_shared<presto::ParserOptions>());
   configRegistry_->add(
-      kExecutionPrefix,
-      std::make_shared<facebook::velox::core::QueryConfigProvider>());
+      kExecutionPrefix, std::make_shared<SqlQueryRunnerQueryConfigProvider>());
   configRegistry_->add(
       velox::functions::prestosql::PrestoQueryConfig::kPrefix,
       std::make_shared<
@@ -1603,6 +1623,8 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
     queryConfig[velox::functions::prestosql::PrestoQueryConfig::qualify(name)] =
         value;
   }
+  queryConfig[velox::core::QueryConfig::kIgnoreTimeZoneLabel] =
+      kIgnoreTimeZoneLabelMode ? "true" : "false";
   // Per-query value, not a session property.
   queryConfig[velox::core::QueryConfig::kSessionStartTime] = std::to_string(
       options.sessionStartTimeMs.value_or(velox::getCurrentTimeMs()));

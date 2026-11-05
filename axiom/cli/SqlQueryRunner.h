@@ -206,6 +206,9 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
+  /// Process-wide timestamp-with-time-zone function mode.
+  static constexpr bool kIgnoreTimeZoneLabelMode = true;
+
   /// Constructs a runner that resolves catalogs only through the given
   /// registries. Both registries must outlive this runner. The connector
   /// registry is installed on every Velox query context the runner creates.

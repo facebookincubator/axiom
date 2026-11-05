@@ -526,17 +526,57 @@ TEST_F(ExpressionParserTest, normalize) {
 }
 
 TEST_F(ExpressionParserTest, atTimeZone) {
-  // AT TIME ZONE translates to at_timezone().
-  EXPECT_EQ(
-      "at_timezone(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), America/New_York)",
-      parseExpr(
-          "from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'")
-          ->toString());
-  EXPECT_EQ(
-      "date_format(date_trunc(hour, at_timezone(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), GMT)), %Y-%m-%d+%H:00)",
-      parseExpr(
-          "date_format(date_trunc('hour', from_unixtime(1700000000, 'UTC') AT TIME ZONE 'GMT'), '%Y-%m-%d+%H:00')")
-          ->toString());
+  auto test = [&](std::string_view sql,
+                  std::string_view expectedExpr,
+                  const TypePtr& expectedType) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    EXPECT_EQ(expectedExpr, expr->toString());
+    VELOX_EXPECT_EQ_TYPES(expr->type(), expectedType);
+  };
+
+  test(
+      "from_unixtime(1700000000, 'UTC') AT TIME ZONE 'America/New_York'",
+      "AT_TIME_ZONE(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), America/New_York)",
+      TIMESTAMP());
+
+  test(
+      "CAST('2024-01-01 00:00:00' AS TIMESTAMP) AT TIME ZONE 'America/Los_Angeles'",
+      "AT_TIME_ZONE(CAST(2024-01-01 00:00:00 AS TIMESTAMP), America/Los_Angeles)",
+      TIMESTAMP());
+
+  test(
+      "CAST('10:30:00' AS TIME) AT TIME ZONE '+08:00'",
+      "AT_TIME_ZONE(CAST(CAST(10:30:00 AS TIME) AS TIME WITH TIME ZONE), +08:00)",
+      TIME_WITH_TIME_ZONE());
+
+  test(
+      "CAST('10:30:00+05:30' AS TIME WITH TIME ZONE) AT TIME ZONE '+08:00'",
+      "AT_TIME_ZONE(CAST(10:30:00+05:30 AS TIME WITH TIME ZONE), +08:00)",
+      TIME_WITH_TIME_ZONE());
+
+  test(
+      "date_format(date_trunc('hour', from_unixtime(1700000000, 'UTC') AT TIME ZONE 'GMT'), '%Y-%m-%d+%H:00')",
+      "date_format(date_trunc(hour, AT_TIME_ZONE(from_unixtime(CAST(1700000000 AS DOUBLE), UTC), GMT)), %Y-%m-%d+%H:00)",
+      VARCHAR());
+}
+
+TEST_F(ExpressionParserTest, atTimeZoneInvalidOperand) {
+  for (
+      const auto& [sql, expectedError] : {
+          std::pair{
+              "CAST('2024-01-01' AS DATE) AT TIME ZONE 'America/Los_Angeles'",
+              "AT TIME ZONE requires a time or timestamp value, but got: DATE"},
+          std::pair{
+              "NULL AT TIME ZONE 'America/Los_Angeles'",
+              "AT TIME ZONE requires a time or timestamp value, but got: UNKNOWN"},
+          std::pair{
+              "(x -> x) AT TIME ZONE 'America/Los_Angeles'",
+              "AT TIME ZONE requires a time or timestamp value, but got a lambda"},
+      }) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_THROW(parseExpr(sql), expectedError);
+  }
 }
 
 TEST_F(ExpressionParserTest, extract) {
