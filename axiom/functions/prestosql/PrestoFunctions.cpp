@@ -20,6 +20,7 @@
 
 #include <fmt/format.h>
 
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/expression/ExprConstants.h"
 
 namespace facebook::axiom::functions::prestosql {
@@ -207,6 +208,18 @@ std::shared_ptr<optimizer::FunctionRegistry> PrestoFunctions::makeRegistry() {
   auto registry = std::make_shared<optimizer::FunctionRegistry>();
   registerAll(*registry);
   return registry;
+}
+
+// static
+std::shared_ptr<velox::common::vectorindex::LocalVectorIndexFormats>
+PrestoFunctions::makeVectorIndexFormats() {
+  using velox::common::vectorindex::FaissLocalVectorIndex;
+  auto formats =
+      std::make_shared<velox::common::vectorindex::LocalVectorIndexFormats>();
+  formats->insert(
+      std::string(FaissLocalVectorIndex::kFormat),
+      FaissLocalVectorIndex::format());
+  return formats;
 }
 
 } // namespace facebook::axiom::functions::prestosql

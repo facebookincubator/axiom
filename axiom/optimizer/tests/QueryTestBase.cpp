@@ -614,7 +614,7 @@ std::string QueryTestBase::getTestDataPath(const std::string& filename) {
 
 std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
     const std::string& queryId) {
-  return velox::core::QueryCtx::create(
+  auto queryCtx = velox::core::QueryCtx::create(
       executor_.get(),
       velox::core::QueryConfig(folly::copy(config_)),
       /*connectorConfigs=*/{},
@@ -622,6 +622,10 @@ std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
       /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,
       queryId);
+  queryCtx->setRegistry(
+      velox::common::vectorindex::LocalVectorIndexFormat::kRegistryKey,
+      functions::prestosql::PrestoFunctions::makeVectorIndexFormats());
+  return queryCtx;
 }
 
 } // namespace facebook::axiom::optimizer::test

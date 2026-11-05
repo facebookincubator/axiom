@@ -28,6 +28,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "axiom/optimizer/Schema.h"
 #include "axiom/optimizer/WriteStatsBuilder.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/core/TableWriteTraits.h"
@@ -1679,6 +1680,8 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
       toFieldAccessList(search.buildKeys(), "VectorSearch buildKey"),
       toFieldAccess(search.probeEmbedding()),
       toFieldAccess(search.buildIndex()),
+      // TODO: Pass the format of the index the search reads.
+      std::string(velox::common::vectorindex::FaissLocalVectorIndex::kFormat),
       search.metric(),
       search.k(),
       std::move(searchOptions),

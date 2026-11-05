@@ -112,6 +112,9 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
       // Task ids are built from this, and exchanges find their source by task
       // id.
       queryId);
+  queryCtx->setRegistry(
+      velox::common::vectorindex::LocalVectorIndexFormat::kRegistryKey,
+      functions::prestosql::PrestoFunctions::makeVectorIndexFormats());
 
   auto allocator = std::make_unique<HashStringAllocator>(optimizerPool.get());
   auto graphContext = std::make_unique<optimizer::QueryGraphContext>(

@@ -37,6 +37,7 @@
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/common/vectorindex/LocalVectorIndex.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom::optimizer::v1 {
@@ -800,6 +801,11 @@ class SqlQueryRunner {
   // Presto function semantics this runner plans with. Set in initialize().
   std::shared_ptr<const facebook::axiom::optimizer::FunctionRegistry>
       functionRegistry_;
+
+  // The formats of the vector indexes this runner's queries search. Set in
+  // initialize().
+  std::shared_ptr<facebook::velox::common::vectorindex::LocalVectorIndexFormats>
+      vectorIndexFormats_;
 
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<facebook::axiom::ConfigRegistry> configRegistry_;

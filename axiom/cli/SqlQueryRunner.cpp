@@ -302,6 +302,8 @@ void SqlQueryRunner::initialize(
   auto functionRegistry = functions::prestosql::PrestoFunctions::makeRegistry();
   functionRegistry->registerInternalPrefix("axiom_");
   functionRegistry_ = std::move(functionRegistry);
+  vectorIndexFormats_ =
+      functions::prestosql::PrestoFunctions::makeVectorIndexFormats();
 
   auto [defaultConnectorId, defaultSchema] = initializeConnectors();
   defaultConnectorId_ = std::move(defaultConnectorId);
@@ -1633,6 +1635,9 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       velox::connector::ConnectorRegistry::kRegistryKey,
       std::shared_ptr<velox::connector::ConnectorRegistry::Registry>(
           std::shared_ptr<void>{}, &connectorRegistry_));
+  queryCtx->setRegistry(
+      velox::common::vectorindex::LocalVectorIndexFormat::kRegistryKey,
+      vectorIndexFormats_);
   return queryCtx;
 }
 
