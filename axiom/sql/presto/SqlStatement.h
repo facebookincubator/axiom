@@ -20,6 +20,7 @@
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaProcedureName.h"
+#include "axiom/connectors/ConnectorSession.h"
 #include "axiom/connectors/TableDefinition.h"
 #include "axiom/connectors/VectorIndex.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -66,6 +67,9 @@ class SqlStatement {
   virtual ~SqlStatement() = default;
 
   std::string_view kindName() const;
+
+  /// Returns whether running this statement changes data or metadata.
+  facebook::axiom::connector::QueryKind queryKind() const;
 
   SqlStatementKind kind() const {
     return kind_;

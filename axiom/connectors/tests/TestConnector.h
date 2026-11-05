@@ -1283,6 +1283,21 @@ class TestConnector : public velox::connector::Connector {
     return onFinishDelete_;
   }
 
+  /// Callback receiving the session of a connector call.
+  using SessionInspector = std::function<void(const ConnectorSession&)>;
+
+  /// Installs a callback invoked with the session of every
+  /// TestSplitManager::co_listPartitions call.
+  void setOnListPartitions(SessionInspector inspector) {
+    onListPartitions_ = std::move(inspector);
+  }
+
+  /// Returns the installed inspector, or an empty std::function if none was
+  /// set.
+  const SessionInspector& onListPartitions() const {
+    return onListPartitions_;
+  }
+
   /// Installs a callback invoked once per aborted row-level DELETE.
   void setOnAbortDelete(std::function<void()> callback) {
     onAbortDelete_ = std::move(callback);
@@ -1309,6 +1324,7 @@ class TestConnector : public velox::connector::Connector {
   FilterInspector onCreateTableHandle_;
   DeleteInspector onFinishDelete_;
   std::function<void()> onAbortDelete_;
+  SessionInspector onListPartitions_;
 };
 
 /// The ConnectorFactory for the TestConnector can be configured with

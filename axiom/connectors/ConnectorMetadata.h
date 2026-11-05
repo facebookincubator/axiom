@@ -1467,6 +1467,19 @@ class ConnectorMetadata {
   /// @return nullptr if table doesn't exist.
   virtual TablePtr findTable(const SchemaTableName& tableName) = 0;
 
+  /// Returns the table as of its latest change, for a statement that modifies
+  /// it or checks whether it exists before creating or dropping it. A
+  /// connector that serves findTable from a cache or from replicas that trail
+  /// writes overrides this to read the latest metadata, so the statement does
+  /// not act on a table another statement has changed since.
+  ///
+  /// @return nullptr if table doesn't exist.
+  virtual TablePtr findTableForWrite(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      const SchemaTableName& tableName) {
+    return findTable(tableName);
+  }
+
   /// Return a ViewPtr given the view name.
   ///
   /// @return nullptr if view doesn't exist.

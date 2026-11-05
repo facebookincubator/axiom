@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,6 +24,7 @@
 
 #include <folly/container/F14Map.h>
 
+#include "axiom/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 
@@ -36,6 +38,20 @@ using ConnectorProperties = folly::F14FastMap<std::string, Properties>;
 
 class ConnectorSession;
 using ConnectorSessionPtr = std::shared_ptr<ConnectorSession>;
+
+/// Whether a query changes data or metadata.
+enum class QueryKind {
+  /// Reads data and metadata only.
+  kRead,
+  /// Changes data or metadata, e.g. adds rows or creates a table.
+  kWrite,
+};
+
+AXIOM_DECLARE_ENUM_NAME(QueryKind);
+
+/// The kind of a query, set once the engine has parsed the query, std::nullopt
+/// before that.
+using QueryKindState = std::atomic<std::optional<QueryKind>>;
 
 /// Holds what one connector is given for one query: the query's identity, this
 /// connector's property slice, and the writer it records into. Every connector
@@ -52,11 +68,13 @@ class ConnectorSession final {
       std::string queryId,
       std::string user,
       Properties properties,
-      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter)
+      std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
+      std::shared_ptr<const QueryKindState> queryKind = nullptr)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
         properties_{std::move(properties)},
-        statsWriter_{std::move(statsWriter)} {
+        statsWriter_{std::move(statsWriter)},
+        queryKind_{std::move(queryKind)} {
     VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
   }
 
@@ -90,11 +108,21 @@ class ConnectorSession final {
     return *statsWriter_;
   }
 
+  /// Returns whether the query writes, or std::nullopt until the engine sets it
+  /// (see ConnectorContext::setQueryKind()) and for a session made outside a
+  /// ConnectorContext.
+  std::optional<QueryKind> queryKind() const {
+    return queryKind_ ? queryKind_->load() : std::nullopt;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
+  // Shared with the ConnectorContext that sets it. Null for a session made
+  // outside a context.
+  const std::shared_ptr<const QueryKindState> queryKind_;
 };
 
 } // namespace facebook::axiom::connector

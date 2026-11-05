@@ -1095,7 +1095,8 @@ SqlQueryRunner::co_runExplainStatement(
     if (!drop->ifExists()) {
       auto metadata = context->metadataRegistry().get(drop->connectorId());
       VELOX_USER_CHECK(
-          metadata->findTable(drop->tableName()),
+          metadata->findTableForWrite(
+              context->sessionFor(drop->connectorId()), drop->tableName()),
           "Table does not exist: {}.{}",
           drop->connectorId(),
           drop->tableName());
@@ -1503,6 +1504,7 @@ SqlQueryRunner::co_runUnchecked(
     QueryTiming& timing,
     std::string& planString) {
   const std::string queryId = options.queryId.value_or(queryIdGenerator_());
+  context->setQueryKind(sqlStatement.queryKind());
 
   if (sqlStatement.isExplain()) {
     auto generator = co_runExplainStatement(
@@ -2002,6 +2004,7 @@ SqlQueryRunner::executeSelectOrInsert(
 
   auto queryCtx = newQuery(options);
   const auto context = makeConnectorContext(queryCtx->queryId(), options);
+  context->setQueryKind(statement.queryKind());
   auto planAndStats = optimize(logicalPlan, queryCtx, options, context);
   return makeLocalRunner(planAndStats, queryCtx, options, context);
 }

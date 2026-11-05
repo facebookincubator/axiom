@@ -576,7 +576,7 @@ folly::coro::Task<std::optional<bool>> ConnectorMetadata::co_addVectorIndex(
     bool ifNotExists,
     bool explain) {
   supportsCreateTable().value_or(TableDefinitionSupport{}).check(definition);
-  auto table = findTable(tableName);
+  auto table = findTableForWrite(session, tableName);
   if (table == nullptr) {
     if (ifTableExists) {
       co_return std::nullopt;
@@ -604,7 +604,7 @@ std::optional<bool> ConnectorMetadata::dropVectorIndex(
       supportsCreateTable().value_or(TableDefinitionSupport{}).vectorIndexes,
       "Vector indexes are not supported by this connector: {}",
       name);
-  const auto table = findTable(tableName);
+  const auto table = findTableForWrite(session, tableName);
   if (table == nullptr) {
     VELOX_USER_CHECK(
         ifTableExists, "Table does not exist: {}", tableName.toString());
