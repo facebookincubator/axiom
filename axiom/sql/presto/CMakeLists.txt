@@ -34,18 +34,21 @@ add_subdirectory(example)
 
 add_library(
   axiom_sql_presto_parser
+  ColumnExprs.cpp
   ColumnsExpansion.cpp
   DisplayNames.cpp
   ExpressionPlanner.cpp
   GraphTablePlanner.cpp
   GroupByPlanner.cpp
   IntervalParser.cpp
+  KMeans.cpp
   RecursiveCteValidator.cpp
   SortProjection.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp
   SpecialAggregates.cpp
   SqlStatement.cpp
+  VectorIndexRefresh.cpp
   VectorSearchPlanner.cpp
 )
 

@@ -376,6 +376,21 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool ifExists,
       bool explain) override;
 
+  folly::coro::Task<VectorIndexWriteHandlePtr> co_beginVectorIndexWrite(
+      ConnectorSessionPtr session,
+      VectorIndexPtr index) override;
+
+  /// Reads each index partition's codec from the statistics of its 'codec_id'
+  /// column, and its number of embeddings from those of its 'local_index'
+  /// column.
+  folly::coro::Task<int64_t> co_finishVectorIndexWrite(
+      ConnectorSessionPtr session,
+      VectorIndexWriteHandlePtr handle) override;
+
+  folly::coro::Task<void> co_abortVectorIndexWrite(
+      ConnectorSessionPtr session,
+      VectorIndexWriteHandlePtr handle) override;
+
   /// Shortcut for dropTable(session, tableName, true, false).
   bool dropTableIfExists(const SchemaTableName& tableName) {
     return dropTable(nullptr, tableName, true, /*explain=*/false);

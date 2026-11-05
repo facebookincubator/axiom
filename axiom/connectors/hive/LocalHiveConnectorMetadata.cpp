@@ -19,6 +19,7 @@
 #include <folly/Conv.h>
 #include <folly/CppAttributes.h>
 #include <folly/FileUtil.h>
+#include <folly/Random.h>
 #include <folly/String.h>
 #include <folly/json.h>
 #include <sys/stat.h>
@@ -1226,6 +1227,7 @@ folly::dynamic toVectorIndexJson(const VectorIndex& index) {
       velox::common::vectorindex::VectorIndexKindName::toName(
           index.properties.indexKind))(
       "numClusters", index.properties.numClusters)(
+      "dimension", index.properties.dimension)(
       "codecPolicy",
       VectorIndexCodecPolicyName::toName(index.properties.codecPolicy))(
       "indexOptions", std::move(indexOptions));
@@ -1267,6 +1269,7 @@ VectorIndexPtr fromVectorIndexJson(
               .indexKind = velox::common::vectorindex::VectorIndexKindName::
                   toVectorIndexKind(json["indexType"].asString()),
               .numClusters = json["numClusters"].asInt(),
+              .dimension = json["dimension"].asInt(),
               .codecPolicy =
                   VectorIndexCodecPolicyName::toVectorIndexCodecPolicy(
                       json["codecPolicy"].asString()),
@@ -1803,8 +1806,37 @@ TablePtr LocalHiveConnectorMetadata::findTable(
       "Unsupported schema: {}",
       tableName.schema);
   ensureInitialized();
-  std::lock_guard<std::mutex> l(mutex_);
-  return findTableLocked(tableName.table);
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (auto table = findTableLocked(tableName.table)) {
+      return table;
+    }
+  }
+  // The centroids table of an index: a table of no files, which only a vector
+  // search reads (see VectorIndex::centroidsTableName()).
+  const auto centroids = VectorIndex::parseCentroidsTableName(tableName);
+  if (!centroids.has_value()) {
+    return nullptr;
+  }
+  const auto table = findTable(centroids->first);
+  if (table == nullptr) {
+    return nullptr;
+  }
+  const auto index = table->findVectorIndex(centroids->second);
+  if (index == nullptr) {
+    return nullptr;
+  }
+  auto centroidsTable = std::make_shared<LocalTable>(
+      tableName,
+      index->centroidColumns(),
+      /*bucketed=*/false,
+      /*options=*/folly::F14FastMap<std::string, velox::Variant>{},
+      /*partitionColumnNames=*/std::vector<std::string>{},
+      /*columnComments=*/folly::F14FastMap<std::string, std::string>{},
+      /*comment=*/std::nullopt,
+      /*primaryKey=*/std::vector<std::string>{});
+  centroidsTable->makeDefaultLayout(/*files=*/{}, *this);
+  return centroidsTable;
 }
 
 std::vector<std::string> LocalHiveConnectorMetadata::listTableNames(
@@ -1897,27 +1929,46 @@ std::string createTemporaryDirectory(
   return resultPath;
 }
 
-// Move all files and directories from sourceDir to targetDir.
-void move(const fs::path& sourceDir, const fs::path& targetDir) {
+// Appends to 'moves' the source and target of each file and partition
+// directory written to 'sourceDir', to move into 'targetDir'. A partition is
+// 'numPartitionLevels' directories deep, one per partition column, and one that
+// already exists fails. A directory less deep merges into an existing one.
+void collectWrittenFiles(
+    const fs::path& sourceDir,
+    const fs::path& targetDir,
+    size_t numPartitionLevels,
+    std::vector<std::pair<fs::path, fs::path>>& moves) {
   VELOX_CHECK(
       fs::is_directory(sourceDir),
       "Source directory does not exist or is not a directory: {}",
       sourceDir.string());
-  // Create the target directory if it doesn't exist
-  fs::create_directories(targetDir);
-  // Iterate through the source directory
   for (const auto& entry : fs::directory_iterator(sourceDir)) {
-    // Compute the relative path from the source directory
-    fs::path relPath = fs::relative(entry.path(), sourceDir);
-    fs::path destPath = targetDir / relPath;
+    const auto destPath = targetDir / fs::relative(entry.path(), sourceDir);
+    if (numPartitionLevels > 1 && fs::is_directory(destPath)) {
+      collectWrittenFiles(
+          entry.path(), destPath, numPartitionLevels - 1, moves);
+      continue;
+    }
     VELOX_USER_CHECK(
         !fs::exists(destPath),
         "Partition already exists: {}",
         destPath.string());
-    // Create enclosing directories in the target if they don't exist
-    fs::create_directories(destPath.parent_path());
-    // Move the file/directory to the target directory
-    fs::rename(entry.path(), destPath);
+    moves.emplace_back(entry.path(), destPath);
+  }
+}
+
+// Moves the files and partition directories written to 'sourceDir' into
+// 'targetDir' (see collectWrittenFiles). Checks every target before moving any,
+// so a partition that exists fails the move with nothing moved.
+void moveWrittenFiles(
+    const fs::path& sourceDir,
+    const fs::path& targetDir,
+    size_t numPartitionLevels) {
+  std::vector<std::pair<fs::path, fs::path>> moves;
+  collectWrittenFiles(sourceDir, targetDir, numPartitionLevels, moves);
+  for (const auto& [source, target] : moves) {
+    fs::create_directories(target.parent_path());
+    fs::rename(source, target);
   }
 }
 
@@ -2187,18 +2238,19 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
   const auto& targetPath = veloxHandle->locationHandle()->targetPath();
   const auto& writePath = veloxHandle->locationHandle()->writePath();
 
-  move(writePath, targetPath);
+  const auto numPartitionColumns = hiveHandle->table()
+                                       ->primaryLayout()
+                                       ->asChecked<HiveTableLayout>()
+                                       ->hivePartitionColumns()
+                                       .size();
+  moveWrittenFiles(writePath, targetPath, numPartitionColumns);
   deleteDirectoryRecursive(writePath);
 
   // Persist write-time stats. For partitioned tables, write per-partition
   // .stats files, none when the write has no rows. For unpartitioned tables,
   // write a single .stats file in the table directory. Merges with existing
   // stats from prior writes.
-  const bool partitioned = !hiveHandle->table()
-                                ->primaryLayout()
-                                ->asChecked<HiveTableLayout>()
-                                ->hivePartitionColumns()
-                                .empty();
+  const bool partitioned = numPartitionColumns > 0;
   VELOX_CHECK(
       !partitioned || groupingKeys != nullptr || rows == 0,
       "A write to a partitioned table must report its partitions");
@@ -2548,6 +2600,166 @@ bool LocalHiveConnectorMetadata::doDropVectorIndex(
   dropTableIfExists(index->codecTable);
   dropTableIfExists(index->indexTable);
   return true;
+}
+
+namespace {
+
+// A write into a vector index of a local Hive table: the index's storage
+// tables, which finishing or aborting the write cleans up.
+class LocalHiveVectorIndexWriteHandle : public VectorIndexWriteHandle {
+ public:
+  LocalHiveVectorIndexWriteHandle(
+      int64_t codecId,
+      SchemaTableName codecTable,
+      SchemaTableName indexTable)
+      : VectorIndexWriteHandle{codecId},
+        codecTable{std::move(codecTable)},
+        indexTable{std::move(indexTable)} {}
+
+  // The index's codec table.
+  const SchemaTableName codecTable;
+  // The index's local index table.
+  const SchemaTableName indexTable;
+};
+
+} // namespace
+
+folly::coro::Task<VectorIndexWriteHandlePtr>
+LocalHiveConnectorMetadata::co_beginVectorIndexWrite(
+    ConnectorSessionPtr /*session*/,
+    VectorIndexPtr index) {
+  co_return std::make_shared<LocalHiveVectorIndexWriteHandle>(
+      static_cast<int64_t>(
+          folly::Random::rand64(1, std::numeric_limits<int64_t>::max())),
+      index->codecTable,
+      index->indexTable);
+}
+
+namespace {
+
+// The directories of the codec table under 'codecTablePath' that hold codecs
+// of 'codecId', each a partition directory then 'codec_id=<codecId>', with
+// the partition's path relative to the table.
+std::vector<std::pair<fs::path, fs::path>> codecDirectories(
+    const fs::path& codecTablePath,
+    int64_t codecId) {
+  const auto name = fmt::format("{}={}", VectorIndex::kCodecId, codecId);
+  std::vector<std::pair<fs::path, fs::path>> result;
+  for (const auto& entry : fs::recursive_directory_iterator(codecTablePath)) {
+    if (entry.is_directory() && entry.path().filename() == name) {
+      result.emplace_back(
+          entry.path(),
+          fs::relative(entry.path().parent_path(), codecTablePath));
+    }
+  }
+  return result;
+}
+
+// The statistics of 'column' in the index partition 'partitionPath', or
+// nullopt when the partition or the statistics do not exist.
+std::optional<ColumnStatistics> indexPartitionStats(
+    const fs::path& partitionPath,
+    std::string_view column) {
+  if (!fs::is_directory(partitionPath)) {
+    return std::nullopt;
+  }
+  const auto stats = PersistedStats::read(partitionPath.string());
+  if (!stats.has_value()) {
+    return std::nullopt;
+  }
+  for (const auto& columnStats : stats->columns) {
+    if (columnStats.name == column) {
+      return columnStats;
+    }
+  }
+  return std::nullopt;
+}
+
+// Whether the index partition 'partitionPath' was built with the codecs of
+// 'codecId': false if the partition does not exist, and nullopt if it exists
+// without the statistics of its codec ids.
+std::optional<bool> namesCodec(const fs::path& partitionPath, int64_t codecId) {
+  if (!fs::is_directory(partitionPath)) {
+    return false;
+  }
+  const auto stats = indexPartitionStats(partitionPath, VectorIndex::kCodecId);
+  if (!stats.has_value() || !stats->min.has_value() ||
+      !stats->max.has_value()) {
+    return std::nullopt;
+  }
+  return stats->min->value<int64_t>() == codecId &&
+      stats->max->value<int64_t>() == codecId;
+}
+
+} // namespace
+
+folly::coro::Task<int64_t>
+LocalHiveConnectorMetadata::co_finishVectorIndexWrite(
+    ConnectorSessionPtr /*session*/,
+    VectorIndexWriteHandlePtr handle) {
+  const auto& write = *handle->asChecked<LocalHiveVectorIndexWriteHandle>();
+  const fs::path codecTablePath = tablePath(write.codecTable);
+  const fs::path indexTablePath = tablePath(write.indexTable);
+
+  std::lock_guard<std::mutex> l(mutex_);
+  int64_t numEmbeddings{0};
+  for (const auto& [codecs, partition] :
+       codecDirectories(codecTablePath, write.codecId())) {
+    const auto indexPartition = indexTablePath / partition;
+    const std::optional<bool> namesWriteCodec =
+        namesCodec(indexPartition, write.codecId());
+    VELOX_CHECK(
+        namesWriteCodec.has_value(),
+        "Vector index partition has no codec statistics: {}",
+        indexPartition.string());
+    if (!namesWriteCodec.value()) {
+      // No index row uses the codec.
+      fs::remove_all(codecs);
+      continue;
+    }
+    const std::optional<ColumnStatistics> stats =
+        indexPartitionStats(indexPartition, VectorIndex::kLocalIndex);
+    VELOX_CHECK(
+        stats.has_value(),
+        "Vector index partition has no statistics: {}",
+        indexPartition.string());
+    VELOX_CHECK(
+        stats->numEmbeddings.has_value(),
+        "Vector index partition has no number of embeddings: {}",
+        indexPartition.string());
+    numEmbeddings += stats->numEmbeddings.value();
+
+    // The partition's other codecs.
+    const auto codecPrefix = fmt::format("{}=", VectorIndex::kCodecId);
+    for (const auto& entry : fs::directory_iterator(codecs.parent_path())) {
+      if (entry.path() != codecs && entry.is_directory() &&
+          entry.path().filename().string().starts_with(codecPrefix)) {
+        fs::remove_all(entry.path());
+      }
+    }
+  }
+  loadTable(write.codecTable.table, codecTablePath);
+  co_return numEmbeddings;
+}
+
+folly::coro::Task<void> LocalHiveConnectorMetadata::co_abortVectorIndexWrite(
+    ConnectorSessionPtr /*session*/,
+    VectorIndexWriteHandlePtr handle) {
+  const auto& write = *handle->asChecked<LocalHiveVectorIndexWriteHandle>();
+  const fs::path codecTablePath = tablePath(write.codecTable);
+  const fs::path indexTablePath = tablePath(write.indexTable);
+  std::lock_guard<std::mutex> l(mutex_);
+  for (const auto& [codecs, partition] :
+       codecDirectories(codecTablePath, write.codecId())) {
+    // A codec whose partition's index rows may name it stays.
+    const std::optional<bool> namesWriteCodec =
+        namesCodec(indexTablePath / partition, write.codecId());
+    if (namesWriteCodec.has_value() && !namesWriteCodec.value()) {
+      fs::remove_all(codecs);
+    }
+  }
+  loadTable(write.codecTable.table, codecTablePath);
+  co_return;
 }
 
 } // namespace facebook::axiom::connector::hive

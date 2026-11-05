@@ -115,7 +115,7 @@ Created table: "default"."products"
 ```scrut
 $ $CLI --data_path $D --query "
 > ALTER TABLE products ADD VECTOR INDEX product_index (embedding) KEY (id)
-> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10)" 2>/dev/null
+> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10, dimension = 2)" 2>/dev/null
 Added vector index 'product_index' to "default"."products"
 ```
 
@@ -134,7 +134,7 @@ products__product_index__index
 ```scrut
 $ $CLI --data_path $D --query "
 > ALTER TABLE products ADD VECTOR INDEX IF NOT EXISTS product_index (embedding) KEY (id)
-> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10)" 2>/dev/null
+> WITH (distance_metric = 'cosine', index_type = 'flat', num_clusters = 10, dimension = 2)" 2>/dev/null
 Vector index 'product_index' already exists in "default"."products" (no-op)
 ```
 

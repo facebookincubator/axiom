@@ -16,6 +16,7 @@
 
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -319,6 +320,7 @@ class LocalHiveConnectorMetadataTest
     properties.emplace("distance_metric", Variant("cosine"));
     properties.emplace("index_type", Variant("ivf_flat"));
     properties.emplace("num_clusters", Variant(int64_t{10}));
+    properties.emplace("dimension", Variant(int64_t{768}));
     properties.emplace("codec_policy", Variant("shared"));
     properties.emplace(
         "index_options",
@@ -392,6 +394,7 @@ class LocalHiveConnectorMetadataTest
         .metric = common::vectorindex::VectorIndexMetric::kCosine,
         .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
         .numClusters = 10,
+        .dimension = 768,
         .codecPolicy = VectorIndexCodecPolicy::kShared,
         .indexOptions = {{"ivf.nlist", "4"}, {"ivf.nprobe", "2"}},
     };
@@ -980,6 +983,75 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       "DELETE requires a scan of the table");
 }
 
+// With two partition columns, an insert adds a partition that shares the
+// value of the first partition column with an existing one. An insert into a
+// partition that exists fails and adds none of its partitions.
+TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
+  const auto tableType =
+      ROW({{"key", BIGINT()}, {"ds", VARCHAR()}, {"hr", VARCHAR()}});
+  constexpr int32_t kInsertSize{10};
+  const auto makeData = [&](const std::string& hr) {
+    return makeRowVector(
+        tableType->names(),
+        {
+            makeFlatIdentityVector<int64_t>(kInsertSize),
+            makeConstant<std::string>("2022-09-01", kInsertSize),
+            makeConstant(hr, kInsertSize),
+        });
+  };
+
+  auto session = makeSession();
+  folly::coro::blockingWait(metadata_->co_createEmptyTable(
+      session,
+      qualifiedName("test_insert_partitions"),
+      TableDefinition::create(
+          tableType,
+          {{HiveWriteOptions::kPartitionedBy,
+            velox::Variant::array({"ds", "hr"})}}),
+      /*ifNotExists=*/false));
+  const auto write = [&](const std::string& hr) {
+    writeToTable(
+        metadata_->findTable(qualifiedName("test_insert_partitions")),
+        makeData(hr),
+        WriteKind::kInsert,
+        dwio::common::FileFormat::DWRF);
+  };
+
+  write("01");
+  write("02");
+  EXPECT_EQ(
+      metadata_->findTable(qualifiedName("test_insert_partitions"))->numRows(),
+      2 * kInsertSize);
+
+  VELOX_ASSERT_THROW(write("01"), "Partition already exists");
+
+  // A write of new partitions and an existing one moves none of them.
+  const std::vector<std::string> hours{"03", "04", "01", "05", "06"};
+  const auto numRows = static_cast<int32_t>(hours.size()) * kInsertSize;
+  const auto mixed = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatIdentityVector<int64_t>(numRows),
+          makeConstant<std::string>("2022-09-01", numRows),
+          makeFlatVector<std::string>(
+              numRows, [&](auto row) { return hours[row / kInsertSize]; }),
+      });
+  VELOX_ASSERT_THROW(
+      writeToTable(
+          metadata_->findTable(qualifiedName("test_insert_partitions")),
+          mixed,
+          WriteKind::kInsert,
+          dwio::common::FileFormat::DWRF),
+      "Partition already exists");
+  const auto dsPath = localTablePath(qualifiedName("test_insert_partitions")) +
+      "/ds=2022-09-01";
+  for (const auto* hour : {"03", "04", "05", "06"}) {
+    SCOPED_TRACE(hour);
+    EXPECT_FALSE(
+        std::filesystem::exists(fmt::format("{}/hr={}", dsPath, hour)));
+  }
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
@@ -1413,6 +1485,9 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexColumns) {
   createProducts("keyed", {"id"});
 
   VELOX_ASSERT_THROW(
+      addVectorIndex("products", vectorIndex("i$j")),
+      "Vector index name must not contain '$': i$j");
+  VELOX_ASSERT_THROW(
       addVectorIndex("products", vectorIndex("i", "no_such_column")),
       "Vector index column not found: no_such_column");
   VELOX_ASSERT_THROW(
@@ -1505,6 +1580,39 @@ TEST_F(LocalHiveConnectorMetadataTest, createTableWithVectorIndex) {
       "Unsupported property for a vector index");
   EXPECT_EQ(metadata_->findTable(qualifiedName("rejected")), nullptr);
   expectNoStorageTables("rejected", "i");
+}
+
+// Aborting a write drops each of its codecs that no index rows use, and keeps a
+// codec that index rows may use: one whose index partition has no statistics
+// to tell. Finishing the write fails on such a partition.
+TEST_F(LocalHiveConnectorMetadataTest, vectorIndexWriteCleanup) {
+  auto session = makeSession();
+  createProducts("products", {"id"}, {vectorIndex("i")});
+  const auto index = findVectorIndex("products", "i");
+  const auto handle = folly::coro::blockingWait(
+      metadata_->co_beginVectorIndexWrite(session, index));
+
+  const auto codecDir = [&](std::string_view ds) {
+    return std::filesystem::path(localTablePath(index->codecTable)) /
+        fmt::format("ds={}", ds) /
+        fmt::format("{}={}", VectorIndex::kCodecId, handle->codecId());
+  };
+  for (const auto* ds : {"a", "b"}) {
+    std::filesystem::create_directories(codecDir(ds));
+    PersistedStats::write(codecDir(ds).string(), {});
+  }
+  std::filesystem::create_directories(
+      std::filesystem::path(localTablePath(index->indexTable)) / "ds=a");
+
+  VELOX_ASSERT_THROW(
+      folly::coro::blockingWait(
+          metadata_->co_finishVectorIndexWrite(session, handle)),
+      "Vector index partition has no codec statistics");
+
+  folly::coro::blockingWait(
+      metadata_->co_abortVectorIndexWrite(session, handle));
+  EXPECT_TRUE(std::filesystem::exists(codecDir("a")));
+  EXPECT_FALSE(std::filesystem::exists(codecDir("b")));
 }
 
 // A vector index covers a partition of its table once its index table has the

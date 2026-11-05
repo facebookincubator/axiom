@@ -956,6 +956,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   TestConnector* connector_;
   folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
+  // The centroids tables findTable made, by name (see
+  // VectorIndex::centroidsTableName()). Each is made once: a table's memory
+  // pool takes the table's name.
+  folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>>
+      centroidsTables_;
   std::unique_ptr<TestSplitManager> splitManager_;
   AsyncPushdownMatcher asyncPushdownMatcher_;
 

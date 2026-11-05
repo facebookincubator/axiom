@@ -34,6 +34,13 @@ TableAccessHandle buildTableAccess(
     ExprVector& rejected,
     std::optional<connector::LookupKeys> lookupKeys) {
   const auto* schemaTable = baseTable.schemaTable;
+  // A vector search reads a centroids table as its index's codec table, so a
+  // read of the table itself is not one.
+  VELOX_USER_CHECK(
+      !connector::VectorIndex::parseCentroidsTableName(schemaTable->name())
+           .has_value(),
+      "A vector index's centroids can only be read by a vector search: {}",
+      schemaTable->name().toString());
   if (lookupKeys.has_value()) {
     // TODO: Choose the layout whose lookup keys cover the lookup's keys.
     VELOX_NYI_CHECK_EQ(

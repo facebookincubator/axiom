@@ -96,6 +96,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
 
   /// Like makeLocalRunner, but optimizes 'logicalPlan' through the v2
   /// optimizer pipeline (axiom/optimizer) instead of v1.
+  /// @param placeholderValues The values of the plan's placeholders in order
+  /// of position.
   static std::shared_ptr<runner::LocalRunner> makeLocalRunnerV2(
       const logical_plan::LogicalPlanNodePtr& logicalPlan,
       folly::Executor* executor,
@@ -104,7 +106,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       const std::shared_ptr<velox::memory::MemoryPool>& optimizerPool,
       int32_t numWorkers = 4,
       int32_t numDrivers = 4,
-      bool syntacticJoinOrder = false);
+      bool syntacticJoinOrder = false,
+      const std::vector<velox::Variant>& placeholderValues = {});
 
   /// Runs SQL through Axiom and DuckDB, asserts unordered results match.
   /// @param sql SQL query to run through both engines.

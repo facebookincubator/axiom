@@ -50,6 +50,7 @@ class VectorSearchTest : public test::QueryTestBase {
       {"distance_metric", Variant("cosine")},
       {"index_type", Variant("flat")},
       {"num_clusters", Variant(int64_t{4})},
+      {"dimension", Variant(int64_t{2})},
   };
 
   void SetUp() override {
@@ -253,6 +254,85 @@ TEST_F(VectorSearchTest, placement) {
           .project({"name", "id"})
           .gather()
           .build());
+}
+
+// A search of an index's centroids is one search of the codecs, each query
+// keyed to the codec of its day, then keeps the nearest clusters of each query.
+// A left search keeps a query whose day has no codec. Conditions on the day of
+// the clusters, and on the queries' columns of an inner search, filter the
+// inputs.
+TEST_F(VectorSearchTest, centroids) {
+  const auto searchCentroids = [&](lp::JoinType joinType,
+                                   const std::string& condition) {
+    lp::PlanBuilder plan(makeContext());
+    return plan.tableScan("queries")
+        .as("q")
+        .vectorSearch(
+            plan.newPlan()
+                .tableScan("products$product_index$centroids")
+                .as("p")
+                .filter("codec_id = 7"),
+            condition,
+            joinType,
+            {
+                .probeEmbedding = "embedding",
+                .buildEmbedding = "centroid",
+                .k = 1,
+                .scoreName = "score",
+            })
+        .project({"name", "cluster_id", "p.ds"})
+        .build();
+  };
+  const auto matchCentroidsSearch =
+      [&](const std::optional<std::string>& queryFilter,
+          const std::optional<std::string>& ds,
+          core::JoinType joinType) {
+        return matchScan("queries")
+            .filterIf(queryFilter.has_value(), queryFilter.value_or(""))
+            .assignUniqueId("query_id")
+            .vectorSearchJoin(
+                matchScan("products__product_index__codecs")
+                    .aliases({"codec", "products_ds", "codec_id"})
+                    .filter(
+                        ds.has_value()
+                            ? fmt::format(
+                                  "codec_id = 7 AND products_ds {}", *ds)
+                            : std::string("codec_id = 7"))
+                    .project({"codec", "products_ds"}),
+                joinType,
+                {"ds = products_ds"},
+                "embedding",
+                "codec",
+                1)
+            .aliases({"name", "query_id", "products_ds", "cluster_id", "score"})
+            .topNRowNumber(
+                {"query_id"}, {"score DESC"}, 1, /*rankColumn=*/false)
+            .project({"name", "cluster_id", "products_ds"})
+            .build();
+      };
+
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(lp::JoinType::kInner, "q.ds = p.ds")),
+      matchCentroidsSearch(
+          /*queryFilter=*/std::nullopt,
+          /*ds=*/std::nullopt,
+          core::JoinType::kInner));
+
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(lp::JoinType::kLeft, "q.ds = p.ds")),
+      matchCentroidsSearch(
+          /*queryFilter=*/std::nullopt,
+          /*ds=*/std::nullopt,
+          core::JoinType::kLeft));
+
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(
+          lp::JoinType::kInner,
+          "q.ds = p.ds AND q.name LIKE 'red%' AND p.ds > '2026-01-01'")),
+      matchCentroidsSearch(
+          /*queryFilter=*/"name LIKE 'red%'",
+          /*ds=*/"> '2026-01-01'",
+          core::JoinType::kInner));
 }
 
 // A deterministic filter on the queries' columns applies to the queries before
@@ -476,6 +556,22 @@ TEST_F(VectorSearchTest, errors) {
       "A vector search may filter its table only on partition columns");
   EXPECT_NO_THROW(toSingleNodePlan(
       parseSelect(searchQuery("codec_id", "named_like_storage", {}))));
+
+  // A search of the centroids is keyed only by the day and the codec id.
+  const lp::PlanBuilder::VectorSearch centroids{
+      .probeEmbedding = "embedding",
+      .buildEmbedding = "centroid",
+      .k = 1,
+      .scoreName = "score"};
+  const auto centroidsTable =
+      plans.newPlan().tableScan("products$product_index$centroids").as("p");
+  VELOX_ASSERT_THROW(
+      search(
+          centroidsTable,
+          "length(q.name) = p.cluster_id",
+          lp::JoinType::kInner,
+          centroids),
+      "supports keys only on its partition columns and codec_id");
 }
 
 // A search reads the index the hint names. Without a hint, it reads the only

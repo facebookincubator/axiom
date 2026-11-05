@@ -116,6 +116,11 @@ VectorIndexProperties VectorIndexProperties::extract(
       "Vector index property must be positive: {}",
       kNumClusters);
 
+  const auto dimension =
+      toInteger(takeRequired(properties, kDimension), kDimension);
+  VELOX_USER_CHECK_GT(
+      dimension, 0, "Vector index property must be positive: {}", kDimension);
+
   auto codecPolicy = VectorIndexCodecPolicy::kPerPartition;
   if (auto value = take(properties, kCodecPolicy)) {
     const auto policyName = toString(*value, kCodecPolicy);
@@ -150,6 +155,7 @@ VectorIndexProperties VectorIndexProperties::extract(
       .metric = *metric,
       .indexKind = *indexKind,
       .numClusters = numClusters,
+      .dimension = dimension,
       .codecPolicy = codecPolicy,
       .indexOptions = std::move(indexOptions),
   };
@@ -157,8 +163,8 @@ VectorIndexProperties VectorIndexProperties::extract(
 
 namespace {
 
-// Checks that no partition column takes the name of a column the codec or
-// index table adds.
+// Checks that no partition column takes the name of a column the codec,
+// index or centroids table adds.
 void checkPartitionColumnNames(const velox::RowTypePtr& partitionColumns) {
   for (const auto& name : partitionColumns->names()) {
     for (const auto reserved :
@@ -166,7 +172,8 @@ void checkPartitionColumnNames(const velox::RowTypePtr& partitionColumns) {
           VectorIndex::kCodecId,
           VectorIndex::kClusterId,
           VectorIndex::kGroupId,
-          VectorIndex::kLocalIndex}) {
+          VectorIndex::kLocalIndex,
+          VectorIndex::kCentroid}) {
       VELOX_USER_CHECK(
           name != reserved,
           "Vector index partition column name is reserved: {}",
@@ -195,6 +202,42 @@ velox::RowTypePtr VectorIndex::indexTableType(
                      {std::string(kGroupId), velox::BIGINT()},
                      {std::string(kLocalIndex), velox::VECTOR_INDEX()}})
       ->unionWith(partitionColumns);
+}
+
+// static
+SchemaTableName VectorIndex::centroidsTableName(
+    const SchemaTableName& table,
+    std::string_view name) {
+  return {
+      table.schema,
+      fmt::format("{}${}{}", table.table, name, kCentroidsSuffix)};
+}
+
+// static
+std::optional<std::pair<SchemaTableName, std::string>>
+VectorIndex::parseCentroidsTableName(const SchemaTableName& name) {
+  if (!name.table.ends_with(kCentroidsSuffix)) {
+    return std::nullopt;
+  }
+  const std::string_view tableAndIndex{
+      name.table.data(), name.table.size() - kCentroidsSuffix.size()};
+  const auto separator = tableAndIndex.rfind('$');
+  if (separator == std::string_view::npos || separator == 0 ||
+      separator + 1 == tableAndIndex.size()) {
+    return std::nullopt;
+  }
+  return std::make_pair(
+      SchemaTableName{
+          name.schema, std::string(tableAndIndex.substr(0, separator))},
+      std::string(tableAndIndex.substr(separator + 1)));
+}
+
+velox::RowTypePtr VectorIndex::centroidColumns() const {
+  return partitionColumns->unionWith(
+      velox::ROW(
+          {{std::string(kCodecId), velox::BIGINT()},
+           {std::string(kClusterId), velox::BIGINT()},
+           {std::string(kCentroid), velox::ARRAY(velox::REAL())}}));
 }
 
 } // namespace facebook::axiom::connector

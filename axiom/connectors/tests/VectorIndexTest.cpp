@@ -31,6 +31,7 @@ Properties requiredProperties() {
       {"distance_metric", Variant("cosine")},
       {"index_type", Variant("ivf_flat")},
       {"num_clusters", Variant(int32_t{10})},
+      {"dimension", Variant(int32_t{768})},
   };
 }
 
@@ -52,6 +53,7 @@ TEST(VectorIndexTest, extract) {
       {"distance_metric", Variant("cosine")},
       {"index_type", Variant("ivf_flat")},
       {"num_clusters", Variant(int32_t{10})},
+      {"dimension", Variant(int32_t{768})},
       {"codec_policy", Variant("shared")},
       {"index_options", Variant::map({{Variant("ivf.nlist"), Variant("4")}})},
       {"partitioned_by", Variant::array({Variant("ds")})},
@@ -61,6 +63,7 @@ TEST(VectorIndexTest, extract) {
           .metric = common::vectorindex::VectorIndexMetric::kCosine,
           .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
           .numClusters = 10,
+          .dimension = 768,
           .codecPolicy = VectorIndexCodecPolicy::kShared,
           .indexOptions = {{"ivf.nlist", "4"}},
       }),
@@ -76,7 +79,8 @@ TEST(VectorIndexTest, extract) {
 
 TEST(VectorIndexTest, extractErrors) {
   const auto required = requiredProperties();
-  for (const auto* name : {"distance_metric", "index_type", "num_clusters"}) {
+  for (const auto* name :
+       {"distance_metric", "index_type", "num_clusters", "dimension"}) {
     SCOPED_TRACE(name);
     auto properties = required;
     properties.erase(name);
@@ -93,6 +97,9 @@ TEST(VectorIndexTest, extractErrors) {
   VELOX_ASSERT_THROW(
       extract(with(required, "num_clusters", Variant(int64_t{0}))),
       "Vector index property must be positive: num_clusters");
+  VELOX_ASSERT_THROW(
+      extract(with(required, "dimension", Variant(int64_t{0}))),
+      "Vector index property must be positive: dimension");
   VELOX_ASSERT_THROW(
       extract(with(required, "num_clusters", Variant("10"))),
       "Vector index property must be an integer: num_clusters");
