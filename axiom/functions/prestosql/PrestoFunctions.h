@@ -20,6 +20,7 @@
 #include <string_view>
 
 #include "axiom/optimizer/FunctionRegistry.h"
+#include "velox/common/vectorindex/LocalVectorIndex.h"
 
 namespace facebook::axiom::functions::prestosql {
 
@@ -42,6 +43,13 @@ class PrestoFunctions {
   /// Shortcut for creating a registry and calling registerAll() on it with no
   /// prefix.
   static std::shared_ptr<optimizer::FunctionRegistry> makeRegistry();
+
+  /// Returns the formats of the vector indexes Presto functions build: "faiss",
+  /// the format of vector_index_build and vector_index_pack. A query that
+  /// searches such indexes has them on its QueryCtx (see
+  /// velox::common::vectorindex::LocalVectorIndexFormat::kRegistryKey).
+  static std::shared_ptr<velox::common::vectorindex::LocalVectorIndexFormats>
+  makeVectorIndexFormats();
 };
 
 } // namespace facebook::axiom::functions::prestosql

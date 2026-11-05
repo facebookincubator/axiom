@@ -140,6 +140,7 @@ target_link_libraries(
   velox_expression
   velox_type
   velox_vector
+  velox_vector_index
 )
 
 add_subdirectory(v1)
