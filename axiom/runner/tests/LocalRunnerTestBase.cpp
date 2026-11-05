@@ -26,11 +26,6 @@
 
 namespace facebook::axiom::runner::test {
 
-void LocalRunnerTestBase::SetUpTestCase() {
-  HiveConnectorTestBase::SetUpTestCase();
-  executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
-}
-
 void LocalRunnerTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
 

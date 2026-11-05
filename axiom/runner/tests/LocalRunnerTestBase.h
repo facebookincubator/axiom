@@ -40,8 +40,6 @@ struct TableSpec {
 /// of multiple Google unit test cases.
 class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
  protected:
-  static void SetUpTestCase();
-
   void SetUp() override;
 
   void TearDown() override;
@@ -64,7 +62,6 @@ class LocalRunnerTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   inline static std::shared_ptr<velox::common::testutil::TempDirectoryPath>
       tempDirectory_;
-  inline static std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
 };
 
 } // namespace facebook::axiom::runner::test
