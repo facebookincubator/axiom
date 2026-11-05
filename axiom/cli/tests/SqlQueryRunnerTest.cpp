@@ -377,6 +377,48 @@ CO_TEST_F(SqlQueryRunnerTest, coRunEarlyStop) {
       result.results.front(), makeRowVector({makeFlatVector<int32_t>({2})}));
 }
 
+CO_TEST_F(SqlQueryRunnerTest, overlappingQueries) {
+  // A query runs to completion while another query on the same runner is still
+  // streaming, and the streaming query then delivers all of its rows.
+  constexpr int64_t kNumRows = 100'000;
+  testConnector_->addTable("t", ROW("c", BIGINT()))
+      ->addData(makeRowVector({makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return static_cast<int64_t>(row); })}));
+
+  int64_t numRowsRead{0};
+  {
+    auto&& [generator] = co_await folly::coro::co_scope_exit(
+        folly::coro::co_cleanup, runner_->co_run("SELECT c FROM t", {}));
+    auto first = co_await generator.next();
+    CO_ASSERT_TRUE(first.has_value());
+    CO_ASSERT_NE(first->batch, nullptr);
+    numRowsRead = first->batch->size();
+
+    {
+      auto&& [countGenerator] = co_await folly::coro::co_scope_exit(
+          folly::coro::co_cleanup,
+          runner_->co_run("SELECT count(*) FROM t", {}));
+      std::vector<RowVectorPtr> countBatches;
+      while (auto chunk = co_await countGenerator.next()) {
+        if (chunk->batch != nullptr) {
+          countBatches.push_back(std::move(chunk->batch));
+        }
+      }
+      CO_ASSERT_EQ(countBatches.size(), 1);
+      test::assertEqualVectors(
+          countBatches.front(),
+          makeRowVector({makeFlatVector<int64_t>({kNumRows})}));
+    }
+
+    while (auto chunk = co_await generator.next()) {
+      if (chunk->batch != nullptr) {
+        numRowsRead += chunk->batch->size();
+      }
+    }
+  }
+  EXPECT_EQ(numRowsRead, kNumRows);
+}
+
 TEST_F(SqlQueryRunnerTest, coRunRowCountAcrossChunks) {
   // A multi-row SELECT is delivered as one or more batch chunks; the row count
   // summed across chunks and the reported numOutputRows both match the input.
