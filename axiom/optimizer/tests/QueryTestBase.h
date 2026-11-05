@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnector.h"
@@ -477,7 +476,6 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   inline static int32_t gQueryCounter{0};
   inline static std::unique_ptr<v1::VeloxHistory> gSuiteHistory;
-  std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   inline static std::shared_ptr<optimizer::FunctionRegistry> functionRegistry_;
 };
 

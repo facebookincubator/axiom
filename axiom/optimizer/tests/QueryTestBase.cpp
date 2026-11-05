@@ -68,8 +68,6 @@ void QueryTestBase::TearDownTestCase() {
 void QueryTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
 
-  executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(4);
-
   velox::exec::ExchangeSource::factories().clear();
   velox::exec::ExchangeSource::registerFactory(
       velox::exec::test::createLocalExchangeSource);
@@ -122,11 +120,6 @@ void QueryTestBase::TearDown() {
   }
   queryCtx_.reset();
   connectorContext_.reset();
-  velox::exec::test::waitForAllTasksToBeDeleted();
-  // Exchange callbacks can retain query pools after their Tasks are deleted.
-  // Drain them before the base fixture resets the memory manager.
-  executor_->join();
-  executor_.reset();
   optimizerPool_.reset();
   connector::ConnectorMetadataRegistry::global().erase(kTestConnectorId);
   velox::connector::unregisterConnector(kTestConnectorId);
