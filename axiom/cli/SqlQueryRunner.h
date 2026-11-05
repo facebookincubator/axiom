@@ -590,8 +590,9 @@ class SqlQueryRunner {
       bool explain);
 
   // Creates a query context over this runner's execution state. The context
-  // owns a root memory pool of its own. The context must not outlive the
-  // runner.
+  // owns a root memory pool of its own, capped by the
+  // execution.query_max_memory_per_node session property (uncapped when 0B).
+  // The context must not outlive the runner.
   std::shared_ptr<facebook::velox::core::QueryCtx> newQuery(
       const RunOptions& options);
 
