@@ -1625,7 +1625,7 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
       velox::core::QueryConfig(std::move(queryConfig)),
       std::move(connectorConfigs),
       velox::cache::AsyncDataCache::getInstance(),
-      rootPool_->shared_from_this(),
+      /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,
       queryId,
       options.tokenProvider);
