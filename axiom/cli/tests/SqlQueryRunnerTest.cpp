@@ -781,6 +781,51 @@ TEST_F(SqlQueryRunnerTest, showCreateTable) {
         "COMMENT 'it''s a table'");
   }
 
+  {
+    // Vector indexes are shown with all their settings, so the output
+    // recreates them.
+    run("CREATE TABLE t4 ("
+        "  id BIGINT, "
+        "  e ARRAY(REAL), "
+        "  VECTOR INDEX i (e) KEY (id) WITH ("
+        "    distance_metric = 'cosine', "
+        "    index_type = 'ivf_flat', "
+        "    num_clusters = 4, "
+        "    dimension = 2, "
+        "    index_options = MAP(ARRAY['ivf.nlist'], ARRAY['2'])), "
+        "  VECTOR INDEX j (e) KEY (id) WITH ("
+        "    distance_metric = 'cosine', "
+        "    index_type = 'flat', "
+        "    num_clusters = 8, "
+        "    dimension = 2))");
+    const auto ddl = fetchSingleValue<std::string>("SHOW CREATE TABLE t4");
+    EXPECT_EQ(
+        ddl,
+        "CREATE TABLE test.\"default\".\"t4\" (\n"
+        "   id bigint,\n"
+        "   e array(real),\n"
+        "   VECTOR INDEX i (e) KEY (id) WITH (\n"
+        "      codec_policy = 'per_partition',\n"
+        "      dimension = 2,\n"
+        "      distance_metric = 'cosine',\n"
+        "      index_options = MAP(ARRAY['ivf.nlist'], ARRAY['2']),\n"
+        "      index_type = 'ivf_flat',\n"
+        "      num_clusters = 4\n"
+        "   ),\n"
+        "   VECTOR INDEX j (e) KEY (id) WITH (\n"
+        "      codec_policy = 'per_partition',\n"
+        "      dimension = 2,\n"
+        "      distance_metric = 'cosine',\n"
+        "      index_type = 'flat',\n"
+        "      num_clusters = 8\n"
+        "   )\n"
+        ")");
+
+    run("DROP TABLE t4");
+    run(ddl);
+    EXPECT_EQ(ddl, fetchSingleValue<std::string>("SHOW CREATE TABLE t4"));
+  }
+
   // Non-existent table.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       run("SHOW CREATE TABLE no_such_table"), "Table not found");
@@ -798,6 +843,49 @@ TEST_F(SqlQueryRunnerTest, describe) {
           {"extra", makeAllNullFlatVector<StringView>(2)},
           {"comment",
            makeNullableFlatVector<std::string>({"the key", std::nullopt})},
+      }));
+
+  // The extra info of an embedding column names its vector indexes.
+  run("CREATE TABLE u ("
+      "  id BIGINT, "
+      "  e ARRAY(REAL), "
+      "  VECTOR INDEX i (e) KEY (id) WITH ("
+      "    distance_metric = 'cosine', "
+      "    index_type = 'flat', "
+      "    num_clusters = 4, "
+      "    dimension = 2), "
+      "  VECTOR INDEX j (e) KEY (id) WITH ("
+      "    distance_metric = 'cosine', "
+      "    index_type = 'flat', "
+      "    num_clusters = 8, "
+      "    dimension = 2))");
+  result = run("DESCRIBE u");
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeNamedRowVector({
+          {"column", makeFlatVector<std::string>({"id", "e"})},
+          {"type", makeFlatVector<std::string>({"BIGINT", "ARRAY<REAL>"})},
+          {"extra",
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, "vector index i, vector index j"})},
+          {"comment", makeAllNullFlatVector<StringView>(2)},
+      }));
+
+  // A view's columns have no extra info or comments.
+  testConnector_->createView(
+      facebook::axiom::SchemaTableName{kDefaultSchema, "v"},
+      ROW("a", INTEGER()),
+      "SELECT 1 AS a");
+  result = run("DESCRIBE v");
+  ASSERT_EQ(1, result.results.size());
+  test::assertEqualVectors(
+      result.results[0],
+      makeNamedRowVector({
+          {"column", makeFlatVector<std::string>({"a"})},
+          {"type", makeFlatVector<std::string>({"INTEGER"})},
+          {"extra", makeAllNullFlatVector<StringView>(1)},
+          {"comment", makeAllNullFlatVector<StringView>(1)},
       }));
 }
 

@@ -58,23 +58,30 @@ TEST(VectorIndexTest, extract) {
       {"index_options", Variant::map({{Variant("ivf.nlist"), Variant("4")}})},
       {"partitioned_by", Variant::array({Variant("ds")})},
   };
-  EXPECT_EQ(
-      (VectorIndexProperties{
-          .metric = common::vectorindex::VectorIndexMetric::kCosine,
-          .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
-          .numClusters = 10,
-          .dimension = 768,
-          .codecPolicy = VectorIndexCodecPolicy::kShared,
-          .indexOptions = {{"ivf.nlist", "4"}},
-      }),
-      VectorIndexProperties::extract(properties));
+  const VectorIndexProperties expected{
+      .metric = common::vectorindex::VectorIndexMetric::kCosine,
+      .indexKind = common::vectorindex::VectorIndexKind::kIvfFlat,
+      .numClusters = 10,
+      .dimension = 768,
+      .codecPolicy = VectorIndexCodecPolicy::kShared,
+      .indexOptions = {{"ivf.nlist", "4"}},
+  };
+  EXPECT_EQ(expected, VectorIndexProperties::extract(properties));
   ASSERT_EQ(1, properties.size());
   EXPECT_TRUE(properties.contains("partitioned_by"));
 
   // The codec policy defaults to per partition.
-  EXPECT_EQ(
-      VectorIndexCodecPolicy::kPerPartition,
-      extract(requiredProperties()).codecPolicy);
+  const auto defaults = extract(requiredProperties());
+  EXPECT_EQ(VectorIndexCodecPolicy::kPerPartition, defaults.codecPolicy);
+
+  // toProperties() gives back exactly what extract() reads, leaving out
+  // 'index_options' when there are none.
+  for (const auto& original : {expected, defaults}) {
+    auto roundTrip = original.toProperties();
+    EXPECT_EQ(original, VectorIndexProperties::extract(roundTrip));
+    EXPECT_TRUE(roundTrip.empty());
+  }
+  EXPECT_FALSE(defaults.toProperties().contains("index_options"));
 }
 
 TEST(VectorIndexTest, extractErrors) {

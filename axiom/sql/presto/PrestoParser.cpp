@@ -2610,14 +2610,29 @@ SqlStatementPtr parseShowColumns(
   std::vector<Variant> data;
   data.reserve(schema->size());
   for (uint32_t i = 0; i < schema->size(); ++i) {
-    const auto* column =
-        table != nullptr ? table->findColumn(schema->nameOf(i)) : nullptr;
+    const auto& name = schema->nameOf(i);
+    auto extra = Variant::null(TypeKind::VARCHAR);
+    auto comment = Variant::null(TypeKind::VARCHAR);
+    if (table != nullptr) {
+      const auto* column = table->findColumn(name);
+      // What the connector says about the column, then the vector indexes of
+      // its embeddings.
+      std::vector<std::string> notes;
+      if (column->extraInfo().has_value()) {
+        notes.push_back(column->extraInfo().value());
+      }
+      for (const auto& index : table->vectorIndexes()) {
+        if (index->embeddingColumn == name) {
+          notes.push_back(fmt::format("vector index {}", index->name));
+        }
+      }
+      if (!notes.empty()) {
+        extra = Variant(folly::join(", ", notes));
+      }
+      comment = toVariant(column->comment());
+    }
     data.emplace_back(
-        Variant::row(
-            {schema->nameOf(i),
-             schema->childAt(i)->toString(),
-             toVariant(column != nullptr ? column->extraInfo() : std::nullopt),
-             toVariant(column != nullptr ? column->comment() : std::nullopt)}));
+        Variant::row({name, schema->childAt(i)->toString(), extra, comment}));
   }
 
   lp::PlanBuilder::Context ctx(defaultConnectorId);
@@ -2661,11 +2676,46 @@ std::string variantToSql(const Variant& value) {
       }
       return fmt::format("ARRAY[{}]", folly::join(", ", formatted));
     }
+    case TypeKind::MAP: {
+      const auto& entries = value.map();
+      std::vector<std::string> keys;
+      std::vector<std::string> values;
+      keys.reserve(entries.size());
+      values.reserve(entries.size());
+      for (const auto& [entryKey, entryValue] : entries) {
+        keys.push_back(variantToSql(entryKey));
+        values.push_back(variantToSql(entryValue));
+      }
+      return fmt::format(
+          "MAP(ARRAY[{}], ARRAY[{}])",
+          folly::join(", ", keys),
+          folly::join(", ", values));
+    }
     default:
       VELOX_UNSUPPORTED(
           "Unsupported Variant kind in WITH clause: {}",
           TypeKindName::toName(value.kind()));
   }
+}
+
+// Formats 'properties' as the 'name = value' items of a WITH clause, sorted by
+// name for deterministic output.
+std::vector<std::string> withClauseItems(
+    const folly::F14FastMap<std::string, Variant>& properties) {
+  std::vector<std::string> names;
+  names.reserve(properties.size());
+  for (const auto& [name, value] : properties) {
+    names.push_back(name);
+  }
+  std::sort(names.begin(), names.end());
+
+  std::vector<std::string> items;
+  items.reserve(names.size());
+  for (const auto& name : names) {
+    items.push_back(
+        fmt::format("{} = {}", name, variantToSql(properties.at(name))));
+  }
+  return items;
 }
 
 SqlStatementPtr parseShowCreateTable(
@@ -2703,30 +2753,23 @@ SqlStatementPtr parseShowCreateTable(
     ddl << ",\n   PRIMARY KEY (" << folly::join(", ", table->primaryKey())
         << ")";
   }
+  for (const auto& index : table->vectorIndexes()) {
+    ddl << ",\n   VECTOR INDEX " << index->name << " ("
+        << index->embeddingColumn << ") KEY (" << index->keyColumn
+        << ") WITH (\n      "
+        << folly::join(
+               ",\n      ", withClauseItems(index->properties.toProperties()))
+        << "\n   )";
+  }
   ddl << "\n)";
 
   if (table->comment().has_value()) {
     ddl << "\nCOMMENT " << variantToSql(Variant(table->comment().value()));
   }
 
-  // WITH clause from table options, sorted by key for deterministic output.
   if (!options.empty()) {
-    std::vector<std::string> sortedKeys;
-    sortedKeys.reserve(options.size());
-    for (const auto& [key, value] : options) {
-      sortedKeys.push_back(key);
-    }
-    std::sort(sortedKeys.begin(), sortedKeys.end());
-
-    ddl << "\nWITH (\n";
-    for (auto i = 0; i < sortedKeys.size(); ++i) {
-      if (i > 0) {
-        ddl << ",\n";
-      }
-      ddl << "   " << sortedKeys[i] << " = "
-          << variantToSql(options.at(sortedKeys[i]));
-    }
-    ddl << "\n)";
+    ddl << "\nWITH (\n   " << folly::join(",\n   ", withClauseItems(options))
+        << "\n)";
   }
 
   return std::make_shared<SelectStatement>(
