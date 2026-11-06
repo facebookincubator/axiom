@@ -802,7 +802,7 @@ void GroupByPlanner::rewritePostAggregateExprs(
   // GROUPING() resolution introduces Col(kGroupingSetIdColumn) references.
   // Add an identity mapping so replaceInputs passes them through.
   if (groupingSetsIndices_.size() > 1) {
-    auto groupingSetIdCol = lp::Col(std::string(kGroupingSetIdColumn)).expr();
+    auto groupingSetIdCol = lp::Col(kGroupingSetIdColumn).expr();
     keyInputs.emplace(groupingSetIdCol, groupingSetIdCol);
   }
 
@@ -1093,7 +1093,7 @@ core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
                lp::Lit(Variant::array(std::move(bitmaskValues))),
                lp::Call(
                    "plus",
-                   lp::Col(std::string(kGroupingSetIdColumn)),
+                   lp::Col(kGroupingSetIdColumn),
                    lp::Lit(static_cast<int64_t>(1))))
         .expr();
   }

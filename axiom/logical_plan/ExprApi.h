@@ -16,6 +16,7 @@
 #pragma once
 
 #include <optional>
+#include <string_view>
 #include "axiom/logical_plan/Expr.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/IExpr.h"
@@ -378,9 +379,9 @@ inline ExprApi Lit(T&& val) {
   return Lit(velox::Variant(std::forward<T>(val)));
 }
 
-ExprApi Col(std::string name);
+ExprApi Col(std::string_view name);
 
-ExprApi Col(std::string name, const ExprApi& input);
+ExprApi Col(std::string_view name, const ExprApi& input);
 
 ExprApi Call(std::string name, const std::vector<ExprApi>& args);
 
