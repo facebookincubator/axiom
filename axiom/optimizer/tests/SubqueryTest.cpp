@@ -558,15 +558,14 @@ TEST_P(SubqueryTest, repeatedUncorrelatedScalarInUnion) {
   auto plan = toSingleNodePlan(query);
   AXIOM_ASSERT_PLAN_V2(
       plan,
-      matchHiveScan("nation")
-          .aliases({"inner_name", "inner_comment"})
+      matchHiveScan("nation", {}, "n_name >= n_comment")
+          .aliases({"inner_name"})
           .hashJoinInner(
               matchHiveScan("region")
                   .aliases({"inner_region_name"})
                   .singleAggregation(
                       {}, {"max(inner_region_name) as inner_max"}),
-              {.keys = {{"inner_name = inner_max"}},
-               .filter = "inner_name >= inner_comment"})
+              {.keys = {{"inner_name = inner_max"}}, .filter = ""})
           .project({"inner_name as union_name"})
           .localPartition(matchHiveScan("region")
                               .aliases({"union_region_name"})

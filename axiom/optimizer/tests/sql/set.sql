@@ -342,3 +342,26 @@ WHERE EXISTS (
   UNION
   SELECT 1 FROM t WHERE t.a = u.a AND t.b > 1000)
 ----
+-- An INTERSECT ALL keyed twice on one column keeps the rows whose two columns
+-- hold one value, NULL included, so the INTERSECT ALL above still matches them.
+-- duckdb: VALUES (2, 2), (2, 2), (NULL, NULL)
+SELECT a, b
+FROM (
+  SELECT a, b FROM (VALUES (2, 2), (2, 2), (1, 2), (NULL, NULL)) AS t(a, b)
+  INTERSECT ALL
+  SELECT x, x FROM (VALUES (2), (2), (NULL)) AS u(x)
+) q
+INTERSECT ALL
+SELECT k, m FROM (VALUES (2, 2), (2, 2), (NULL, NULL)) AS v(k, m)
+----
+-- EXCEPT ALL keeps the rows its right input has fewer copies of, so only its
+-- left input's filter holds for the join above.
+-- duckdb: VALUES (1), (2)
+SELECT q.a
+FROM (
+  SELECT a FROM (VALUES (1), (1), (2)) AS t(a)
+  EXCEPT ALL
+  SELECT x FROM (VALUES (1), (3)) AS u(x)
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.a = v.k
+----

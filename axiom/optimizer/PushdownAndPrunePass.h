@@ -46,10 +46,14 @@ namespace facebook::axiom::optimizer {
 /// identities with a `Project`; these include `TableWrite` inputs and each
 /// `FixedPoint` branch. Root substitutions are returned to the pipeline as its
 /// new output schema.
-/// Before rewriting a join, the pass may make one read-only walk over its
-/// inputs to collect predicates guaranteed by those inputs. Nested joins cache
-/// completed collection results, including empty results, so every tree
-/// occurrence is visited at most once for collection and once for rewriting.
+/// Before rewriting a join, the pass makes a read-only walk over its inputs to
+/// collect the facts they guarantee. A join's facts are cached per join type:
+/// conditions on its rows can make an outer join left, right or inner, or a
+/// semi join that projects a mark a filtering one, so a join has at most four
+/// types. Only joins read those conditions, and a node passes its input only
+/// its own conditions or none, so the facts of any other node depend only on
+/// the node and the columns requested from it. Every walk requests the same
+/// columns from a node, so these facts are cached too and computed once.
 /// Collection neither constructs plan nodes nor consults connectors.
 ///
 /// Notable per-node behavior:
