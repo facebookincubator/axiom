@@ -337,7 +337,7 @@ DROP TABLE t;
 
 ### Vector indexes
 
-See "Vector Indexes" in `axiom/sql/presto/docs/PrestoSqlExtensions.md` for
+See [VectorIndexes.md](../../sql/presto/docs/VectorIndexes.md) for
 adding, refreshing and dropping indexes and for `vector_search`. This section
 covers how the local Hive connector stores an index.
 

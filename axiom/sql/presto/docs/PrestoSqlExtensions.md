@@ -1,8 +1,15 @@
 # Presto SQL Extensions
 
-Axiom extends Presto SQL with several features not available in Presto Java.
-These are Axiom-specific syntax additions that go beyond the standard Presto
-SQL dialect.
+Axiom extends Presto SQL with features not available in Presto Java:
+
+- [Friendly SQL](#friendly-sql): conveniences inspired by DuckDB, such as
+  trailing commas, FROM-first syntax and `SELECT * EXCLUDE`.
+- [Named WINDOW clause](#named-window-clause).
+- [EXCEPT ALL / INTERSECT ALL](#except-all--intersect-all).
+- [EXPLAIN (TYPE OPTIMIZED)](#explain-type-optimized).
+- [Vector indexes](VectorIndexes.md): statements to add, build and drop vector
+  indexes on tables, and the `vector_search` table function.
+- [Graph queries](GraphQueries.md): SQL/PGQ `GRAPH_TABLE` and `WITH GRAPH`.
 
 ## Friendly SQL
 
@@ -16,15 +23,15 @@ Friendly SQL features:
 
 | Feature | Example |
 |---------|---------|
-| Named ROW constructor | `ROW(1 AS id, 'Alice' AS name)` |
-| Trailing commas in SELECT, WITH, VALUES | `SELECT a, b, FROM t` |
-| FROM-first syntax | `FROM t WHERE x = 1` |
-| Digit separators | `SELECT 1_000_000` |
-| Method-call syntax | `'hello'.upper().substr(1, 3)` |
-| Lateral column aliases | `SELECT i+1 AS j, j+2 AS k` |
-| EXCLUDE | `SELECT * EXCLUDE (col1, col2) FROM t` |
-| REPLACE | `SELECT * REPLACE (expr AS col) FROM t` |
-| COLUMNS | `SELECT COLUMNS('regex') FROM t` |
+| [Named ROW constructor](#named-row-constructor) | `ROW(1 AS id, 'Alice' AS name)` |
+| [Trailing commas](#trailing-commas) in SELECT, WITH, VALUES | `SELECT a, b, FROM t` |
+| [FROM-first syntax](#from-first-syntax) | `FROM t WHERE x = 1` |
+| [Underscores in numeric literals](#underscores-in-numeric-literals) | `SELECT 1_000_000` |
+| [Method-call syntax](#method-call-syntax-for-function-chaining) | `'hello'.upper().substr(1, 3)` |
+| [Lateral column aliases](#lateral-column-aliases) | `SELECT i+1 AS j, j+2 AS k` |
+| [EXCLUDE](#select--exclude) | `SELECT * EXCLUDE (col1, col2) FROM t` |
+| [REPLACE](#select--replace) | `SELECT * REPLACE (expr AS col) FROM t` |
+| [COLUMNS](#select-columns) | `SELECT COLUMNS('regex') FROM t` |
 
 ## Named WINDOW Clause
 
@@ -456,281 +463,3 @@ EXPLAIN (TYPE OPTIMIZED WITH (last_pass = 'pass_name')) query
 ```
 
 See `axiom/optimizer/docs/OptimizerPasses.md` for the passes.
-
-## Vector Indexes
-
-A vector index finds the rows of a table whose embeddings are nearest to a
-query embedding. It belongs to a table and indexes one of its `ARRAY(REAL)`
-columns. Axiom adds statements to add, build and drop indexes, and the
-`vector_search` table function to search through them. The connector decides
-how an index is stored; see `axiom/connectors/hive/README.md` for the local
-Hive connector.
-
-### Adding and dropping indexes
-
-`CREATE TABLE` declares indexes as elements, and `ALTER TABLE` adds and drops
-them:
-
-```sql
-CREATE TABLE products (
-    id BIGINT,
-    embedding ARRAY(REAL),
-    ds VARCHAR,
-    PRIMARY KEY (id),
-    VECTOR INDEX product_index (embedding) WITH (
-        distance_metric = 'cosine',
-        index_type = 'flat',
-        num_clusters = 1000,
-        dimension = 768))
-WITH (partitioned_by = ARRAY['ds'])
-
-ALTER TABLE products ADD VECTOR INDEX product_ivf (embedding) KEY (id)
-WITH (distance_metric = 'cosine', index_type = 'ivf_flat',
-      num_clusters = 1000, dimension = 768)
-
-ALTER TABLE products DROP VECTOR INDEX product_ivf
-```
-
-The syntax:
-
-```
-VECTOR INDEX name (column) [KEY (column, ...)] [WITH (property = value, ...)]
-
-ALTER TABLE [IF EXISTS] table ADD VECTOR INDEX [IF NOT EXISTS]
-    name (column) [KEY (column, ...)] [WITH (property = value, ...)]
-
-ALTER TABLE [IF EXISTS] table DROP VECTOR INDEX [IF EXISTS] name
-```
-
-The first is an element of `CREATE TABLE`, alongside the columns.
-
-- `KEY` names the columns a search returns for each match, which find the row
-  it came from. It defaults to the table's primary key, must name the primary
-  key when the table has one, and is required when the table has none. For
-  now, the key must be one `BIGINT` column.
-- A table may have several indexes, on the same column too. Index names are
-  unique within the table.
-- The index's partitions are the table's. A partition column may not be named
-  `codec`, `codec_id`, `cluster_id`, `group_id`, `local_index` or `centroid`:
-  the index's storage uses these names.
-
-The index's properties:
-
-- `distance_metric`, required: `cosine`, the only metric supported so far.
-  The metric decides which embeddings are nearest, so an index answers
-  searches under the metric it was built with.
-- `index_type`, required: `flat`, `ivf_flat`, `ivf_sq` or `hnsw_sq`.
-- `num_clusters`, required: the number of clusters each partition's
-  embeddings are grouped into, a positive integer.
-- `dimension`, required: the length of every embedding, a positive integer.
-- `codec_policy`, optional: `per_partition` (the default), where each refresh
-  trains its own clusters, or `shared`, where later refreshes reuse the
-  clusters of the latest partition.
-- `index_options`, optional: a `MAP(VARCHAR, VARCHAR)` of local index
-  settings, listed below.
-
-Any other property applies to the tables that store the index, which the
-connector defines.
-
-The local index settings take positive integer values. Each applies only to
-the index types listed. An unset setting takes a default that depends on the
-number of embeddings in the local index. A search setting set on the index is
-the default for searches, which a `vector_search` hint overrides.
-
-| Setting | Index types | Used by | Meaning |
-|---|---|---|---|
-| `ivf.nlist` | `ivf_flat`, `ivf_sq` | build | The number of lists of the IVF index. |
-| `ivf.nprobe` | `ivf_flat`, `ivf_sq` | search | The number of lists a search scans. |
-| `hnsw.M` | `hnsw_sq` | build | The number of neighbors of each embedding in the graph, from 2 to 256. |
-| `hnsw.efConstruction` | `hnsw_sq` | build | The number of candidates a build explores. |
-| `hnsw.efSearch` | `hnsw_sq` | search | The number of candidates a search explores. |
-
-### REFRESH VECTOR INDEX
-
-```sql
-REFRESH VECTOR INDEX product_index ON products WHERE ds = '2026-10-31'
-```
-
-Builds the index for the partitions of the table the condition selects. The
-refresh is one index write, which runs two plans in order:
-
-1. For each partition, trains a codec: k-means over a sample of the
-   partition's rows, which finds the clusters.
-2. Assigns each row to the nearest cluster of its partition's codec, and
-   builds a local index for each cluster.
-
-The result is the number of embeddings written. `EXPLAIN` shows both plans.
-The refresh skips a row whose key is `NULL`, or whose embedding is `NULL`, has
-a `NULL`, `NaN` or infinite element, is all zeros, or has a length other than
-`dimension`. A valid row with a `NULL` partition value fails the refresh.
-
-Not supported yet:
-
-- Refreshing a partition the index already covers.
-- An index with `codec_policy = 'shared'`.
-- An index of a table with no partition columns.
-
-### vector_search
-
-The `vector_search` table function finds the rows of a table nearest to each
-query embedding, through one of its vector indexes.
-
-```sql
-SELECT q.name, p.id, similarity
-FROM TABLE(vector_search(
-    queries => TABLE(SELECT name, embedding FROM new_products) AS q,
-    corpus => TABLE(SELECT * FROM products WHERE ds = '2026-09-30') AS p,
-    embeddings => DESCRIPTOR(embedding),
-    metric => 'cosine',
-    k => 10,
-    score => DESCRIPTOR(similarity),
-    hints => MAP(ARRAY['num_probes'], ARRAY['50'])))
-```
-
-Its arguments are named:
-
-- `queries`: a table of the embeddings to search for. Or `query`: one
-  `ARRAY(REAL)` expression.
-- `corpus`: the table to search, `TABLE(name)`, or
-  `TABLE(SELECT * FROM name WHERE <predicate>)` to search only the partitions
-  the predicate selects. The predicate may use only partition columns.
-- `embeddings`: the columns to compare, `DESCRIPTOR(query column, corpus
-  column)`. `DESCRIPTOR(column)` names a column both sides have, or only the
-  corpus's column with `query`.
-- `metric`: how to compare embeddings, such as `'cosine'`. The search reads an
-  index on the corpus's column with this metric.
-- `k`: a positive integer literal, the number of matches per query.
-- `score`, optional: `DESCRIPTOR(column)` adds a `REAL` column with each match's
-  score under that name. A larger score is nearer.
-- `hints`, optional: how the search runs, a `MAP(ARRAY[...], ARRAY[...])` of
-  `VARCHAR` literals:
-  - `index`: the index to search. Without it, the first by name of the corpus's
-    indexes on the column with the metric.
-  - `num_probes`: the number of clusters nearest to each query to search in
-    each partition. Defaults to a tenth of the clusters.
-  - the search settings of the index's local indexes, `ivf.nprobe` and
-    `hnsw.efSearch` (see the settings above).
-
-A table argument may have an alias, as in `TABLE(new_products) AS q`, and
-column names, which rename its columns by position and must name all of them:
-`TABLE(SELECT name, embedding FROM new_products) AS q(product, embedding)`.
-
-The result has the score, if requested, then the queries' columns and the
-corpus's columns: up to `k` rows per query. Each column of a table argument
-keeps its alias as its qualifier, or the table's name for `TABLE(name)`. A name
-both sides have resolves qualified, as in a join: `q.ds` and `p.ds`. A query
-may read only the corpus's key and partition columns, which the index returns;
-reading other columns is not supported yet.
-
-The search is approximate: larger hint values read more of the index and return
-results closer to the exact nearest rows. A query with a `NULL` embedding
-matches nothing. A search fails if it reads a partition the index does not
-cover yet.
-
-The corpus may also be an index's clusters, its centroids table, named after
-the table and the index: `TABLE("products$product_index$centroids")`. It has a
-row per cluster, with the partition columns, `codec_id`, `cluster_id` and
-`centroid`. A search compares embeddings with `centroid` by the index's metric
-and returns the other columns.
-
-## Graph Queries
-
-Axiom parses SQL/PGQ graph queries: `GRAPH_TABLE` in `FROM`, which matches a
-path pattern against a property graph and returns a table, and `WITH GRAPH`, an
-Axiom extension that defines a property graph for one query. Presto Java
-supports neither.
-
-Graph queries are gated behind the `graphQueries` flag in `ParserOptions`, which
-is off by default. To enable them, set `graphQueries = true`, or use
-`SET SESSION parser.graph_queries = true` at the CLI. With the flag on, the
-parser plans a `GRAPH_TABLE` as a GraphMatch logical plan node, which
-`EXPLAIN (TYPE LOGICAL)` shows. The v2 optimizer runs graph patterns; the v1
-optimizer does not run them. With v2, a query that uses any of these fails
-with an error that names it:
-
-- a path mode other than `WALK` on a path with repetition or on a subpath;
-- a repetition with no upper bound, or a shortest-path selector on a path
-  with repetition;
-- a repeated or optional subpath that starts or ends with an edge pattern;
-- a repetition or an optional subpath inside a repeated or optional subpath;
-- `path_length` of a named optional subpath;
-- an edge pattern without a vertex pattern on each side;
-- an undirected edge pattern whose name another pattern reuses;
-- a pattern whose tables have keys of different data types or numbers of
-  columns, when two edge patterns meet at it, a selector's path starts or ends
-  at it, or two paths with a selector share it;
-- a pattern name in a predicate other than in a property reference, or a
-  subquery in a predicate.
-
-```sql
-WITH GRAPH g AS (
-  VERTEX TABLES (t KEY (a) LABEL A PROPERTIES (a, b))
-  EDGE TABLES (u KEY (a, b)
-    SOURCE KEY (a) REFERENCES t (a)
-    DESTINATION KEY (b) REFERENCES t (a)
-    LABEL B))
-SELECT *
-FROM GRAPH_TABLE (g
-  MATCH p = ANY SHORTEST (x IS A WHERE x.a = 1) -[e IS B]->+ (y IS A)
-  WHERE y.b > 0
-  COLUMNS (y.a, path_length(p) AS hops))
-```
-
-### Graph definitions
-
-`WITH GRAPH name AS (VERTEX TABLES (...) EDGE TABLES (...))` defines a graph
-alongside the query's CTEs. Each element table names a table, an optional
-alias, a `KEY`, and its labels:
-
-- `LABEL name` adds a label; a table may have several. Without one, the table
-  has a single label named after the table.
-- `PROPERTIES (expr [AS name], ...)` lists a label's properties. Without it,
-  the label exposes all columns. A property that is not a plain column
-  reference needs `AS name`.
-- An edge table also has `SOURCE KEY (...) REFERENCES vertex_table (...)` and
-  `DESTINATION KEY (...) REFERENCES vertex_table (...)`.
-
-Each label becomes a vertex or an edge of the graph, backed by every table that
-has it. The definition must also satisfy:
-
-- The referenced columns are the vertex table's key, in any order.
-- Every table with a label exposes the same properties for it, and the labels
-  of one table give a shared property name the same expression.
-
-### Patterns
-
-The pattern syntax follows the GQL grammar (ISO/IEC 39075), whose pattern
-language SQL/PGQ shares.
-
-| Construct | Syntax |
-|-----------|--------|
-| Node | `(v IS Label WHERE predicate)`; each part optional |
-| Edge | `-[e IS Label WHERE predicate]->`, `<-[...]-`, `-[...]-`; abbreviated `->`, `<-`, `-` |
-| Label expression | `!`, `&`, `\|`, `%` (any label), parentheses; `!` binds tightest, then `&`, then `\|` |
-| Quantifier | `*`, `+`, `{n}`, `{m,n}` with either bound optional; on an edge or a parenthesized subpath |
-| Optional subpath | `( ... )?` |
-| Subpath | `(q = mode path WHERE predicate)` |
-| Path mode | `WALK`, `TRAIL`, `ACYCLIC`, `SIMPLE`, optionally followed by `PATH` or `PATHS` |
-| Selector | `ANY SHORTEST`, `ALL SHORTEST`, `ANY [k]`, `SHORTEST k`, `SHORTEST [k] GROUP`, `ALL` |
-| Path | `p = selector mode pattern`, each prefix optional |
-
-Several path patterns may be separated by commas. `MATCH ... WHERE` filters
-matches after selection, and `COLUMNS (expr [AS name], ...)` defines the
-output columns. Predicates and columns read a property of a matched vertex or
-edge as `v.property`, and the length of a named path or subpath as
-`path_length(p)`. Elements need not alternate between node and edge patterns:
-adjacent node patterns bind the same node, and an edge with no node pattern
-next to it has an implicit one.
-
-Rules beyond the grammar:
-
-- Labels are written with `IS`. Presto identifiers may contain `:`, so
-  `(a:Person)` is rejected rather than read as a variable named `a:Person`.
-- An unbounded quantifier (`*`, `+`, `{m,}`) must be in the scope of a selector
-  other than `ALL` or a path mode other than `WALK`.
-- `MATCH ... WHERE` cannot read a pattern under a quantifier, and
-  `path_length` cannot read a subpath under a quantifier.
-- Undirected edges (`~[...]~`) and `<-[...]->` are not supported; every edge
-  table is directed.
-- Match modes (`REPEATABLE ELEMENTS`, `DIFFERENT EDGES`), `KEEP`, and element
-  property specifications (`{k: v}`) are not supported.

@@ -161,6 +161,29 @@ VectorIndexProperties VectorIndexProperties::extract(
   };
 }
 
+folly::F14FastMap<std::string, velox::Variant>
+VectorIndexProperties::toProperties() const {
+  folly::F14FastMap<std::string, velox::Variant> properties{
+      {std::string(kDistanceMetric),
+       velox::Variant(vectorindex::VectorIndexMetricName::toName(metric))},
+      {std::string(kIndexType),
+       velox::Variant(vectorindex::VectorIndexKindName::toName(indexKind))},
+      {std::string(kNumClusters), velox::Variant(numClusters)},
+      {std::string(kDimension), velox::Variant(dimension)},
+      {std::string(kCodecPolicy),
+       velox::Variant(VectorIndexCodecPolicyName::toName(codecPolicy))},
+  };
+  if (!indexOptions.empty()) {
+    std::map<velox::Variant, velox::Variant> options;
+    for (const auto& [key, value] : indexOptions) {
+      options.emplace(velox::Variant(key), velox::Variant(value));
+    }
+    properties.emplace(
+        std::string(kIndexOptions), velox::Variant::map(std::move(options)));
+  }
+  return properties;
+}
+
 namespace {
 
 // Checks that no partition column takes the name of a column the codec,

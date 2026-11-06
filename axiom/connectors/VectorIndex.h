@@ -87,6 +87,10 @@ struct VectorIndexProperties {
   /// value Velox's vector index library rejects.
   static VectorIndexProperties extract(
       folly::F14FastMap<std::string, velox::Variant>& properties);
+
+  /// Returns these settings as the properties extract() reads them from. Leaves
+  /// out 'index_options' when there are none.
+  folly::F14FastMap<std::string, velox::Variant> toProperties() const;
 };
 
 /// A vector index the engine resolved against its table: what a connector

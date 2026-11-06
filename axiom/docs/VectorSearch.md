@@ -3,7 +3,7 @@
 *Vector indexes on tables: how an index is stored, built by REFRESH and
 searched by `vector_search`, and what a connector implements to support them.
 The syntax and the user-facing properties are in
-[PrestoSqlExtensions.md](../sql/presto/docs/PrestoSqlExtensions.md#vector-indexes).*
+[VectorIndexes.md](../sql/presto/docs/VectorIndexes.md).*
 
 **Status:** cosine distance, BIGINT keys, partitioned tables and one codec
 per partition. Local Hive and the test connector implement the connector's
@@ -154,7 +154,7 @@ WITH (distance_metric = 'cosine', index_type = 'ivf_flat',
 
 `ALTER TABLE products DROP VECTOR INDEX pi` drops the link and the storage
 tables. The full syntax and properties are in
-[PrestoSqlExtensions.md](../sql/presto/docs/PrestoSqlExtensions.md#vector-indexes).
+[VectorIndexes.md](../sql/presto/docs/VectorIndexes.md).
 
 ## REFRESH
 
