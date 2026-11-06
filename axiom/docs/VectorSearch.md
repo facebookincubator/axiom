@@ -350,6 +350,72 @@ The API is in `axiom/connectors/ConnectorMetadata.h`.
 Local Hive's implementation is described in
 [connectors/hive/README.md](../connectors/hive/README.md#vector-indexes).
 
+## Alternative: an index stored with the data
+
+*A design, not built yet.*
+
+The index above is stored apart from its table. A file format can instead
+store an index inside each data file. Nimble does: a file can hold a FAISS
+index of one ARRAY(REAL) column, built when the file is written. A search of
+the file returns row numbers, so a reader can then read any column of the
+matches. A search can also be limited to a bitmap of eligible rows, which
+serves a filter on any column.
+
+| | Index stored apart | Index in each file |
+|---|---|---|
+| Keeping up with the data | REFRESH builds it; a write uncovers a partition | Written with the data, always current |
+| What a search returns | Key and partition columns | Any column |
+| Filters | Partition columns only | Any column |
+| Files a search reads | The probed clusters' local indexes | Every file the scan selects |
+| Training | Per partition, on a sample of all its rows | Per file, on that file's rows |
+| Changing index settings | Drop, add and refresh the index | Rewrite the data |
+
+### Data layout decides the cost
+
+When rows land in files in no particular order, every file holds rows of
+every cluster. A search must then search the index of every file the scan
+selects, keep the `k` nearest of each, and merge. Each file's index is
+trained on that file alone.
+
+The number of files decides the cost. A partition of a few large files
+costs a few searches of well-trained indexes. A partition of many small
+files costs many searches of indexes too small to train well.
+
+To search only some files, the files must follow the clusters:
+
+- The codec exists before the data is written.
+- The write assigns each row to its cluster and groups rows by cluster.
+- Each file holds whole clusters, or part of one large cluster.
+
+A search then assigns each query to its nearest clusters, as it does today,
+and reads only those clusters' files. This is the index stored apart, with
+the local indexes moved into the data files: the table's own files take the
+place of the index table, and a match reads any column without a join.
+
+The layout has costs. The codec must be trained before the write, e.g. on an
+earlier partition. Every write shuffles rows by cluster. A table is laid out
+one way, so clustering by embedding gives up clustering by anything else.
+
+A small table works well with any layout. A partition of one or a few files
+costs a few searches, and each file's index is trained on most of the
+partition.
+
+### Plan
+
+A search of a table whose files carry an index maps onto an index lookup
+join:
+
+- The probe side is the queries.
+- The lookup side is a scan of the table, filtered on any columns.
+- Each file returns, for each query, its `k` nearest rows that pass the
+  filter, with the requested columns and the score.
+- The per-query merge that the search plans today keeps the `k` best overall.
+
+The connector advertises the index in the table's layout, as it advertises
+lookup keys. The optimizer chooses between the index stored apart, the index
+in each file, and an exact search. With a cluster-aligned layout, the lookup
+also prunes files by cluster.
+
 ## Not supported yet
 
 - Distance metrics other than cosine.
@@ -363,6 +429,18 @@ Local Hive's implementation is described in
 - Index formats other than FAISS.
 
 ## Follow-ups
+
+- **Stream the local indexes.** The local-index search loads the local
+  indexes of the selected partitions on its build side and holds them in
+  memory for the whole join, so memory grows with the index. Swapping the
+  sides bounds memory by the queries: the query and cluster rows become the
+  build side, and each local index streams past once, searched for every
+  query that probes its cluster.
+- **Read only the probed clusters.** The search then reads every local index
+  of the selected partitions, however few clusters the queries probe.
+  Bucketing or sorting the index table by `cluster_id`, and passing the
+  probed clusters to the index scan as a dynamic filter, lets the scan skip
+  the rest.
 
 - **Skip the merge in the centroids search.** REFRESH's assignment matches
   each row with exactly one codec, so the per-query top-N is a no-op, yet it
