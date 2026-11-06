@@ -252,6 +252,19 @@ Error: --data_path and --etc_dir are mutually exclusive. Use --data_path for the
 [1]
 ```
 
+## A catalog file replaces the built-in catalog it is named after
+
+```scrut
+$ export E=$(mktemp -d) && echo "connector.name=test" > $E/tpch.properties
+```
+
+```scrut
+$ $CLI --etc_dir $E --query "CREATE TABLE t(a int); SELECT * FROM t" 2>/dev/null
+Created table: "default"."t"
+(0 rows in 0 batches)
+
+```
+
 ## Time and timestamp types display formatted values
 
 Verify that current_timestamp, localtime, and current_time display the same

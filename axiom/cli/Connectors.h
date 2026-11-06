@@ -20,7 +20,9 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "axiom/cli/CatalogProperties.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
@@ -34,16 +36,18 @@ class SessionConfig;
 /**
  * Populates application-owned Axiom and Velox connector registries.
  *
- * This class handles the details of registering TPCH connectors
- * and connectors for tables stored in the local filesystem in
- * Parquet or ORC format. Catalogs remain in the registries after this helper
- * is destroyed.
+ * Registers catalogs for the TPC-H, local Hive and test connectors, either
+ * one at a time or from catalog descriptions such as `--etc_dir` files.
+ * Subclasses add connector names by overriding registerConnector(). Catalogs
+ * remain in the registries after this helper is destroyed.
  *
  * @code
  * auto connectorRegistry = velox::connector::ConnectorRegistry::create();
  * auto metadataRegistry = connector::ConnectorMetadataRegistry::create();
  * Connectors connectors{*connectorRegistry, *metadataRegistry};
- * connectors.registerTpchConnector();
+ * connectors.registerCatalogs(
+ *     ::axiom::sql::loadCatalogProperties(etcDir),
+ *     {{.catalogName = "tpch", .connectorName = "tpch"}});
  * @endcode
  */
 class Connectors {
@@ -100,11 +104,23 @@ class Connectors {
   /// The `connectorConfig` provides connector-specific properties; for Hive,
   /// this typically includes hive_local_data_path and optionally
   /// hive_local_file_format. The `connectorId` is the catalog name used to
-  /// reference this connector in queries.
-  std::shared_ptr<velox::connector::Connector> registerConnector(
+  /// reference this connector in queries. Returns the registered connector, or
+  /// null for a catalog that registers metadata only.
+  ///
+  /// Subclasses override this to support more connector names and call it for
+  /// the rest.
+  virtual std::shared_ptr<velox::connector::Connector> registerConnector(
       std::string_view connectorName,
       const folly::F14FastMap<std::string, std::string>& connectorConfig,
       const std::string& connectorId);
+
+  /// Registers each of `catalogs` through registerConnector(), then each of
+  /// `builtInCatalogs` whose name is absent from `catalogs`. A catalog in
+  /// `catalogs` thus replaces the built-in catalog of the same name. Returns
+  /// the registered catalogs, `catalogs` first.
+  std::vector<::axiom::sql::CatalogProperties> registerCatalogs(
+      std::vector<::axiom::sql::CatalogProperties> catalogs,
+      const std::vector<::axiom::sql::CatalogProperties>& builtInCatalogs);
 
   /// Registers an in-memory test connector under `connectorId`. The
   /// `connectorConfig` is passed through to the connector verbatim; the test
