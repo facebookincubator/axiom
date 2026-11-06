@@ -243,6 +243,12 @@ with Velox. These components are:
   queries against in-memory TPC-H dataset and local Hive data.
   - top-level “cli” directory
 
+Design docs of features built across several components are in
+[axiom/docs](axiom/docs):
+
+- [Vector Search](axiom/docs/VectorSearch.md) - vector indexes on tables, built
+  by REFRESH and searched by `vector_search`.
+
 These components can be used to put together single-node or distributed
 execution. Single-node execution can be single-threaded or multi-threaded.
 
