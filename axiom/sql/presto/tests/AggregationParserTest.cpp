@@ -76,6 +76,28 @@ TEST_F(AggregationParserTest, aggregateInWindowFrameBound) {
       matchScan("nation").aggregate().project().output());
 }
 
+TEST_F(AggregationParserTest, atTimeZoneAroundAggregate) {
+  connector_->addTable("t", ROW("ts", TIMESTAMP()));
+
+  testSelect(
+      "SELECT max(ts) AT TIME ZONE 'UTC' FROM t",
+      matchScan("t")
+          .aggregate({}, {"max(ts) AS max_ts"})
+          .project({"at_time_zone(max_ts, 'UTC')"})
+          .output());
+}
+
+TEST_F(AggregationParserTest, atTimeZoneAroundGroupingKey) {
+  connector_->addTable("t", ROW("ts", TIMESTAMP()));
+
+  testSelect(
+      "SELECT ts AT TIME ZONE 'UTC' FROM t GROUP BY ts",
+      matchScan("t")
+          .aggregate({"ts"}, {})
+          .project({"at_time_zone(ts, 'UTC')"})
+          .output());
+}
+
 // HAVING is applied before the window functions, so a window nested in an
 // expression aggregates only the rows HAVING keeps.
 TEST_F(AggregationParserTest, havingBeforeWindow) {

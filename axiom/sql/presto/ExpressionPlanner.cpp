@@ -1122,9 +1122,9 @@ lp::ExprApi ExpressionPlanner::toExpr(
     }
 
     case NodeType::kAtTimeZone: {
-      auto* atTimeZone = node->as<AtTimeZone>();
+      const auto* atTimeZone = node->as<AtTimeZone>();
       return lp::Call(
-          "at_timezone",
+          std::string{lp::kAtTimeZoneCallName},
           toExpr(atTimeZone->value(), options),
           toExpr(atTimeZone->timeZone(), options));
     }

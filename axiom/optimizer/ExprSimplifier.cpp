@@ -670,8 +670,8 @@ ExprCP ExprSimplifier::tryFoldConstant(ExprCP expr) {
 
   // A call with default null behavior (result is null whenever any argument is
   // null) folds to null if any argument is the constant null -- even when its
-  // other arguments reference columns. Special forms are given
-  // kNonDefaultNullBehavior unconditionally, so they are excluded.
+  // other arguments reference columns. Special forms with non-default null
+  // behavior are excluded.
   // `Call::functions()` aggregates the arguments' bits, so the call's own bits
   // are recomputed here.
   if (expr->is(PlanType::kCallExpr)) {

@@ -16,11 +16,14 @@
 
 #include "axiom/logical_plan/Expr.h"
 #include <gtest/gtest.h>
+#include <array>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/ExprResolver.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/type/Type.h"
 
@@ -74,6 +77,31 @@ class ExprTest : public testing::Test {
             Sql(sql).expr(), inputResolver(schema_), nullptr, {}, false);
   }
 
+  static RowTypePtr atTimeZoneSchema() {
+    return ROW(
+        {"timestamp",
+         "timestamp_with_time_zone",
+         "date",
+         "time",
+         "timestamp_utc",
+         "time_micro_utc"},
+        {TIMESTAMP(),
+         TIMESTAMP_WITH_TIME_ZONE(),
+         DATE(),
+         TIME(),
+         TIMESTAMP_UTC(),
+         TIME_MICRO_UTC()});
+  }
+
+  static ExprApi atTimeZone(const ExprApi& value, const ExprApi& timeZone) {
+    return Call(std::string{kAtTimeZoneCallName}, value, timeZone);
+  }
+
+  static ExprPtr resolveAtTimeZone(const ExprApi& expr) {
+    return ExprResolver(nullptr, &velox::TypeCoercer::defaults())
+        .resolveScalarTypes(expr.expr(), inputResolver(atTimeZoneSchema()));
+  }
+
   RowTypePtr schema_ =
       ROW({"a", "x", "y", "z"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
 };
@@ -123,6 +151,94 @@ TEST_F(ExprTest, conjunctInputTypes) {
   VELOX_ASSERT_THROW(
       resolve(Col("p") && Col("a"), nullptr),
       "All inputs to AND and OR must be boolean");
+}
+
+TEST_F(ExprTest, timestampAtTimeZone) {
+  auto timestamp = resolveAtTimeZone(
+      atTimeZone(Col("timestamp"), Lit("America/Los_Angeles")));
+  VELOX_EXPECT_EQ_TYPES(timestamp->type(), TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_TRUE(timestamp->isSpecialForm());
+  EXPECT_EQ(timestamp->as<SpecialFormExpr>()->form(), SpecialForm::kAtTimeZone);
+  EXPECT_EQ(
+      timestamp->toString(), "AT_TIME_ZONE(timestamp, America/Los_Angeles)");
+
+  auto timestampWithTimeZone = resolveAtTimeZone(
+      atTimeZone(Col("timestamp_with_time_zone"), Lit("America/New_York")));
+  VELOX_EXPECT_EQ_TYPES(
+      timestampWithTimeZone->type(), TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_TRUE(timestampWithTimeZone->isSpecialForm());
+  EXPECT_EQ(
+      timestampWithTimeZone->as<SpecialFormExpr>()->form(),
+      SpecialForm::kAtTimeZone);
+  EXPECT_EQ(
+      timestampWithTimeZone->toString(),
+      "AT_TIME_ZONE(timestamp_with_time_zone, America/New_York)");
+}
+
+TEST_F(ExprTest, invalidAtTimeZoneOperand) {
+  const std::array invalidOperands{
+      std::pair{
+          "date",
+          "AT TIME ZONE requires a time or timestamp value, but got: DATE"},
+      std::pair{
+          "timestamp_utc",
+          "AT TIME ZONE requires a time or timestamp value, but got: TIMESTAMP UTC"},
+      std::pair{
+          "time_micro_utc",
+          "AT TIME ZONE requires a time or timestamp value, but got: TIME MICRO UTC"},
+  };
+  for (const auto& [column, expectedError] : invalidOperands) {
+    SCOPED_TRACE(column);
+    VELOX_ASSERT_THROW(
+        resolveAtTimeZone(atTimeZone(Col(column), Lit("UTC"))), expectedError);
+  }
+}
+
+TEST_F(ExprTest, timeAtTimeZone) {
+  auto time = resolveAtTimeZone(atTimeZone(Col("time"), Lit("+08:00")));
+  VELOX_EXPECT_EQ_TYPES(time->type(), TIME_WITH_TIME_ZONE());
+  EXPECT_EQ(
+      time->toString(),
+      "AT_TIME_ZONE(CAST(time AS TIME WITH TIME ZONE), +08:00)");
+}
+
+TEST_F(ExprTest, atTimeZoneTypes) {
+  auto makeAtTimeZone = [](const TypePtr& resultType,
+                           const TypePtr& valueType,
+                           const TypePtr& timeZoneType) {
+    return std::make_shared<SpecialFormExpr>(
+        resultType,
+        SpecialForm::kAtTimeZone,
+        std::make_shared<InputReferenceExpr>(valueType, "value"),
+        std::make_shared<InputReferenceExpr>(timeZoneType, "time_zone"));
+  };
+
+  EXPECT_NO_THROW(
+      makeAtTimeZone(TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()));
+  EXPECT_NO_THROW(
+      makeAtTimeZone(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP(), VARCHAR()));
+  EXPECT_NO_THROW(
+      makeAtTimeZone(TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE(), VARCHAR()));
+
+  VELOX_ASSERT_THROW(
+      makeAtTimeZone(TIMESTAMP(), DATE(), VARCHAR()),
+      "AT_TIME_ZONE value must have a supported temporal type: DATE");
+  VELOX_ASSERT_THROW(
+      makeAtTimeZone(TIMESTAMP(), TIMESTAMP(), BIGINT()),
+      "AT_TIME_ZONE time zone must be VARCHAR: BIGINT");
+  VELOX_ASSERT_THROW(
+      makeAtTimeZone(TIME_WITH_TIME_ZONE(), TIMESTAMP(), VARCHAR()),
+      "AT_TIME_ZONE timestamp result must be TIMESTAMP or TIMESTAMP WITH TIME ZONE: TIME WITH TIME ZONE");
+  VELOX_ASSERT_THROW(
+      makeAtTimeZone(TIMESTAMP(), TIME_WITH_TIME_ZONE(), VARCHAR()),
+      "AT_TIME_ZONE time result must be TIME WITH TIME ZONE: TIMESTAMP");
+}
+
+TEST_F(ExprTest, atTimezoneFunctionCoercion) {
+  // Ordinary function calls retain the general coercion rule.
+  VELOX_EXPECT_EQ_TYPES(
+      resolveAtTimeZone(Call("at_timezone", Col("date"), Lit("UTC")))->type(),
+      TIMESTAMP_WITH_TIME_ZONE());
 }
 
 TEST_F(ExprTest, inArray) {
