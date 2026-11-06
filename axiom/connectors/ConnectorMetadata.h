@@ -541,9 +541,12 @@ void applyFilterEstimates(
     const FilterSelectivityEstimator& estimator,
     FilteredTableStats& stats);
 
-/// One group of a metadata-derived count produced by co_metadataCounts. One
-/// entry per distinct tuple of the grouping columns; a single entry with empty
-/// 'key' for a global (ungrouped) count. Counts may be estimates; see
+/// One group of a metadata-derived count produced by co_metadataCounts. A
+/// grouped count has one entry per distinct tuple of the grouping columns. A
+/// connector should leave out a tuple without rows, such as an empty
+/// partition's; the engine drops any it returns, as GROUP BY has no group
+/// without rows. A global (ungrouped) count is a single entry with empty 'key',
+/// with 'numRows' 0 when nothing matches. Counts may be estimates; see
 /// co_metadataCounts.
 struct MetadataCountGroup {
   /// Grouping-column values for this group, in the order of the
@@ -788,9 +791,9 @@ class TableLayout {
   /// @param columns Names of columns for which per-group null counts are
   /// requested. Empty when only a row count is needed.
   ///
-  /// @return One MetadataCountGroup per group, or std::nullopt if the connector
-  /// cannot answer from metadata. The default implementation returns
-  /// std::nullopt.
+  /// @return One MetadataCountGroup per group (see MetadataCountGroup for which
+  /// groups), or std::nullopt if the connector cannot answer from metadata. The
+  /// default implementation returns std::nullopt.
   virtual folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
   co_metadataCounts(
       [[maybe_unused]] ConnectorSessionPtr session,

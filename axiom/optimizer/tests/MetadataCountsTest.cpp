@@ -16,6 +16,8 @@
 
 #include <gmock/gmock.h>
 
+#include <filesystem>
+
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 
 using namespace facebook::velox;
@@ -92,6 +94,38 @@ TEST_F(MetadataCountsTest, rowCount) {
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan("SELECT approx_count_star() FROM t WHERE k = 9"),
       matchValues(makeExpected(0)).build());
+
+  // A grouping key the filter fixes to one value is counted like any other
+  // partition column. With no matching partition there are no groups.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(
+          "SELECT k, approx_count_star() FROM t WHERE k = 1 GROUP BY 1"),
+      matchValues<int64_t>({{1, 8}}).project().build());
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(
+          "SELECT k, approx_count_star() FROM t WHERE k = 9 GROUP BY 1"),
+      matchValues(
+          makeRowVector(
+              {makeFlatVector<int64_t>({}), makeFlatVector<int64_t>({})}))
+          .project()
+          .build());
+}
+
+TEST_F(MetadataCountsTest, emptyPartition) {
+  // An empty partition holds no rows, so it is no group.
+  const auto partition =
+      hiveMetadata().prepareWriteLocation(nullptr, {kDefaultSchema, "t"}) +
+      "/k=3";
+  std::filesystem::create_directories(partition);
+  connector::hive::PersistedStats::write(partition, {});
+  hiveMetadata().reloadTableFromPath({kDefaultSchema, "t"});
+
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan("SELECT k, approx_count_star() FROM t GROUP BY 1"),
+      matchValues<int64_t>({{0, 9}, {1, 8}, {2, 8}}).build());
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan("SELECT approx_count_star() FROM t WHERE k = 3"),
+      matchValues(makeRowVector({makeFlatVector<int64_t>({0})})).build());
 }
 
 TEST_F(MetadataCountsTest, nullCounts) {

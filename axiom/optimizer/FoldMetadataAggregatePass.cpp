@@ -68,8 +68,8 @@ class Folder : public NodeRewriter<NoContext> {
 
  private:
   // Folds an aggregation of only metadata aggregates directly over a Scan into
-  // a Values node. The caller guarantees that shape. Returns nullptr if the
-  // grouping keys are not plain columns or the connector declines.
+  // a Values node. The caller guarantees that shape. Returns nullptr if a
+  // grouping key is neither a column nor a constant, or the connector declines.
   NodeCP tryFold(AggregationCP node) {
     const auto* scan = node->input()->as<Scan>();
     const auto* layout =
@@ -77,11 +77,16 @@ class Folder : public NodeRewriter<NoContext> {
 
     // Grouping keys and null-count arguments must be base-table columns so they
     // can be named for the connector (via their SchemaTable column); the
-    // connector decides (via a nullopt result) whether it can group by them.
+    // connector decides (via a nullopt result) whether it can group by them. A
+    // constant grouping key, such as a partition column a filter fixes to one
+    // value, does not split the groups, so the connector does not group by it.
     std::vector<std::string> groupingColumns;
     groupingColumns.reserve(node->groupingKeys().size());
     folly::F14FastSet<std::string_view> seen;
     for (ExprCP key : node->groupingKeys()) {
+      if (key->is(PlanType::kLiteralExpr)) {
+        continue;
+      }
       if (!key->isColumn()) {
         return nullptr;
       }
@@ -135,6 +140,7 @@ class Folder : public NodeRewriter<NoContext> {
         scan->scanHandle(), "Metadata counts need the connector's read handle");
     const TableAccessHandle& handle = *scan->scanHandle();
 
+    const bool global = groupingColumns.empty();
     auto connectorSession =
         session_.context()->sessionFor(layout->connectorId());
     const auto countsStart = std::chrono::steady_clock::now();
@@ -150,12 +156,17 @@ class Folder : public NodeRewriter<NoContext> {
     if (!result.has_value()) {
       return nullptr;
     }
+    if (global) {
+      VELOX_CHECK_EQ(
+          result->size(), 1, "A global metadata count must be one group");
+    }
 
     return makeValues(node, nullCountIndex, *result);
   }
 
   // Builds the Values node holding one row per group: the grouping-key values
-  // followed by each aggregate's count.
+  // followed by each aggregate's count. 'groups' are keyed by the grouping keys
+  // that are columns; a constant key takes its value.
   NodeCP makeValues(
       AggregationCP node,
       const std::vector<int32_t>& nullCountIndex,
@@ -163,30 +174,30 @@ class Folder : public NodeRewriter<NoContext> {
     std::vector<velox::Variant> rows;
     rows.reserve(groups.size());
     for (const auto& group : groups) {
-      VELOX_CHECK_EQ(group.key.size(), node->groupingKeys().size());
       group.checkConsistency();
+      // A grouped aggregation has no group without rows, such as an empty
+      // partition's or, with only constant grouping keys, a global count of
+      // zero.
+      if (!node->groupingKeys().empty() && group.numRows == 0) {
+        continue;
+      }
       std::vector<velox::Variant> row;
       row.reserve(node->outputColumns().size());
-      for (const auto& keyValue : group.key) {
-        row.push_back(keyValue);
+      size_t keyIndex = 0;
+      for (ExprCP key : node->groupingKeys()) {
+        if (key->is(PlanType::kLiteralExpr)) {
+          row.push_back(key->as<Literal>()->literal());
+        } else {
+          row.push_back(group.key.at(keyIndex++));
+        }
       }
+      VELOX_CHECK_EQ(keyIndex, group.key.size());
       for (size_t i = 0; i < node->aggregates().size(); ++i) {
         row.push_back(
             velox::Variant(count(
                 *node->aggregates()[i]->specialKind(),
                 nullCountIndex[i],
                 group)));
-      }
-      rows.push_back(velox::Variant::row(std::move(row)));
-    }
-
-    // A global (ungrouped) aggregate must return exactly one row even when no
-    // partitions match: count(*) over an empty input is 0, not zero rows.
-    if (rows.empty() && node->groupingKeys().empty()) {
-      std::vector<velox::Variant> row;
-      row.reserve(node->aggregates().size());
-      for (size_t i = 0; i < node->aggregates().size(); ++i) {
-        row.push_back(velox::Variant(int64_t{0}));
       }
       rows.push_back(velox::Variant::row(std::move(row)));
     }
