@@ -22,6 +22,12 @@ the whole table. A vector index makes the search approximate and cheap:
 - A search finds each query's nearest clusters, searches only their local
   indexes and keeps the `k` nearest rows overall.
 
+The diagram shows a partition's embeddings in two dimensions. Each region holds
+the rows nearest one centroid, so a search reads only the regions whose
+centroids are nearest the query:
+
+![Embeddings grouped into clusters, each represented by its centroid](images/vector_index_clusters.svg)
+
 The engine owns the index: it defines the format, builds the index and
 searches it. A connector stores it as two ordinary tables, plus metadata that
 links an embedding column of the table to its index.
@@ -66,6 +72,11 @@ flowchart TD
 - A **local index** holds one group of one cluster's rows, with each row's key
   as its id. A cluster larger than 50,000 rows is split into groups.
 - The `codec` and `local_index` columns are of type VECTOR_INDEX.
+
+The codec of the partition in the [Overview](#overview) diagram packs its
+seven centroids into one value:
+
+![A codec packs a partition's centroids into one value](images/vector_index_codec.svg)
 
 The engine reserves a third name, `"t$<index>$centroids"`, for a table of
 `(partition columns, codec_id, cluster_id, centroid)` with a row per cluster.
