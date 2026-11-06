@@ -104,9 +104,9 @@ lp::PlanBuilder namedRows(
 //   AND none_match(embedding, x -> x IS NULL OR NOT is_finite(x))
 //   AND l2_norm(embedding) > 0
 lp::ExprApi isValid(const VectorIndex& index) {
-  const auto embedding = lp::Col(std::string(kEmbedding));
+  const auto embedding = lp::Col(kEmbedding);
   const auto element = lp::Col("x");
-  return lp::Call("not", lp::Call("is_null", lp::Col(std::string(kKey)))) &&
+  return lp::Call("not", lp::Call("is_null", lp::Col(kKey))) &&
       lp::Call("cardinality", embedding) ==
       lp::Lit(index.properties.dimension) &&
       lp::Call(
@@ -170,8 +170,8 @@ lp::PlanBuilder sample(
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
     const lp::PlanBuilder& rows) {
-  const auto hash = lp::Call(
-      "xxhash64", lp::Call("to_big_endian_64", lp::Col(std::string(kKey))));
+  const auto hash =
+      lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey)));
   return lp::PlanBuilder(rows)
       .with({lp::Call("row_number")
                  .over(
@@ -204,8 +204,8 @@ lp::LogicalPlanNodePtr planTrain(
               ColumnExprs::of(partitions),
               {lp::Call(
                    "vector_index_train",
-                   lp::Col(std::string(kEmbedding)),
-                   lp::Col(std::string(kKey)),
+                   lp::Col(kEmbedding),
+                   lp::Col(kKey),
                    lp::Lit(index.properties.numClusters),
                    lp::Lit(metric))
                    .as("codec")})
@@ -254,8 +254,8 @@ lp::LogicalPlanNodePtr planBuild(
         lp::Col(partitionColumns[i]).as("c_" + partitions[i]));
   }
   const auto condition = ColumnExprs::equal(partitions, "c_");
-  centroidColumns.push_back(lp::Col(std::string(VectorIndex::kClusterId)));
-  centroidColumns.push_back(lp::Col(std::string(VectorIndex::kCentroid)));
+  centroidColumns.push_back(lp::Col(VectorIndex::kClusterId));
+  centroidColumns.push_back(lp::Col(VectorIndex::kCentroid));
   const auto centroidsName = VectorIndex::centroidsTableName(table, index.name);
   auto centroids =
       rows.newPlan()
@@ -299,8 +299,8 @@ lp::LogicalPlanNodePtr planBuild(
                   partitionKeys,
                   {
                       clusterId.as("cluster_id"),
-                      lp::Col(std::string(kKey)),
-                      lp::Col(std::string(kEmbedding)),
+                      lp::Col(kKey),
+                      lp::Col(kEmbedding),
                   }))
           // row_number() OVER (PARTITION BY <partition columns>, cluster_id)
           //     AS cluster_row
@@ -318,8 +318,8 @@ lp::LogicalPlanNodePtr planBuild(
                   partitionKeys, {lp::Col("cluster_id"), lp::Col("group_id")}),
               {lp::Call(
                    "vector_index_build",
-                   lp::Col(std::string(kEmbedding)),
-                   lp::Col(std::string(kKey)),
+                   lp::Col(kEmbedding),
+                   lp::Col(kKey),
                    lp::Lit(indexType),
                    lp::Lit(metric),
                    lp::Lit(Variant::map(options), MAP(VARCHAR(), VARCHAR())))

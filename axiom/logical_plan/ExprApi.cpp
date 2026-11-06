@@ -92,18 +92,19 @@ ExprApi ExprApi::operator!=(const velox::Variant& value) const {
   return NEq(expr_, Lit(value).expr());
 }
 
-ExprApi Col(std::string name) {
+ExprApi Col(std::string_view name) {
   return ExprApi{
-      std::make_shared<const velox::core::FieldAccessExpr>(name, kNoAlias),
-      std::move(name)};
+      std::make_shared<const velox::core::FieldAccessExpr>(
+          std::string(name), kNoAlias),
+      std::string(name)};
 }
 
-ExprApi Col(std::string name, const ExprApi& input) {
+ExprApi Col(std::string_view name, const ExprApi& input) {
   std::vector<velox::core::ExprPtr> inputs{input.expr()};
   return ExprApi{
       std::make_shared<const velox::core::FieldAccessExpr>(
-          name, kNoAlias, std::move(inputs)),
-      std::move(name)};
+          std::string(name), kNoAlias, std::move(inputs)),
+      std::string(name)};
 }
 
 ExprApi Cast(velox::TypePtr type, const ExprApi& input) {
