@@ -798,6 +798,12 @@ LocalHiveTableLayout::co_metadataCounts(
     }
   }
 
+  // A global count is a single group, zero when no partition matches.
+  if (groupingKeyColumns.empty() && groups.empty()) {
+    groups.emplace_back();
+    nonNullCounts.emplace_back(nullCountColumns.size(), 0);
+  }
+
   // A column missing from a partition's stats contributes no non-nulls, i.e. it
   // is all-null for that partition, so nulls = rows - non-nulls.
   for (size_t index = 0; index < groups.size(); ++index) {
