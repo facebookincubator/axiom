@@ -1422,10 +1422,9 @@ TEST_P(JoinTest, coalesceJoinKeys) {
     AXIOM_ASSERT_PLAN_V2(
         plan,
         matchScan("t")
-            .hashJoin(
-                matchScan("u"),
-                core::JoinType::kInner,
-                {.keys = {{"t_k = u_k"}}, .filter = "t_k > 0"})
+            .filter("t_k > 0")
+            .hashJoinInner(
+                matchScan("u").filter("u_k > 0"), {.keys = {{"t_k = u_k"}}})
             .build());
   }
 }
@@ -3438,114 +3437,182 @@ TEST_P(JoinTest, conditionThroughJoinKeys) {
   }
 }
 
-// TODO: Assert the V2 plans after transitive inference handles pending
-// equalities before they become join keys.
 TEST_P(JoinTest, impliedFilters) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
       ->setStats(10'000, {{"a", {.numDistinct = 10'000}}});
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()))
       ->setStats(1'000, {{"x", {.numDistinct = 100}}});
   testConnector_->addTable("v", ROW({"k", "m"}, BIGINT()))
-      ->setStats(100, {{"k", {.numDistinct = 100}}});
+      ->setStats(1'000'000, {{"k", {.numDistinct = 100}}});
 
   // Equality propagates from t.a to u.x via the join equivalence.
   {
+    SCOPED_TRACE("Equality filter");
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a = 5";
-    SCOPED_TRACE(query);
-
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(query),
         matchScan("u")
             .filter("x = 5")
-            .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .hashJoinInner(matchScan("t").filter("a = 5"))
+            .projectIf(useV2_, {"5", "b", "a", "y"})
+            .build());
   }
 
   // Range propagates similarly.
   {
+    SCOPED_TRACE("Range filter");
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a > 100";
-    SCOPED_TRACE(query);
-
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(query),
         matchScan("t")
             .filter("a > 100")
-            .hashJoin(matchScan("u").filter("x > 100"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .hashJoinInner(matchScan("u").filter("x > 100"))
+            .projectIf(useV2_, {"a", "b", "a", "y"})
+            .build());
   }
 
   // IN propagates across the equivalence.
   {
+    SCOPED_TRACE("IN filter");
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IN (1, 2, 3)";
-    SCOPED_TRACE(query);
-
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(query),
         matchScan("u")
             .filter("x IN (1, 2, 3)")
-            .hashJoin(
-                matchScan("t").filter("a IN (1, 2, 3)"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .hashJoinInner(matchScan("t").filter("a IN (1, 2, 3)"))
+            .projectIf(useV2_, {"a", "b", "a", "y"})
+            .build());
   }
 
-  // IS NULL propagates across the equivalence. Sound under inner-join
-  // semantics: t.a = u.x already rejects NULL on both sides, so adding
-  // u.x IS NULL on u (and the original t.a IS NULL on t) does not change the
-  // result, but lets the storage layer prune NULL rows before the join.
+  // No NULL key satisfies t.a = u.x, so IS NULL on a key leaves nothing to
+  // join. v1 keeps the join and filters both inputs.
   {
+    SCOPED_TRACE("IS NULL filter");
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IS NULL";
-    SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .filter("a IS NULL")
-            .hashJoin(
-                matchScan("u").filter("x IS NULL"), core::JoinType::kInner)
-            .build();
+    auto matcher = useV2_
+        ? matchValues<int64_t>({"a", "b", "x", "y"}, {}).build()
+        : matchScan("t")
+              .filter("a IS NULL")
+              .hashJoinInner(matchScan("u").filter("x IS NULL"))
+              .build();
 
     auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+    AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // IS NOT NULL likewise propagates.
+  // Every key the join matches is non-null, so IS NOT NULL restricts u no
+  // further. v1 copies it to u anyway.
   {
+    SCOPED_TRACE("IS NOT NULL filter");
     auto query = "SELECT * FROM t, u WHERE t.a = u.x AND t.a IS NOT NULL";
-    SCOPED_TRACE(query);
-
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(query),
         matchScan("t")
             .filter("a IS NOT NULL")
-            .hashJoin(
-                matchScan("u").filter("x IS NOT NULL"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .hashJoinInner(matchScan("u").filterIf(!useV2_, "x IS NOT NULL"))
+            .projectIf(useV2_, {"a", "b", "a", "y"})
+            .build());
   }
 
   // Three-table chain: t.a = u.x AND u.x = v.k puts t.a, u.x, v.k in one
-  // equivalence class. A filter on t.a propagates to both u.x and v.k.
+  // equivalence class. A filter on any of them reaches the other two, whether
+  // the chain is written in WHERE or partly in ON. v is far larger than t and
+  // u, so one join order is cheapest: v probes a build of u joined with t.
+  const auto matchAllScansFiltered = [&]() {
+    return matchScan("v").filter("k = 5").hashJoinInner(
+        matchScan("u").filter("x = 5").hashJoinInner(
+            matchScan("t").filter("a = 5")));
+  };
+
   {
+    SCOPED_TRACE("Chain with a filter on the last table");
     auto query =
         "SELECT * FROM t, u, v "
-        "WHERE t.a = u.x AND u.x = v.k AND t.a = 5";
-    SCOPED_TRACE(query);
+        "WHERE t.a = u.x AND u.x = v.k AND v.k = 5";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchAllScansFiltered()
+            .project({"a", "b", "a", "y", "5", "m"})
+            .build());
+  }
 
-    auto matcher =
-        matchScan("u")
-            .filter("x = 5")
-            .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
-            .hashJoin(matchScan("v").filter("k = 5"), core::JoinType::kInner)
-            .build();
+  {
+    SCOPED_TRACE("Chain written partly in ON");
+    auto query =
+        "SELECT * FROM t JOIN u ON t.a = u.x, v "
+        "WHERE u.x = v.k AND t.a = 5";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchAllScansFiltered()
+            .project({"5", "b", "5", "y", "a", "m"})
+            .build());
+  }
 
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  // The copy goes to the column of t that the equality with u names.
+  {
+    SCOPED_TRACE("Same-side equality");
+    auto query = "SELECT * FROM t, u WHERE t.a = t.b AND t.b = u.x AND u.x = 5";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("t")
+            .filter("a = b AND b = 5")
+            .hashJoinInner(matchScan("u").filter("x = 5"))
+            .project({"a", "b", "5", "y"})
+            .build());
+  }
+
+  // A LEFT join the WHERE clause reduces to inner copies the filter to every
+  // column the shared key is paired with.
+  {
+    SCOPED_TRACE("Reduced LEFT join with two keys on one column");
+    auto query =
+        "SELECT * FROM t LEFT JOIN u ON t.a = u.x AND t.a = u.y "
+        "WHERE u.x > 100";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("t")
+            .filter("a > 100")
+            .hashJoinInner(
+                matchScan("u").filter("\"and\"(x = y, x > 100, y > 100)"))
+            .project({"a", "b", "a", "y"})
+            .build());
+  }
+
+  // Equalities that put t.a, t.b, u.x and u.y in one class turn a condition
+  // on both inputs into copies on each input, one per column of the class that
+  // an equality between the inputs reads.
+  {
+    SCOPED_TRACE("Four columns in one class");
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.a = u.x AND t.b = u.y AND t.a = u.y AND t.b + u.x > 10";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("t")
+            .filter("a + b > 10 AND b + b > 10")
+            .hashJoinInner(
+                matchScan("u").filter("\"and\"(x = y, x + x > 10, x + y > 10)"),
+                {.keys = {{"a = x", "b = y"}}, .filter = ""})
+            .project({"a", "b", "a", "b"})
+            .build());
+  }
+
+  // Equalities that form a class are not replaced by their own copies, so the
+  // join stays keyed.
+  {
+    SCOPED_TRACE("Equalities that form the class");
+    auto query =
+        "SELECT * FROM t, u "
+        "WHERE t.a = u.y AND t.b = u.x AND t.b = u.y";
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("t")
+            .filter("a = b")
+            .hashJoinInner(
+                matchScan("u"), {.keys = {{"a = y", "b = x"}}, .filter = ""})
+            .project({"a", "b", "b", "a"})
+            .build());
   }
 }
 
@@ -3639,14 +3706,13 @@ TEST_P(JoinTest, impliedFilterDedup) {
     // V2 is worse: it adds a Project to reconstruct both equivalent join-key
     // names in the output.
     // TODO: Eliminate the V2 output-key reconstruction Project.
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(query),
         matchScan("u")
             .filter("x = 5")
-            .hashJoin(matchScan("t").filter("a = 5"), core::JoinType::kInner)
-            .build();
-
-    auto plan = toSingleNodePlan(query);
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .hashJoinInner(matchScan("t").filter("a = 5"))
+            .projectIf(useV2_, {"5", "b", "5", "y"})
+            .build());
   }
 }
 

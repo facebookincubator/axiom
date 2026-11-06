@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <optional>
+#include <utility>
+
 #include "axiom/optimizer/Builder.h"
 
 namespace facebook::axiom::optimizer {
@@ -87,6 +90,10 @@ class JoinPredicatePlacement {
       velox::core::JoinType joinType,
       bool nullAware);
 
+  /// Returns the two columns of 'conjunct' if it is `column = column`.
+  static std::optional<std::pair<ColumnCP, ColumnCP>> columnEquality(
+      ExprCP conjunct);
+
   /// Returns distinct cross-side column equality pairs from the join's keys,
   /// filter and `extraConjuncts`.
   static std::pair<ColumnVector, ColumnVector> equiColumnPairs(
@@ -94,6 +101,39 @@ class JoinPredicatePlacement {
       const PlanObjectSet& leftColumns,
       const PlanObjectSet& rightColumns,
       const ExprVector& extraConjuncts);
+
+  /// Pairs of equal columns: each of 'sources' with the target at its position.
+  struct ColumnPairs {
+    ColumnVector sources;
+    ColumnVector targets;
+  };
+
+  /// Classes of columns a join makes equal that span both inputs. The targets
+  /// of a class on an input are its columns there that an equality between the
+  /// inputs reads.
+  struct EqualColumns {
+    /// Pairs each left column of a class with each right target of the class.
+    ColumnPairs toRight;
+    /// Pairs each right column of a class with each left target of the class.
+    ColumnPairs toLeft;
+    /// Every column of these classes.
+    PlanObjectSet columns;
+    /// The conjuncts of 'conjuncts' that formed the classes. The classes hold
+    /// only while these are enforced, so they must not be rewritten through the
+    /// classes.
+    PlanObjectSet equalities;
+  };
+
+  /// Groups the columns made equal by the join's column keys and by the
+  /// `column = column` conjuncts of its filter, of 'conjuncts' and of
+  /// 'guaranteed', the conjuncts its inputs enforce themselves. The columns
+  /// are non-null on the join's matched rows unless it matches NULL to NULL.
+  static EqualColumns equalColumns(
+      JoinCP join,
+      const PlanObjectSet& leftColumns,
+      const PlanObjectSet& rightColumns,
+      const ExprVector& conjuncts,
+      const ExprVector& guaranteed);
 };
 
 } // namespace facebook::axiom::optimizer
