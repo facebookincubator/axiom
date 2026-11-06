@@ -17,6 +17,7 @@
 #include "axiom/cli/Connectors.h"
 
 #include <folly/system/HardwareConcurrency.h>
+#include <algorithm>
 #include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/file/FileConnector.h"
@@ -197,6 +198,26 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerConnector(
       "Unsupported connector.name in catalog config: {} for {}",
       connectorName,
       connectorId);
+}
+
+std::vector<::axiom::sql::CatalogProperties> Connectors::registerCatalogs(
+    std::vector<::axiom::sql::CatalogProperties> catalogs,
+    const std::vector<::axiom::sql::CatalogProperties>& builtInCatalogs) {
+  for (const auto& builtIn : builtInCatalogs) {
+    const bool replaced =
+        std::any_of(catalogs.begin(), catalogs.end(), [&](const auto& catalog) {
+          return catalog.catalogName == builtIn.catalogName;
+        });
+    if (!replaced) {
+      catalogs.push_back(builtIn);
+    }
+  }
+
+  for (const auto& catalog : catalogs) {
+    registerConnector(
+        catalog.connectorName, catalog.connectorConfig, catalog.catalogName);
+  }
+  return catalogs;
 }
 
 std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(

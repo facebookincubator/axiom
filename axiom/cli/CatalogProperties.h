@@ -23,19 +23,23 @@
 
 namespace axiom::sql {
 
-/// Describes one connector catalog properties file.
+/// Describes one catalog: its name, its connector and the connector's
+/// configuration.
 struct CatalogProperties {
-  /// Catalog name derived from the file name without the `.properties` suffix.
+  /// Name queries use to reference the catalog.
   std::string catalogName;
 
-  /// Connector implementation name from the `connector.name` property.
+  /// Connector implementation name, such as `tpch` or `hive`.
   std::string connectorName;
 
-  /// Connector-specific properties excluding `connector.name`.
+  /// Connector-specific properties.
   folly::F14FastMap<std::string, std::string> connectorConfig;
 };
 
-/// Loads connector catalogs from `${etcDir}/*.properties`.
+/// Loads connector catalogs from `${etcDir}/*.properties`. Each file describes
+/// one catalog, named after the file without the `.properties` suffix. Its
+/// `connector.name` property names the connector, and its other properties
+/// configure it.
 std::vector<CatalogProperties> loadCatalogProperties(std::string_view etcDir);
 
 } // namespace axiom::sql

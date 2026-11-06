@@ -22,7 +22,6 @@
 #include <csignal>
 #include <filesystem>
 #include <iostream>
-#include <set>
 #include "axiom/cli/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
@@ -68,63 +67,45 @@ int main(int argc, char** argv) {
         "--data_path and --etc_dir are mutually exclusive. Use --data_path for "
         "the local Hive shorthand or --etc_dir for catalog .properties files.");
 
-    auto defaultConnector = connectors.registerTpchConnector();
-    folly::F14FastMap<std::string, std::string> defaultSchemas = {
-        {
-            defaultConnector->connectorId(),
-            "tiny",
-        },
-    };
-    std::set<std::string> catalogIds = {defaultConnector->connectorId()};
+    auto catalogs = axiom::sql::loadCatalogProperties(FLAGS_etc_dir);
+    for (auto& catalog : catalogs) {
+      // Expose the catalog directory so connectors can resolve relative file
+      // paths in their properties (e.g. the test connector's `tables`).
+      catalog.connectorConfig.insert_or_assign(
+          std::string(facebook::axiom::connector::TestTableJson::kConfigDir),
+          std::filesystem::absolute(FLAGS_etc_dir).string());
+    }
 
-    connectors.registerTestConnector();
-    catalogIds.insert(facebook::axiom::Connectors::kTestConnectorId);
-    defaultSchemas.emplace(
-        facebook::axiom::Connectors::kTestConnectorId, "default");
-
-    auto registerConnector =
-        [&](std::string id,
-            std::string_view name,
-            const folly::F14FastMap<std::string, std::string>& config) {
-          VELOX_USER_CHECK(
-              catalogIds.insert(id).second,
-              "Catalog is already registered: {}",
-              id);
-          connectors.registerConnector(name, config, id);
-          if (name == "tpch") {
-            defaultSchemas.emplace(id, "tiny");
-          } else if (name == "hive" || name == "test") {
-            defaultSchemas.emplace(id, "default");
-          }
-        };
+    using facebook::axiom::Connectors;
+    folly::F14FastMap<std::string, std::string> defaultSchemas;
+    for (const auto& catalog : connectors.registerCatalogs(
+             std::move(catalogs),
+             {
+                 {.catalogName = Connectors::kTpchConnectorId,
+                  .connectorName = "tpch"},
+                 {.catalogName = Connectors::kTestConnectorId,
+                  .connectorName = "test"},
+             })) {
+      if (catalog.connectorName == "tpch") {
+        defaultSchemas.emplace(catalog.catalogName, "tiny");
+      } else if (
+          catalog.connectorName == "hive" || catalog.connectorName == "test") {
+        defaultSchemas.emplace(catalog.catalogName, "default");
+      }
+    }
 
     if (!FLAGS_data_path.empty()) {
       connectors.registerLocalHiveConnector(FLAGS_data_path, FLAGS_data_format);
-      catalogIds.insert(facebook::axiom::Connectors::kLocalHiveConnectorId);
-      defaultSchemas.emplace(
-          facebook::axiom::Connectors::kLocalHiveConnectorId, "default");
-    }
-
-    for (auto& catalogProperties :
-         axiom::sql::loadCatalogProperties(FLAGS_etc_dir)) {
-      // Expose the catalog directory so connectors can resolve relative file
-      // paths in their properties (e.g. the test connector's `tables`).
-      catalogProperties.connectorConfig.insert_or_assign(
-          std::string(facebook::axiom::connector::TestTableJson::kConfigDir),
-          std::filesystem::absolute(FLAGS_etc_dir).string());
-      registerConnector(
-          std::move(catalogProperties.catalogName),
-          catalogProperties.connectorName,
-          catalogProperties.connectorConfig);
+      defaultSchemas.emplace(Connectors::kLocalHiveConnectorId, "default");
     }
 
     std::string connectorId;
     if (!FLAGS_catalog.empty()) {
       connectorId = FLAGS_catalog;
     } else if (!FLAGS_data_path.empty()) {
-      connectorId = facebook::axiom::Connectors::kLocalHiveConnectorId;
+      connectorId = Connectors::kLocalHiveConnectorId;
     } else {
-      connectorId = defaultConnector->connectorId();
+      connectorId = Connectors::kTpchConnectorId;
     }
 
     // Not every catalog has a built-in default schema. Leave the schema empty
