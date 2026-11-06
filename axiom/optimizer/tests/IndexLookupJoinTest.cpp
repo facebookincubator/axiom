@@ -110,26 +110,34 @@ TEST_P(IndexLookupJoinTest, residualFilter) {
   }
 
   {
+    SCOPED_TRACE("Filter on a selected lookup column");
     const auto sql =
         "SELECT * FROM t JOIN lookup ON t.a = lookup.k1 AND t.b < lookup.v";
-    SCOPED_TRACE(sql);
     AXIOM_ASSERT_PLAN(
         toSingleNodePlan(parseSelect(sql)),
         matchScan("t")
             .indexLookupJoin(
-                matchScan("lookup"), core::JoinType::kInner, {"a = k1"})
+                matchScan("lookup"),
+                core::JoinType::kInner,
+                {"a = k1"},
+                "b < v")
             .project({"a", "b", "a as k1", "k2", "v"})
             .build());
   }
 
   {
+    SCOPED_TRACE("Filter on a lookup column the query does not select");
     const auto sql =
         "SELECT t.a FROM t JOIN lookup ON t.a = lookup.k1 AND t.b < lookup.v";
-    SCOPED_TRACE(sql);
-    VELOX_ASSERT_THROW(
+    AXIOM_ASSERT_PLAN(
         toSingleNodePlan(parseSelect(sql)),
-        "Index lookup residual filters can reference only lookup columns in "
-        "the join output");
+        matchScan("t")
+            .indexLookupJoin(
+                matchScan("lookup"),
+                core::JoinType::kInner,
+                {"a = k1"},
+                "b < v")
+            .build());
   }
 }
 
@@ -190,16 +198,128 @@ TEST_P(IndexLookupJoinTest, partitionedLookupUnsupported) {
       "Partitioned index lookup is unsupported");
 }
 
+// The join's filter applies a lookup conjunct the connector rejects, so a left
+// join keeps a probe row whose matches all fail the conjunct.
 TEST_P(IndexLookupJoinTest, connectorRejectedFilter) {
   if (!useV2_) {
     return;
   }
 
-  const auto sql =
-      "SELECT * FROM t JOIN lookup ON t.a = lookup.k1 WHERE lookup.v > 0";
-  VELOX_ASSERT_THROW(
-      toSingleNodePlan(parseSelect(sql)),
-      "Index lookup does not support connector-rejected filters");
+  {
+    SCOPED_TRACE("Inner join");
+    const auto sql =
+        "SELECT * FROM t JOIN lookup ON t.a = lookup.k1 WHERE lookup.v > 0";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .indexLookupJoin(
+                matchScan("lookup"),
+                core::JoinType::kInner,
+                {"a = k1"},
+                "v > 0")
+            .project({"a", "b", "a as k1", "k2", "v"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Left join");
+    const auto sql =
+        "SELECT * FROM t LEFT JOIN lookup ON t.a = lookup.k1 AND lookup.v > 0";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .indexLookupJoin(
+                matchScan("lookup"), core::JoinType::kLeft, {"a = k1"}, "v > 0")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Rejected filter on a column the query does not select");
+    const auto sql =
+        "SELECT t.a, lookup.k2 "
+        "FROM t JOIN lookup ON t.a = lookup.k1 "
+        "WHERE lookup.v > 0";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .indexLookupJoin(
+                matchScan("lookup"),
+                core::JoinType::kInner,
+                {"a = k1"},
+                "v > 0")
+            .build());
+  }
+}
+
+// A filter the probe enforces is not applied to the lookup table: every row the
+// lookup reads has keys equal to a probe row's.
+TEST_P(IndexLookupJoinTest, probeFilters) {
+  if (!useV2_) {
+    return;
+  }
+
+  {
+    SCOPED_TRACE("Filter on the probe");
+    const auto sql =
+        "SELECT * FROM t JOIN lookup ON t.a = lookup.k1 WHERE t.a = 5";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .filter("a = 5")
+            .indexLookupJoin(
+                matchScan("lookup"), core::JoinType::kInner, {"a = k1"}, "")
+            .project({"5 as a", "b", "5 as k1", "k2", "v"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Filter on the lookup keys");
+    const auto sql =
+        "SELECT * "
+        "FROM lookup JOIN t ON lookup.k1 = t.a "
+        "WHERE lookup.k1 > 5";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .filter("a > 5")
+            .indexLookupJoin(
+                matchScan("lookup"), core::JoinType::kInner, {"a = k1"}, "")
+            .project({"k1", "k2", "v", "k1 as a", "b"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Filter the probe input guarantees");
+    const auto sql =
+        "SELECT * "
+        "FROM (SELECT * FROM t WHERE a > 5) t "
+        "LEFT JOIN lookup ON t.a = lookup.k1 AND t.a = lookup.v";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .filter("a > 5")
+            .indexLookupJoin(
+                matchScan("lookup"),
+                core::JoinType::kLeft,
+                {"a = k1"},
+                "k1 = v")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Filter the probe input guarantees, lookup on the left");
+    const auto sql =
+        "SELECT * "
+        "FROM lookup JOIN (SELECT * FROM t WHERE a > 5) t ON lookup.k1 = t.a";
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(parseSelect(sql)),
+        matchScan("t")
+            .filter("a > 5")
+            .indexLookupJoin(
+                matchScan("lookup"), core::JoinType::kInner, {"a = k1"}, "")
+            .project({"k1", "k2", "v", "k1 as a", "b"})
+            .build());
+  }
 }
 
 TEST_P(IndexLookupJoinTest, downstreamJoin) {

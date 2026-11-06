@@ -843,6 +843,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
   }
 
+  // Returns 'input' if it scans a table that can only be read by key.
+  static const Scan* FOLLY_NULLABLE lookupOnlyScan(NodeCP input) {
+    if (!input->is(NodeType::kScan)) {
+      return nullptr;
+    }
+    const auto* scan = input->as<Scan>();
+    return scan->baseTable()->layout()->supportsScan() ? nullptr : scan;
+  }
+
   // Propagates filters only toward an input whose rows the join may discard.
   void propagateAcrossJoin(
       JoinCP node,
@@ -852,8 +861,14 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       const ExprVector& pending,
       ExprVector& leftPending,
       ExprVector& rightPending) {
-    const auto propagation =
+    auto propagation =
         JoinPredicatePlacement::filterPropagation(joinType, node->nullAware());
+    // Nothing is copied onto a table read only by key: it yields only rows
+    // whose keys equal a probe row's, so the probe's filters hold on them.
+    propagation.leftToRight =
+        propagation.leftToRight && lookupOnlyScan(node->right()) == nullptr;
+    propagation.rightToLeft =
+        propagation.rightToLeft && lookupOnlyScan(node->left()) == nullptr;
     if (!propagation.leftToRight && !propagation.rightToLeft) {
       return;
     }
@@ -1439,13 +1454,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return std::nullopt;
     }
 
-    const auto lookupOnlyScan = [](NodeCP input) -> const Scan* {
-      if (!input->is(NodeType::kScan)) {
-        return nullptr;
-      }
-      const auto* scan = input->as<Scan>();
-      return scan->baseTable()->layout()->supportsScan() ? nullptr : scan;
-    };
     const Scan* rightLookup = lookupOnlyScan(node->right());
     const Scan* leftLookup = lookupOnlyScan(node->left());
     VELOX_USER_CHECK(
@@ -1605,16 +1613,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         lookupOutputs.push_back(column);
       }
     }
-    const PlanObjectSet visibleLookupOutputs =
-        PlanObjectSet::fromObjects(pruned.sourceColumns);
-    for (ExprCP filter : routed.joinPredicates) {
-      PlanObjectSet lookupFilterColumns = filter->columns();
-      lookupFilterColumns.intersect(
-          PlanObjectSet::fromObjects(sides->lookupScan->outputColumns()));
-      VELOX_USER_CHECK(
-          lookupFilterColumns.isSubset(visibleLookupOutputs),
-          "Index lookup residual filters can reference only lookup columns in the join output");
-    }
     ExprVector rejected;
     const TableAccessHandle* handle = builder().takeTableAccessHandle(
         TableAccessHandle::buildIndexLookup(
@@ -1631,9 +1629,16 @@ class Pushdown : public NodeRewriter<PushdownContext> {
             session_,
             evaluator_,
             rejected));
-    VELOX_USER_CHECK(
-        rejected.empty(),
-        "Index lookup does not support connector-rejected filters");
+    // A conjunct of the join's filter decides only which lookup matches a
+    // probe row keeps. For an inner or a left join, that is the same as
+    // filtering the lookup table.
+    appendAll(routed.joinPredicates, rejected);
+    const PlanObjectSet rejectedColumns = PlanObjectSet::columnsOf(rejected);
+    for (ColumnCP column : sides->lookupScan->outputColumns()) {
+      if (rejectedColumns.contains(column) && !sideRequired.contains(column)) {
+        lookupOutputs.push_back(column);
+      }
+    }
 
     RewrittenJoinInputs rewritten{
         .left = probe,
@@ -3275,12 +3280,25 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // Inside the join the keys are equal, so a conjunct rewritten through the
     // keys is equivalent to it, and so is the AND of the copies the rewrite
     // simplifies to. A copy helps only when it reads one input. A conjunct
-    // that reads both is redundant when every copy of one rewrite reads one
-    // input.
+    // that reads both inputs is redundant when every copy of one rewrite reads
+    // one input. A table read only by key yields only rows whose keys equal a
+    // probe row's, so what the probe enforces holds on them: a conjunct that
+    // reads only that table is redundant the same way, and a conjunct that
+    // stays is not copied onto it.
     auto readsOneInput = [&](ExprCP conjunct) {
       const auto& columns = conjunct->columns();
       return !columns.empty() &&
           (columns.isSubset(leftColumns) || columns.isSubset(rightColumns));
+    };
+    PlanObjectSet lookupColumns;
+    if (lookupOnlyScan(node->left()) != nullptr) {
+      lookupColumns = leftColumns;
+    } else if (lookupOnlyScan(node->right()) != nullptr) {
+      lookupColumns = rightColumns;
+    }
+    auto readsLookup = [&](ExprCP expr) {
+      return !expr->columns().empty() &&
+          expr->columns().isSubset(lookupColumns);
     };
     const auto toLeft = makeSubstitutions(rightKeys, leftKeys);
     const auto toRight = makeSubstitutions(leftKeys, rightKeys);
@@ -3309,7 +3327,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         }
       }
 
-      if (readsOneInput(conjunct) || !covered) {
+      const bool keep =
+          !covered || (readsOneInput(conjunct) && !readsLookup(conjunct));
+      if (keep) {
         kept.push_back(conjunct);
       }
 
@@ -3317,7 +3337,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
           copies.begin(),
           copies.end(),
           std::back_inserter(derived),
-          readsOneInput);
+          [&](ExprCP copy) {
+            return readsOneInput(copy) && !(keep && readsLookup(copy));
+          });
     }
     pending = std::move(kept);
     appendDistinct(pending, derived);

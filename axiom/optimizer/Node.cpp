@@ -2467,12 +2467,6 @@ IndexLookupJoin::IndexLookupJoin(Key key)
   }
   for (ExprCP conjunct : filter_) {
     VELOX_CHECK(conjunct->columns().isSubset(available));
-    PlanObjectSet lookupFilterColumns = conjunct->columns();
-    lookupFilterColumns.intersect(lookupColumns);
-    VELOX_CHECK(
-        lookupFilterColumns.isSubset(
-            PlanObjectSet::fromObjects(sourceColumns_)),
-        "Index lookup filter columns from the lookup table must be join outputs");
   }
   for (ColumnCP source : sourceColumns_) {
     VELOX_CHECK(available.contains(source));
