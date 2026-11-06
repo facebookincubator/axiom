@@ -540,7 +540,7 @@ the default for searches, which a `vector_search` hint overrides.
 | Setting | Index types | Used by | Meaning |
 |---|---|---|---|
 | `ivf.nlist` | `ivf_flat`, `ivf_sq` | build | The number of lists of the IVF index. |
-| `ivf.nprobe` | `ivf_flat`, `ivf_sq` | search | The number of lists a search scans. |
+| `ivf.nprobe` | `ivf_flat`, `ivf_sq` | search | The number of lists a search scans. Defaults to all of them. |
 | `hnsw.M` | `hnsw_sq` | build | The number of neighbors of each embedding in the graph, from 2 to 256. |
 | `hnsw.efConstruction` | `hnsw_sq` | build | The number of candidates a build explores. |
 | `hnsw.efSearch` | `hnsw_sq` | search | The number of candidates a search explores. |
