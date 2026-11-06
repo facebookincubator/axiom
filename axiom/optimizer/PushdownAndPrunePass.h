@@ -77,9 +77,9 @@ namespace facebook::axiom::optimizer {
 /// `Scan`, which then also outputs the columns they read, narrowed by a
 /// `Project` when nothing above wants them and the consumer is not itself a
 /// `Project`. A lookup-only `Scan` paired with a supported join becomes an
-/// `IndexLookupJoin` whose handle carries its lookup keys; connector-rejected
-/// lookup filters fail planning. A rewrite running after this pass sees the
-/// nodes the query will run.
+/// `IndexLookupJoin` whose handle carries its lookup keys and whose filter
+/// holds the lookup filters the connector rejects. A rewrite running after this
+/// pass sees the nodes the query will run.
 class PushdownAndPrunePass {
  public:
   /// Rewritten root and its user-visible output columns.
