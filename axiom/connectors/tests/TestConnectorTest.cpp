@@ -68,9 +68,166 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
         makeTestStatWriter());
   }
 
+  std::shared_ptr<TestTable> createAnalyzeTable() {
+    auto table =
+        connector_->addTable("t", ROW({"x", "b"}, {BIGINT(), BOOLEAN()}));
+    table->addData(
+        makeRowVector(
+            {"x", "b"},
+            {makeNullableFlatVector<int64_t>({1, 2, std::nullopt}),
+             makeNullableFlatVector<bool>({true, false, std::nullopt})}),
+        /*collectColumnStatistics=*/false);
+    return table;
+  }
+
+  std::optional<int64_t> analyze(
+      const TablePtr& table,
+      std::vector<ColumnStatistics> stats) {
+    auto session = makeSession();
+    auto handle = metadata_->beginWrite(
+        session, table, WriteKind::kAnalyze, /*explain=*/false);
+    auto groupingKeys = makeRowVector(
+        {"$row_count"},
+        {makeFlatVector<int64_t>({static_cast<int64_t>(*table->numRows())})});
+    return metadata_
+        ->finishWrite(session, handle, {}, groupingKeys, {std::move(stats)})
+        .get();
+  }
+
   std::shared_ptr<TestConnector> connector_;
   std::shared_ptr<ConnectorMetadata> metadata_;
 };
+
+// Subset ANALYZE publishes measured statistics on the existing table.
+TEST_F(TestConnectorTest, analyzeSubset) {
+  auto table = createAnalyzeTable();
+  const auto data = table->data().front();
+  ASSERT_FALSE(table->findColumn("x")->stats());
+
+  EXPECT_EQ(
+      analyze(
+          table,
+          {{.name = "x",
+            .nullPct = 100.0f / 3,
+            .numDistinct = 2,
+            .numValues = 2}}),
+      3);
+  const auto published = metadata_->findTable(table->name());
+  ASSERT_EQ(published, table);
+  ASSERT_TRUE(published->findColumn("x")->stats());
+  EXPECT_EQ(published->findColumn("x")->stats()->numDistinct, 2);
+  EXPECT_FLOAT_EQ(published->findColumn("x")->stats()->nullPct, 100.0f / 3);
+  EXPECT_FALSE(published->findColumn("b")->stats());
+  EXPECT_EQ(table->data().front(), data);
+  EXPECT_EQ(table->numRows(), 3);
+}
+
+// A failed commit leaves the previously published statistics in place.
+TEST_F(TestConnectorTest, analyzeCommitFailure) {
+  auto table = createAnalyzeTable();
+  analyze(table, {{.name = "x", .numDistinct = 2, .numValues = 2}});
+  const auto* oldStats = table->findColumn("x")->stats();
+  ASSERT_TRUE(oldStats);
+  connector_->metadata()->onFinishWrite =
+      [](const auto&, const auto&, const auto&) {
+        VELOX_USER_FAIL("finish failed");
+      };
+
+  VELOX_ASSERT_THROW(
+      analyze(table, {{.name = "b", .numDistinct = 2, .numValues = 2}}),
+      "finish failed");
+  EXPECT_EQ(metadata_->findTable(table->name()), table);
+  EXPECT_EQ(table->findColumn("x")->stats(), oldStats);
+  EXPECT_FALSE(table->findColumn("b")->stats());
+}
+
+// A second subset replaces the first subset's statistics.
+TEST_F(TestConnectorTest, analyzeDifferentSubset) {
+  auto table = createAnalyzeTable();
+  analyze(table, {{.name = "x", .numDistinct = 2, .numValues = 2}});
+
+  EXPECT_EQ(
+      analyze(table, {{.name = "b", .numDistinct = 2, .numValues = 2}}), 3);
+  EXPECT_FALSE(table->findColumn("x")->stats());
+  ASSERT_TRUE(table->findColumn("b")->stats());
+  EXPECT_EQ(table->findColumn("b")->stats()->numValues, 2);
+}
+
+// Appending data after subset ANALYZE keeps omitted statistics unknown.
+TEST_F(TestConnectorTest, appendAfterAnalyzeSubset) {
+  auto table = createAnalyzeTable();
+  analyze(table, {{.name = "b", .numDistinct = 2, .numValues = 2}});
+
+  connector_->appendData(
+      "t",
+      makeRowVector(
+          {makeFlatVector<int64_t>({3}), makeFlatVector<bool>({true})}));
+  EXPECT_EQ(table->numRows(), 4);
+  EXPECT_FALSE(table->findColumn("x")->stats());
+}
+
+// Full ANALYZE restores statistics for columns omitted by a subset.
+TEST_F(TestConnectorTest, analyzeAllColumnsAfterSubset) {
+  auto table = createAnalyzeTable();
+  analyze(table, {{.name = "b", .numDistinct = 2, .numValues = 2}});
+  ASSERT_FALSE(table->findColumn("x")->stats());
+
+  EXPECT_EQ(
+      analyze(
+          table,
+          {{.name = "x", .numDistinct = 2, .numValues = 2},
+           {.name = "b", .numDistinct = 2, .numValues = 2}}),
+      3);
+  ASSERT_TRUE(table->findColumn("x")->stats());
+  EXPECT_EQ(table->findColumn("x")->stats()->numDistinct, 2);
+  ASSERT_TRUE(table->findColumn("b")->stats());
+  EXPECT_EQ(table->findColumn("b")->stats()->numValues, 2);
+}
+
+// Row-level deletion still refreshes statistics for a tracked table.
+TEST_F(TestConnectorTest, deleteAfterAnalyze) {
+  auto table = connector_->addTable("t", ROW("x", BIGINT()));
+  table->addData(makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 2, 2, std::nullopt})}));
+  analyze(
+      table, {{.name = "x", .nullPct = 25, .numDistinct = 2, .numValues = 3}});
+
+  EXPECT_EQ(table->deleteRows({0}), 1);
+  EXPECT_EQ(table->numRows(), 3);
+  ASSERT_TRUE(table->findColumn("x")->stats());
+  EXPECT_EQ(table->findColumn("x")->stats()->numDistinct, 1);
+}
+
+TEST_F(TestConnectorTest, analyzeWithStatisticsDisabled) {
+  auto table = connector_->addTable(
+      "u",
+      ROW("a", BIGINT()),
+      {{std::string{TestConnectorMetadata::kCollectStatistics},
+        Variant(false)}});
+  auto session = makeSession();
+  VELOX_ASSERT_THROW(
+      metadata_->beginWrite(
+          session, table, WriteKind::kAnalyze, /*explain=*/false),
+      "Cannot ANALYZE a table that reports no statistics: u");
+  VELOX_ASSERT_THROW(
+      metadata_->beginWrite(
+          session, table, WriteKind::kAnalyze, /*explain=*/true),
+      "Cannot ANALYZE a table that reports no statistics: u");
+}
+
+TEST_F(TestConnectorTest, analyzeWithSyntheticStatistics) {
+  auto table = connector_->addTable("v", ROW("a", BIGINT()));
+  table->setStats(100, {{"a", {.numDistinct = 50}}});
+  auto session = makeSession();
+  VELOX_ASSERT_THROW(
+      metadata_->beginWrite(
+          session, table, WriteKind::kAnalyze, /*explain=*/false),
+      "Cannot ANALYZE a table whose statistics were set without data: v");
+  VELOX_ASSERT_THROW(
+      metadata_->beginWrite(
+          session, table, WriteKind::kAnalyze, /*explain=*/true),
+      "Cannot ANALYZE a table whose statistics were set without data: v");
+}
 
 TEST_F(TestConnectorTest, connectorRegister) {
   const auto connectorId = "registration-test";

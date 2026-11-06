@@ -73,12 +73,17 @@ struct PersistedStats {
   /// Per-column statistics (min, max, numValues, numDistinct, etc.).
   std::vector<ColumnStatistics> columns;
 
-  /// Merges stats of 'otherNumRows' more rows, whose column stats are
-  /// 'otherColumns', into 'this'. A column missing from one side counts as
-  /// all null there.
+  /// Columns whose statistics are unknown, for example because ANALYZE
+  /// omitted them. An absent column not listed here predates a schema change
+  /// and is all-null in these rows.
+  std::vector<std::string> unknownColumns;
+
+  /// Merges statistics for more rows. Unknown statistics on either non-empty
+  /// side remain unknown; an absent column otherwise counts as all-null.
   void merge(
       uint64_t otherNumRows,
-      const std::vector<ColumnStatistics>& otherColumns);
+      const std::vector<ColumnStatistics>& otherColumns,
+      const std::vector<std::string>& otherUnknownColumns = {});
 
   /// Reads persisted stats from the .stats file in 'directory'. Returns
   /// std::nullopt if the file doesn't exist.
@@ -87,6 +92,15 @@ struct PersistedStats {
   /// Writes stats to a .stats file in 'directory', merging with any existing
   /// stats from prior writes.
   static void write(const std::string& directory, PersistedStats stats);
+
+  /// Replaces the row count and all column statistics in the .stats file in
+  /// 'directory', creating the file if needed. Columns absent from 'columns'
+  /// lose their stored statistics.
+  static void replace(
+      const std::string& directory,
+      uint64_t numRows,
+      std::vector<ColumnStatistics> columns,
+      const std::vector<std::string>& tableColumns);
 };
 
 /// The .schema file that describes the columns of a local table.

@@ -396,7 +396,7 @@ fails when it is planned.
 ## Statistics
 
 Tables require `.schema` and `.stats` metadata files. These are produced in
-two ways:
+the following ways:
 
 ### Write pipeline (CREATE TABLE, INSERT INTO)
 
@@ -410,6 +410,36 @@ data files.
   persisted partition stats, merges column stats across matching partitions,
   and computes null percentages. NDV is merged using max across partitions.
   TODO: Replace NDV max with HLL sketch merging for accurate union.
+
+### ANALYZE
+
+`ANALYZE t` scans all rows and replaces the stored statistics with the same
+statistics collected by writes. It returns the number of rows analyzed and
+does not change table data. Use it to refresh stale statistics or collect
+statistics for data written outside Axiom after loading or reloading the table.
+
+```sql
+ANALYZE t;
+ANALYZE t WITH (columns = ARRAY['orderkey', 'totalprice']);
+```
+
+For each statistics group, ANALYZE replaces the row count and statistics of
+the collected columns. Statistics for omitted columns are discarded, even
+when the row count is unchanged. `WITH (columns = ARRAY[])` refreshes only row
+counts and partition-column statistics. Omitted columns are recorded in
+`unknownColumns` in the `.stats` file. Their unknown status survives reloads,
+and INSERT does not restore statistics for existing rows. An ANALYZE that
+includes these columns refreshes their statistics. Queries that request their
+metadata-derived null or non-null counts scan data instead. Columns added after
+a group was written retain the usual all-null interpretation for its old rows.
+Null percentages are derived from non-null counts and row counts.
+
+An unpartitioned table has one group, including when it is empty. A partitioned
+table has one group per partition read, and partition columns are always
+included in the collected statistics. Results replace the corresponding
+`.stats` files and are visible to subsequent queries. ANALYZE of an empty
+partitioned table has no groups to update. Plain EXPLAIN does not update
+statistics; EXPLAIN ANALYZE executes the statement and updates them.
 
 ### LocalTableBuilder (external data)
 

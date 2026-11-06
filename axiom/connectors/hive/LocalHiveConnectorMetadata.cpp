@@ -201,7 +201,8 @@ FilteredTableStats estimateStatsFromPartitionStats(
     }
 
     ++numMatchingPartitions;
-    merged.merge(partition.numRows, partition.columnStats);
+    merged.merge(
+        partition.numRows, partition.columnStats, partition.unknownColumns);
   }
 
   // Filter to only the requested columns and fill in missing ones.
@@ -218,15 +219,18 @@ FilteredTableStats estimateStatsFromPartitionStats(
           HiveTableLayout::bucketColumnStats(numBuckets, merged.numRows));
       continue;
     }
+    if (std::find(
+            merged.unknownColumns.begin(),
+            merged.unknownColumns.end(),
+            column->name()) != merged.unknownColumns.end()) {
+      // Keep the requested position without assigning a null fraction.
+      columnStats.push_back(
+          ColumnStatistics{.name = column->name(), .isUnknown = true});
+      continue;
+    }
     auto it = statsNameToIndex.find(column->name());
     if (it != statsNameToIndex.end()) {
-      auto& stats = merged.columns[it->second];
-      if (merged.numRows > 0) {
-        stats.nullPct = 100.0f *
-            static_cast<float>(merged.numRows - stats.numValues) /
-            static_cast<float>(merged.numRows);
-      }
-      columnStats.push_back(std::move(stats));
+      columnStats.push_back(std::move(merged.columns[it->second]));
     } else {
       // Column not in any partition stats (schema evolution: column added
       // after existing partitions were written). All values are null.
@@ -759,6 +763,15 @@ LocalHiveTableLayout::co_metadataCounts(
     }
     if (!matched) {
       continue;
+    }
+
+    if (partition.numRows > 0) {
+      for (const auto& name : partition.unknownColumns) {
+        if (nullCountColumnIndex.contains(name)) {
+          // Missing statistics after ANALYZE are unknown, not all-null.
+          co_return std::nullopt;
+        }
+      }
     }
 
     // Group key: partition values joined with a NUL separator. Hive partition
@@ -1574,6 +1587,7 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
     PartitionStats partitionEntry;
     partitionEntry.numRows = persistedStats->numRows;
     partitionEntry.columnStats = std::move(persistedStats->columns);
+    partitionEntry.unknownColumns = std::move(persistedStats->unknownColumns);
 
     table->incrementNumRows(partitionEntry.numRows);
 
@@ -1609,7 +1623,8 @@ void LocalHiveConnectorMetadata::loadTableWithWriteTimeStats(
               PartitionStats{
                   .partitionKeys = std::move(keys),
                   .numRows = persisted.numRows,
-                  .columnStats = std::move(persisted.columns)});
+                  .columnStats = std::move(persisted.columns),
+                  .unknownColumns = std::move(persisted.unknownColumns)});
         });
   }
   // Otherwise the table is unpartitioned and has no persisted stats yet (e.g.
@@ -2078,12 +2093,102 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
   return rows;
 }
 
+namespace {
+
+// The directory that holds one group's '.stats' file, and the group's row
+// count.
+struct StatsGroup {
+  std::string directory;
+  uint64_t numRows;
+};
+
+// Returns the group of each row of 'groupingKeys', which a write or ANALYZE
+// passes to finishWrite. Its last column is $row_count. The columns before it,
+// if any, are partition keys and name the group's partition directory under
+// 'tablePath'. With no partition keys, the one group is the whole table.
+std::vector<StatsGroup> statsGroups(
+    const std::string& tablePath,
+    const velox::RowVectorPtr& groupingKeys) {
+  const auto numColumns = groupingKeys->childrenSize();
+  VELOX_CHECK_GT(numColumns, 0);
+  const auto* rowCounts = groupingKeys->childAt(numColumns - 1)
+                              ->asUnchecked<velox::SimpleVector<int64_t>>();
+  const auto partitionKeys =
+      numColumns > 1 ? dropLastColumn(groupingKeys) : nullptr;
+
+  std::vector<StatsGroup> groups;
+  groups.reserve(groupingKeys->size());
+  for (velox::vector_size_t i = 0; i < groupingKeys->size(); ++i) {
+    groups.push_back(
+        {partitionKeys == nullptr
+             ? tablePath
+             : fmt::format(
+                   "{}/{}",
+                   tablePath,
+                   velox::connector::hive::HivePartitionName::partitionName(
+                       i, partitionKeys, /*partitionKeyAsLowerCase=*/true)),
+         static_cast<uint64_t>(rowCounts->valueAt(i))});
+  }
+  return groups;
+}
+
+} // namespace
+
+ConnectorWriteHandlePtr LocalHiveConnectorMetadata::beginWrite(
+    const ConnectorSessionPtr& session,
+    const TablePtr& table,
+    WriteKind kind,
+    bool explain) {
+  if (kind == WriteKind::kAnalyze) {
+    ensureInitialized();
+    return std::make_shared<AnalyzeHandle>(table);
+  }
+  return HiveConnectorMetadata::beginWrite(session, table, kind, explain);
+}
+
+int64_t LocalHiveConnectorMetadata::replaceStatistics(
+    const TablePtr& table,
+    const velox::RowVectorPtr& groupingKeys,
+    std::vector<std::vector<ColumnStatistics>> groupStats) {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_USER_CHECK(
+      findTableLocked(table->name().table) == table,
+      "Table changed while ANALYZE ran: {}",
+      table->name().toString());
+
+  // A partitioned table with no rows has no partitions to analyze.
+  if (groupingKeys == nullptr) {
+    return 0;
+  }
+  VELOX_CHECK_EQ(groupStats.size(), groupingKeys->size());
+
+  const auto path = tablePath(table->name());
+  const auto groups = statsGroups(path, groupingKeys);
+  uint64_t numRows{0};
+  for (size_t i = 0; i < groups.size(); ++i) {
+    numRows += groups[i].numRows;
+    PersistedStats::replace(
+        groups[i].directory,
+        groups[i].numRows,
+        std::move(groupStats[i]),
+        table->type()->names());
+  }
+
+  loadTable(table->name().table, path);
+  return numRows;
+}
+
 RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle,
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr groupingKeys,
     std::vector<std::vector<ColumnStatistics>> groupStats) {
+  if (const auto* analyzeHandle = handle->as<AnalyzeHandle>()) {
+    return replaceStatistics(
+        analyzeHandle->table(), groupingKeys, std::move(groupStats));
+  }
+
   uint64_t rows = 0;
   velox::DecodedVector decoded;
   for (const auto& result : writeResults) {
@@ -2126,25 +2231,10 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
         groupingKeys->size(),
         "Stats group count does not match grouping keys count");
 
-    // The last column in groupingKeys is $row_count (per-group row count).
-    // Preceding columns are partition keys.
-    const auto numColumns = groupingKeys->childrenSize();
-    VELOX_CHECK_GT(numColumns, 0);
-    auto* rowCounts = groupingKeys->childAt(numColumns - 1)
-                          ->asUnchecked<velox::SimpleVector<int64_t>>();
-
-    // Drop the $row_count column (last) to get only partition keys.
-    auto partitionKeys = dropLastColumn(groupingKeys);
-
-    for (auto i = 0; i < groupingKeys->size(); ++i) {
-      const auto partitionRows = rowCounts->valueAt(i);
-      auto partitionDirName =
-          velox::connector::hive::HivePartitionName::partitionName(
-              i, partitionKeys, /*partitionKeyAsLowerCase=*/true);
-      writtenPartitions.push_back(fs::path(targetPath) / partitionDirName);
+    const auto groups = statsGroups(targetPath, groupingKeys);
+    for (size_t i = 0; i < groups.size(); ++i) {
       PersistedStats::write(
-          fmt::format("{}/{}", targetPath, partitionDirName),
-          {static_cast<uint64_t>(partitionRows), std::move(groupStats[i])});
+          groups[i].directory, {groups[i].numRows, std::move(groupStats[i])});
     }
   } else if (!partitioned) {
     PersistedStats::write(
@@ -2184,6 +2274,11 @@ void LocalHiveConnectorMetadata::reloadTableFromPath(
 velox::ContinueFuture LocalHiveConnectorMetadata::abortWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle) noexcept try {
+  if (handle->as<AnalyzeHandle>() != nullptr) {
+    // ANALYZE stores its statistics in finishWrite and writes nothing before.
+    return {};
+  }
+
   std::lock_guard<std::mutex> l(mutex_);
   const auto* hiveHandle = handle->asChecked<HiveConnectorWriteHandle>();
   const auto* veloxHandle =

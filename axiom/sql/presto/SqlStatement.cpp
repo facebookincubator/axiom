@@ -46,6 +46,7 @@ const auto& statementKindNames() {
       {SqlStatementKind::kUse, "USE"},
       {SqlStatementKind::kAddColumn, "ALTER TABLE ADD COLUMN"},
       {SqlStatementKind::kCall, "CALL"},
+      {SqlStatementKind::kAnalyze, "ANALYZE"},
   };
 
   return kNames;
@@ -125,6 +126,7 @@ facebook::axiom::connector::QueryKind SqlStatement::queryKind() const {
     case SqlStatementKind::kCreateTable:
     case SqlStatementKind::kCreateTableAsSelect:
     case SqlStatementKind::kInsert:
+    case SqlStatementKind::kAnalyze:
     case SqlStatementKind::kRefreshVectorIndex:
     case SqlStatementKind::kDelete:
     case SqlStatementKind::kDropTable:
