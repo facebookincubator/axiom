@@ -126,6 +126,7 @@ facebook::axiom::connector::QueryKind SqlStatement::queryKind() const {
     case SqlStatementKind::kCreateTable:
     case SqlStatementKind::kCreateTableAsSelect:
     case SqlStatementKind::kInsert:
+    case SqlStatementKind::kAnalyze:
     case SqlStatementKind::kRefreshVectorIndex:
     case SqlStatementKind::kDelete:
     case SqlStatementKind::kDropTable:

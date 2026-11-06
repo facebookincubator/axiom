@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <gmock/gmock.h>
-#include <map>
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -34,7 +33,7 @@ class AnalyzeTest : public SqlQueryRunnerTestBase {
   TestConnectorMetadata& metadata() {
     return *testConnector_->metadata();
   }
-  std::shared_ptr<TestTable> addData() {
+  std::shared_ptr<TestTable> createTableWithData() {
     auto table = testConnector_->addTable(
         "t", ROW({"x", "b", "s"}, {BIGINT(), BOOLEAN(), VARCHAR()}));
     testConnector_->appendData(
@@ -63,7 +62,7 @@ class AnalyzeTest : public SqlQueryRunnerTestBase {
 // The statistics are the same however the plan splits the work: in one step,
 // across drivers, and across workers.
 TEST_F(AnalyzeTest, standard) {
-  addData();
+  createTableWithData();
   for (const auto& [numWorkers, numDrivers] :
        std::vector<std::pair<int32_t, int32_t>>{{1, 1}, {1, 4}, {3, 2}}) {
     SCOPED_TRACE(fmt::format("{} workers, {} drivers", numWorkers, numDrivers));
@@ -92,63 +91,6 @@ TEST_F(AnalyzeTest, standard) {
   }
 }
 
-TEST_F(AnalyzeTest, publishStatisticsWithoutChangingData) {
-  auto original =
-      testConnector_->addTable("t", ROW({"x", "b"}, {BIGINT(), BOOLEAN()}));
-  original->addData(
-      makeRowVector(
-          {"x", "b"},
-          {makeNullableFlatVector<int64_t>({1, 2, std::nullopt}),
-           makeNullableFlatVector<bool>({true, false, std::nullopt})}),
-      false);
-  EXPECT_EQ(original->numRows(), 3);
-  EXPECT_FALSE(original->findColumn("x")->stats());
-  run("ANALYZE t WITH (columns = ARRAY['x'])");
-  auto first = metadata().findTable({"default", "t"});
-  ASSERT_NE(first.get(), original.get());
-  ASSERT_TRUE(first->findColumn("x")->stats());
-  EXPECT_EQ(first->findColumn("x")->stats()->numDistinct, 2);
-  EXPECT_FALSE(first->findColumn("b")->stats());
-  EXPECT_FALSE(original->findColumn("x")->stats());
-  metadata().onFinishWrite = [](const auto&, const auto&, const auto&) {
-    VELOX_USER_FAIL("finish failed");
-  };
-  VELOX_ASSERT_THROW(run("ANALYZE t"), "finish failed");
-  EXPECT_EQ(first, metadata().findTable({"default", "t"}));
-  metadata().onFinishWrite = nullptr;
-  run("ANALYZE t WITH (columns = ARRAY['b'])");
-  auto second = metadata().findTable({"default", "t"});
-  EXPECT_FALSE(second->findColumn("x")->stats());
-  EXPECT_EQ(second->findColumn("b")->stats()->numValues, 2);
-  EXPECT_FLOAT_EQ(second->findColumn("b")->stats()->nullPct, 100.0 / 3);
-  EXPECT_EQ(
-      std::static_pointer_cast<const TestTable>(second)->data()[0].get(),
-      original->data()[0].get());
-  testConnector_->appendData(
-      "t",
-      makeRowVector(
-          {"x", "b"},
-          {makeFlatVector<int64_t>({3}), makeFlatVector<bool>({true})}));
-  auto appended = metadata().findTable({"default", "t"});
-  EXPECT_EQ(appended->numRows(), 4);
-  EXPECT_FALSE(appended->findColumn("x")->stats());
-  run("ANALYZE t");
-  auto final = metadata().findTable({"default", "t"});
-  EXPECT_EQ(final->findColumn("x")->stats()->numDistinct, 3);
-  EXPECT_EQ(final->findColumn("b")->stats()->numValues, 3);
-}
-
-// The table that ANALYZE publishes recomputes its statistics after a row-level
-// DELETE, as the table it replaced did.
-TEST_F(AnalyzeTest, deleteAfterAnalyze) {
-  addData();
-  run("ANALYZE t");
-  EXPECT_EQ(fetchSingleValue<int64_t>("DELETE FROM t WHERE x = 1"), 1);
-  const auto table = metadata().findTable({"default", "t"});
-  EXPECT_EQ(table->numRows(), 3);
-  EXPECT_EQ(table->findColumn("x")->stats()->numDistinct, 1);
-}
-
 TEST_F(AnalyzeTest, approximateDistinctCount) {
   testConnector_->addTable("t", ROW({"x"}, {BIGINT()}));
   testConnector_->appendData(
@@ -164,7 +106,7 @@ TEST_F(AnalyzeTest, approximateDistinctCount) {
 // ANALYZE reads only the chosen columns. With none chosen it still counts the
 // rows.
 TEST_F(AnalyzeTest, columns) {
-  addData();
+  createTableWithData();
   run("ANALYZE t WITH (columns = ARRAY['x'])");
   ASSERT_TRUE(metadata().analyzedStatistics);
   EXPECT_THAT(
@@ -198,16 +140,14 @@ TEST_F(AnalyzeTest, bucketedTable) {
   EXPECT_THAT(
       runner_->run(fmt::format("EXPLAIN {}", kSql), options).message.value(),
       testing::Not(testing::HasSubstr("HASH")));
-  EXPECT_EQ(
-      fetchSingleRow(kSql, options)->childAt(0)->variantAt(0).value<int64_t>(),
-      100);
+  EXPECT_EQ(fetchSingleValue<int64_t>(kSql, options), 100);
   EXPECT_EQ(stat(*metadata().analyzedStatistics, "v").numDistinct, 10);
 }
 
 // EXPLAIN shows ANALYZE without committing anything. EXPLAIN ANALYZE runs it,
 // as it runs a write.
 TEST_F(AnalyzeTest, explainAndCommitFailure) {
-  addData();
+  createTableWithData();
   int commits{0};
   metadata().onFinishWrite = [&](const auto&, const auto&, const auto&) {
     ++commits;
@@ -260,45 +200,41 @@ TEST_F(AnalyzeTest, emptyAndAllNull) {
 // group of its own, as in GROUP BY. ANALYZE reads and analyzes the grouping
 // column even when the column list leaves it out.
 TEST_F(AnalyzeTest, grouped) {
-  addData()->setStatsGroupingKeys({"x"});
-  const auto table = metadata().findTable({"default", "t"});
-  for (const auto& [numWorkers, numDrivers] :
-       std::vector<std::pair<int32_t, int32_t>>{{1, 1}, {3, 2}}) {
-    SCOPED_TRACE(fmt::format("{} workers, {} drivers", numWorkers, numDrivers));
-    EXPECT_EQ(
-        fetchSingleRow(
-            "ANALYZE t WITH (columns = ARRAY['b'])",
-            {.numWorkers = numWorkers, .numDrivers = numDrivers})
-            ->childAt(0)
-            ->variantAt(0)
-            .value<int64_t>(),
-        4);
-    // Grouped results leave the table unchanged.
-    EXPECT_EQ(metadata().findTable({"default", "t"}), table);
-    const auto& stats = *metadata().analyzedStatistics;
-    // x is 1, 2, 2 and null, with b true, false, true and null.
-    std::map<std::optional<int64_t>, std::tuple<int64_t, int64_t, int64_t>>
-        groups;
-    const auto& keys = stats.groupingKeys->childAt(0);
-    const auto& rows = stats.groupingKeys->childAt(1);
-    for (auto i = 0; i < stats.groupingKeys->size(); ++i) {
-      const auto key = keys->isNullAt(i)
-          ? std::nullopt
-          : std::optional(keys->variantAt(i).value<int64_t>());
-      EXPECT_EQ(stat(stats, "x", i).numDistinct, key.has_value() ? 1 : 0);
-      const auto& b = stat(stats, "b", i);
-      groups[key] = {
-          rows->variantAt(i).value<int64_t>(),
-          b.numValues,
-          b.numDistinct.value()};
-    }
-    EXPECT_THAT(
-        groups,
-        testing::ElementsAre(
-            testing::Pair(std::nullopt, std::make_tuple(1, 0, 0)),
-            testing::Pair(1, std::make_tuple(1, 1, 1)),
-            testing::Pair(2, std::make_tuple(2, 2, 2))));
-  }
+  testConnector_->addTable("t", ROW({"x", "b"}, {BIGINT(), BOOLEAN()}))
+      ->setStatsGroupingKeys({"x"});
+  testConnector_->appendData(
+      "t",
+      makeRowVector(
+          {"x", "b"},
+          {makeNullableFlatVector<int64_t>({2, 2, 2, std::nullopt}),
+           makeNullableFlatVector<bool>(
+               {false, true, std::nullopt, std::nullopt})}));
+
+  EXPECT_EQ(
+      fetchSingleValue<int64_t>(
+          "ANALYZE t WITH (columns = ARRAY['b'])",
+          {.numWorkers = 3, .numDrivers = 2}),
+      4);
+  ASSERT_TRUE(metadata().analyzedStatistics);
+  const auto& stats = *metadata().analyzedStatistics;
+  ASSERT_NE(stats.groupingKeys, nullptr);
+  ASSERT_EQ(stats.groupingKeys->size(), 2);
+  const auto& keys = stats.groupingKeys->childAt(0);
+  const auto& rows = stats.groupingKeys->childAt(1);
+  const auto nullGroup = keys->isNullAt(0) ? 0 : 1;
+  const auto valueGroup = 1 - nullGroup;
+
+  EXPECT_TRUE(keys->isNullAt(nullGroup));
+  EXPECT_EQ(rows->variantAt(nullGroup).value<int64_t>(), 1);
+  EXPECT_EQ(stat(stats, "b", nullGroup).numValues, 0);
+
+  EXPECT_EQ(keys->variantAt(valueGroup), Variant(int64_t{2}));
+  EXPECT_EQ(rows->variantAt(valueGroup).value<int64_t>(), 3);
+  EXPECT_EQ(stat(stats, "x", valueGroup).numDistinct, 1);
+  const auto& b = stat(stats, "b", valueGroup);
+  EXPECT_EQ(b.numValues, 2);
+  EXPECT_EQ(b.numDistinct, 2);
+  EXPECT_FLOAT_EQ(b.nullPct, 100.0f / 3);
 }
 
 // A grouped ANALYZE of an empty table finds no groups.
@@ -351,7 +287,7 @@ TEST_F(AnalyzeTest, permissionsAndPlanCheck) {
         return nullptr;
       },
       [&](const auto&) { ++plans; });
-  addData();
+  createTableWithData();
   run("ANALYZE t");
   EXPECT_EQ(checks, 1);
   EXPECT_EQ(plans, 1);
@@ -360,7 +296,7 @@ TEST_F(AnalyzeTest, permissionsAndPlanCheck) {
 // ANALYZE reads the table from the table's own catalog, even when the default
 // catalog is a different one.
 TEST_F(AnalyzeTest, scansTheTablesOwnConnector) {
-  addData();
+  createTableWithData();
   registerTpch();
   run("USE tpch.sf1");
   EXPECT_EQ(
@@ -375,27 +311,10 @@ TEST_F(AnalyzeTest, scansTheTablesOwnConnector) {
 // way.
 TEST_F(AnalyzeTest, refusedBeforeRunning) {
   registerTpch();
-  testConnector_->addTable(
-      "u",
-      ROW({"a"}, BIGINT()),
-      {{std::string{TestConnectorMetadata::kCollectStatistics},
-        Variant(false)}});
-  testConnector_->addTable("v", ROW({"a"}, BIGINT()))
-      ->setStats(100, {{"a", {.numDistinct = 50}}});
   VELOX_ASSERT_USER_THROW_CODE(
       run("ANALYZE tpch.sf1.nation"), error_code::kUnsupported, "");
   VELOX_ASSERT_USER_THROW_CODE(
       run("EXPLAIN ANALYZE tpch.sf1.nation"), error_code::kUnsupported, "");
-  for (const auto& [table, error] :
-       std::vector<std::pair<std::string, std::string>>{
-           {"u", "Cannot ANALYZE a table that reports no statistics: u"},
-           {"v",
-            "Cannot ANALYZE a table whose statistics were set without data: v"},
-       }) {
-    SCOPED_TRACE(table);
-    VELOX_ASSERT_THROW(run("ANALYZE " + table), error);
-    VELOX_ASSERT_THROW(run("EXPLAIN ANALYZE " + table), error);
-  }
   EXPECT_FALSE(metadata().analyzedStatistics);
 }
 

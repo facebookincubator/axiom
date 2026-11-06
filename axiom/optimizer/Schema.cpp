@@ -206,6 +206,9 @@ Value Value::fromColumnStatistics(
     TypeCP type,
     const connector::ColumnStatistics& stats) {
   Value value(type);
+  if (stats.isUnknown) {
+    return value;
+  }
   if (stats.numDistinct.has_value()) {
     value.cardinality = std::max<float>(1, stats.numDistinct.value());
   }

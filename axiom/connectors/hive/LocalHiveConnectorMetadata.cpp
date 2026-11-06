@@ -223,21 +223,14 @@ FilteredTableStats estimateStatsFromPartitionStats(
             merged.unknownColumns.begin(),
             merged.unknownColumns.end(),
             column->name()) != merged.unknownColumns.end()) {
-      // The API requires an aligned vector or none. Retain the row count,
-      // but do not turn an unknown column into an all-null estimate.
-      return FilteredTableStats{
-          .isKnownEmpty = !partitionStats.empty() && numMatchingPartitions == 0,
-          .numRows = merged.numRows};
+      // Keep the requested position without assigning a null fraction.
+      columnStats.push_back(
+          ColumnStatistics{.name = column->name(), .isUnknown = true});
+      continue;
     }
     auto it = statsNameToIndex.find(column->name());
     if (it != statsNameToIndex.end()) {
-      auto& stats = merged.columns[it->second];
-      if (merged.numRows > 0) {
-        stats.nullPct = 100.0f *
-            static_cast<float>(merged.numRows - stats.numValues) /
-            static_cast<float>(merged.numRows);
-      }
-      columnStats.push_back(std::move(stats));
+      columnStats.push_back(std::move(merged.columns[it->second]));
     } else {
       // Column not in any partition stats (schema evolution: column added
       // after existing partitions were written). All values are null.
@@ -2101,25 +2094,6 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
 }
 
 namespace {
-
-// Write handle for ANALYZE. The engine computes the statistics, so there is no
-// writer.
-class AnalyzeHandle : public ConnectorWriteHandle {
- public:
-  explicit AnalyzeHandle(TablePtr table) : table_{std::move(table)} {}
-
-  const TablePtr& table() const {
-    return table_;
-  }
-
-  std::string toString() const override {
-    return fmt::format(
-        "replace the statistics of {}", table_->name().toString());
-  }
-
- private:
-  const TablePtr table_;
-};
 
 // The directory that holds one group's '.stats' file, and the group's row
 // count.

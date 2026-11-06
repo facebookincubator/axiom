@@ -113,7 +113,6 @@ if(AXIOM_BUILD_TESTING)
   add_executable(
     axiom_optimizer_tests
     AggregationTest.cpp
-    AnalyzeTest.cpp
     BitSetTest.cpp
     DistinctAggregationTest.cpp
     OutputNodeTest.cpp

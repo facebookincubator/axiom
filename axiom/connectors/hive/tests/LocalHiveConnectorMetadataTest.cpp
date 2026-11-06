@@ -37,6 +37,24 @@ using namespace facebook::axiom::connector;
 namespace facebook::axiom::connector::hive {
 namespace {
 
+class MockFilterSelectivityEstimator : public FilterSelectivityEstimator {
+ public:
+  using ColumnStats = folly::F14FastMap<std::string, TypedColumnStatistics>;
+  using SubfieldFilters =
+      folly::F14FastMap<std::string, const velox::common::Filter*>;
+
+  MOCK_METHOD(
+      FilterEstimate,
+      estimate,
+      (const std::vector<core::TypedExprPtr>&, const ColumnStats&),
+      (const, override));
+  MOCK_METHOD(
+      FilterEstimate,
+      estimate,
+      (const SubfieldFilters&, const ColumnStats&),
+      (const, override));
+};
+
 TEST(PersistedStatsTest, legacyMissingColumnIsAllNull) {
   const auto directory = velox::common::testutil::TempDirectoryPath::create();
   // Older files omit unknownColumns. Missing columns there represent schema
@@ -384,6 +402,83 @@ class LocalHiveConnectorMetadataTest
         /*lookupKeys=*/{});
     EXPECT_TRUE(rejectedFilterIndices.empty());
     return tableHandle;
+  }
+
+  TablePtr createAnalyzeTable(
+      const RowTypePtr& type,
+      folly::F14FastMap<std::string, Variant> properties = {}) {
+    return folly::coro::blockingWait(metadata_->co_createEmptyTable(
+        makeSession(),
+        qualifiedName("analyzed"),
+        TableDefinition::create(type, std::move(properties)),
+        /*ifNotExists=*/false));
+  }
+
+  RowVectorPtr analyzeRowCount(int64_t numRows) {
+    return makeRowVector({"$row_count"}, {makeFlatVector<int64_t>({numRows})});
+  }
+
+  std::optional<int64_t> analyze(
+      const SchemaTableName& name,
+      RowVectorPtr groupingKeys,
+      std::vector<std::vector<ColumnStatistics>> groupStats) {
+    auto session = makeSession();
+    auto handle = metadata_->beginWrite(
+        session,
+        metadata_->findTable(name),
+        WriteKind::kAnalyze,
+        /*explain=*/false);
+    return metadata_
+        ->finishWrite(
+            session, handle, {}, std::move(groupingKeys), std::move(groupStats))
+        .get();
+  }
+
+  // Simulates a successful writer commit using the reported rows and stats.
+  void appendStats(
+      const SchemaTableName& name,
+      int64_t numRows,
+      std::vector<ColumnStatistics> stats,
+      RowVectorPtr groupingKeys = nullptr,
+      std::string_view partition = "") {
+    auto session = makeSession();
+    auto handle = metadata_->beginWrite(
+        session,
+        metadata_->findTable(name),
+        WriteKind::kInsert,
+        /*explain=*/false);
+    const auto& writePath =
+        handle->veloxHandle()
+            ->asChecked<velox::connector::hive::HiveInsertTableHandle>()
+            ->locationHandle()
+            ->writePath();
+    std::filesystem::create_directories(
+        std::filesystem::path(writePath) / partition);
+    EXPECT_EQ(
+        metadata_
+            ->finishWrite(
+                session,
+                handle,
+                {analyzeRowCount(numRows)},
+                std::move(groupingKeys),
+                {std::move(stats)})
+            .get(),
+        numRows);
+  }
+
+  std::optional<std::vector<MetadataCountGroup>> metadataCounts(
+      const SchemaTableName& name,
+      std::vector<std::string> columns,
+      const std::vector<core::TypedExprPtr>& filters = {}) {
+    const auto table = metadata_->findTable(name);
+    const auto& layout = *table->primaryLayout();
+    auto handle = makeTableHandle(layout, "x", filters);
+    return folly::coro::blockingWait(layout.co_metadataCounts(
+        makeSession(),
+        std::move(handle),
+        *metadata_->connectorQueryCtx()->expressionEvaluator(),
+        /*groupingColumns=*/{},
+        std::move(columns)));
   }
 
   // Returns the index 'name' of the table 'table', or nullptr.
@@ -937,6 +1032,260 @@ TEST_F(LocalHiveConnectorMetadataTest, commentsAndPrimaryKey) {
 
 // A table created empty and then inserted into holds and reports the inserted
 // rows, partitioned or not.
+// ANALYZE replaces the old row count and stores the engine's column statistics.
+TEST_F(LocalHiveConnectorMetadataTest, analyzeUnpartitionedTable) {
+  const auto name =
+      createAnalyzeTable(ROW({"x", "s"}, {BIGINT(), VARCHAR()}))->name();
+  const auto path = localTablePath(name);
+  PersistedStats::write(
+      path,
+      {4, {{.name = "x", .numValues = 4}, {.name = "s", .numValues = 4}}});
+  metadata_->reloadTableFromPath(name);
+
+  EXPECT_EQ(
+      analyze(
+          name,
+          analyzeRowCount(6),
+          {{{.name = "x", .nullPct = 50, .numDistinct = 3, .numValues = 3}}}),
+      6);
+  const auto persisted = PersistedStats::read(path);
+  ASSERT_TRUE(persisted);
+  EXPECT_EQ(persisted->numRows, 6);
+  ASSERT_EQ(persisted->columns.size(), 1);
+  EXPECT_EQ(persisted->columns.front().name, "x");
+  EXPECT_EQ(persisted->columns.front().numValues, 3);
+  EXPECT_FLOAT_EQ(persisted->columns.front().nullPct, 50);
+  EXPECT_THAT(persisted->unknownColumns, testing::ElementsAre("s"));
+  const auto table = metadata_->findTable(name);
+  EXPECT_EQ(table->numRows(), 6);
+  EXPECT_FALSE(table->findColumn("s")->stats());
+  const auto* x = table->findColumn("x")->stats();
+  ASSERT_TRUE(x);
+  EXPECT_EQ(x->numDistinct, 3);
+  EXPECT_FLOAT_EQ(x->nullPct, 50);
+}
+
+// Each partition's statistics are replaced independently. Estimation still
+// returns a measured column when the same request includes an omitted column.
+TEST_F(LocalHiveConnectorMetadataTest, analyzePartitionedTable) {
+  const auto name =
+      createAnalyzeTable(
+          ROW({"x", "s", "pk"}, {BIGINT(), VARCHAR(), BIGINT()}),
+          {{HiveWriteOptions::kPartitionedBy, Variant::array({"pk"})}})
+          ->name();
+  const auto path = localTablePath(name);
+  const auto pk0 = path + "/pk=0";
+  const auto pk1 = path + "/pk=1";
+  for (const auto& directory : {pk0, pk1}) {
+    std::filesystem::create_directories(directory);
+    PersistedStats::write(directory, {3, {{.name = "s", .numValues = 3}}});
+  }
+  metadata_->reloadTableFromPath(name);
+
+  EXPECT_EQ(
+      analyze(
+          name,
+          makeRowVector(
+              {"pk", "$row_count"},
+              {makeFlatVector<int64_t>({0, 1}),
+               makeFlatVector<int64_t>({9, 8})}),
+          {{{.name = "x", .numDistinct = 9, .numValues = 9},
+            {.name = "pk", .numDistinct = 1, .numValues = 9}},
+           {{.name = "x", .numDistinct = 8, .numValues = 8},
+            {.name = "pk", .numDistinct = 1, .numValues = 8}}}),
+      17);
+  const auto checkPartition = [](const std::string& directory, int64_t rows) {
+    SCOPED_TRACE(directory);
+    const auto persisted = PersistedStats::read(directory);
+    ASSERT_TRUE(persisted);
+    EXPECT_EQ(persisted->numRows, rows);
+    ASSERT_EQ(persisted->columns.size(), 2);
+    const auto& x = persisted->columns[0];
+    EXPECT_EQ(x.name, "x");
+    EXPECT_EQ(x.numValues, rows);
+    EXPECT_EQ(x.numDistinct, rows);
+    const auto& pk = persisted->columns[1];
+    EXPECT_EQ(pk.name, "pk");
+    EXPECT_EQ(pk.numDistinct, 1);
+    EXPECT_THAT(persisted->unknownColumns, testing::ElementsAre("s"));
+  };
+  checkPartition(pk0, 9);
+  checkPartition(pk1, 8);
+  EXPECT_FALSE(PersistedStats::read(path));
+
+  const auto table = metadata_->findTable(name);
+  EXPECT_EQ(table->numRows(), 17);
+  const auto& layout = *table->primaryLayout();
+  auto handle =
+      makeTableHandle(layout, "s", {parseExpr("pk = 0", ROW("pk", BIGINT()))});
+  testing::StrictMock<MockFilterSelectivityEstimator> estimator;
+  const auto estimate = folly::coro::blockingWait(layout.co_estimateStats(
+      makeSession(),
+      std::move(handle),
+      *metadata_->connectorQueryCtx()->expressionEvaluator(),
+      {"s", "x"},
+      estimator));
+  ASSERT_TRUE(estimate);
+  EXPECT_EQ(estimate->numRows, 9);
+  ASSERT_EQ(estimate->columnStats.size(), 2);
+  EXPECT_EQ(estimate->columnStats[0].name, "s");
+  EXPECT_TRUE(estimate->columnStats[0].isUnknown);
+  EXPECT_FALSE(estimate->columnStats[0].numDistinct);
+  EXPECT_EQ(estimate->columnStats[1].name, "x");
+  EXPECT_FALSE(estimate->columnStats[1].isUnknown);
+  EXPECT_EQ(estimate->columnStats[1].numDistinct, 9);
+}
+
+// Merging a write into an existing group cannot recover the old rows' stats.
+TEST_F(LocalHiveConnectorMetadataTest, analyzeThenAppendUnpartitioned) {
+  const auto name =
+      createAnalyzeTable(ROW({"x", "s"}, {BIGINT(), VARCHAR()}))->name();
+  ASSERT_EQ(
+      analyze(
+          name,
+          analyzeRowCount(5),
+          {{{.name = "x", .nullPct = 20, .numValues = 4}}}),
+      5);
+  metadata_->reloadTableFromPath(name);
+  EXPECT_FALSE(metadataCounts(name, {"s"}));
+
+  appendStats(
+      name, 5, {{.name = "x", .numValues = 5}, {.name = "s", .numValues = 5}});
+  metadata_->reloadTableFromPath(name);
+  const auto persisted = PersistedStats::read(localTablePath(name));
+  ASSERT_TRUE(persisted);
+  EXPECT_EQ(persisted->numRows, 10);
+  EXPECT_THAT(persisted->unknownColumns, testing::ElementsAre("s"));
+  ASSERT_EQ(persisted->columns.size(), 1);
+  EXPECT_EQ(persisted->columns.front().name, "x");
+  EXPECT_EQ(persisted->columns.front().numValues, 9);
+  EXPECT_FLOAT_EQ(persisted->columns.front().nullPct, 10);
+  EXPECT_FALSE(metadataCounts(name, {"s"}));
+  const auto measured = metadataCounts(name, {"x"});
+  ASSERT_TRUE(measured);
+  ASSERT_EQ(measured->size(), 1);
+  EXPECT_EQ(measured->front().numRows, 10);
+  EXPECT_THAT(measured->front().numNulls, testing::ElementsAre(1));
+
+  ASSERT_EQ(
+      analyze(
+          name,
+          analyzeRowCount(10),
+          {{{.name = "x", .nullPct = 10, .numValues = 9},
+            {.name = "s", .nullPct = 20, .numValues = 8}}}),
+      10);
+  const auto recovered = metadataCounts(name, {"s"});
+  ASSERT_TRUE(recovered);
+  ASSERT_EQ(recovered->size(), 1);
+  EXPECT_THAT(recovered->front().numNulls, testing::ElementsAre(2));
+}
+
+// A new partition has complete stats even when older partitions omit a column.
+TEST_F(LocalHiveConnectorMetadataTest, analyzeThenAppendPartition) {
+  const auto name =
+      createAnalyzeTable(
+          ROW({"x", "s", "pk"}, {BIGINT(), VARCHAR(), BIGINT()}),
+          {{HiveWriteOptions::kPartitionedBy, Variant::array({"pk"})}})
+          ->name();
+  const auto original = localTablePath(name) + "/pk=0";
+  std::filesystem::create_directories(original);
+  const auto group = [&](int64_t key) {
+    return makeRowVector(
+        {"pk", "$row_count"},
+        {makeFlatVector<int64_t>({key}), makeFlatVector<int64_t>({5})});
+  };
+  ASSERT_EQ(
+      analyze(
+          name,
+          group(0),
+          {{{.name = "x", .numValues = 5}, {.name = "pk", .numValues = 5}}}),
+      5);
+  metadata_->reloadTableFromPath(name);
+  EXPECT_FALSE(metadataCounts(name, {"s"}));
+
+  appendStats(
+      name,
+      5,
+      {{.name = "x", .numValues = 5},
+       {.name = "s", .numValues = 5},
+       {.name = "pk", .numValues = 5}},
+      group(10),
+      "pk=10");
+  metadata_->reloadTableFromPath(name);
+  EXPECT_FALSE(metadataCounts(name, {"s"}));
+  const auto allRows = metadataCounts(name, {});
+  ASSERT_TRUE(allRows);
+  ASSERT_EQ(allRows->size(), 1);
+  EXPECT_EQ(allRows->front().numRows, 10);
+  const auto newPartition =
+      metadataCounts(name, {"s"}, {parseExpr("pk = 10", ROW("pk", BIGINT()))});
+  ASSERT_TRUE(newPartition);
+  ASSERT_EQ(newPartition->size(), 1);
+  EXPECT_EQ(newPartition->front().numRows, 5);
+  EXPECT_THAT(newPartition->front().numNulls, testing::ElementsAre(0));
+}
+
+// Row-count-only ANALYZE clears column statistics even at the same row count.
+TEST_F(LocalHiveConnectorMetadataTest, analyzeRowCountOnly) {
+  const auto name = createAnalyzeTable(ROW("x", BIGINT()))->name();
+  ASSERT_EQ(
+      analyze(name, analyzeRowCount(5), {{{.name = "x", .numValues = 5}}}), 5);
+  EXPECT_EQ(analyze(name, analyzeRowCount(5), {{}}), 5);
+  const auto persisted = PersistedStats::read(localTablePath(name));
+  ASSERT_TRUE(persisted);
+  EXPECT_EQ(persisted->numRows, 5);
+  EXPECT_TRUE(persisted->columns.empty());
+  EXPECT_THAT(persisted->unknownColumns, testing::ElementsAre("x"));
+  EXPECT_FALSE(metadataCounts(name, {"x"}));
+}
+
+// Omitted statistics on an empty table do not taint the first write's stats.
+TEST_F(LocalHiveConnectorMetadataTest, analyzeEmptyTable) {
+  const auto name =
+      createAnalyzeTable(ROW({"x", "s"}, {BIGINT(), VARCHAR()}))->name();
+  ASSERT_EQ(analyze(name, analyzeRowCount(0), {{{.name = "x"}}}), 0);
+  const auto empty = PersistedStats::read(localTablePath(name));
+  ASSERT_TRUE(empty);
+  EXPECT_EQ(empty->numRows, 0);
+  ASSERT_EQ(empty->columns.size(), 1);
+  EXPECT_EQ(empty->columns.front().numValues, 0);
+  EXPECT_FLOAT_EQ(empty->columns.front().nullPct, 0);
+
+  appendStats(
+      name, 5, {{.name = "x", .numValues = 5}, {.name = "s", .numValues = 5}});
+  const auto appended = PersistedStats::read(localTablePath(name));
+  ASSERT_TRUE(appended);
+  EXPECT_TRUE(appended->unknownColumns.empty());
+  const auto counts = metadataCounts(name, {"s"});
+  ASSERT_TRUE(counts);
+  ASSERT_EQ(counts->size(), 1);
+  EXPECT_EQ(counts->front().numRows, 5);
+  EXPECT_THAT(counts->front().numNulls, testing::ElementsAre(0));
+}
+
+// Abandoning an ANALYZE leaves both the loaded and persisted stats intact.
+TEST_F(LocalHiveConnectorMetadataTest, abortAnalyze) {
+  const auto name = createAnalyzeTable(ROW("x", BIGINT()))->name();
+  ASSERT_EQ(
+      analyze(
+          name,
+          analyzeRowCount(5),
+          {{{.name = "x", .numDistinct = 5, .numValues = 5}}}),
+      5);
+  const auto session = makeSession();
+  const auto table = metadata_->findTable(name);
+  auto handle = metadata_->beginWrite(
+      session, table, WriteKind::kAnalyze, /*explain=*/true);
+  EXPECT_NO_THROW(metadata_->abortWrite(session, handle).get());
+
+  EXPECT_EQ(metadata_->findTable(name), table);
+  const auto persisted = PersistedStats::read(localTablePath(name));
+  ASSERT_TRUE(persisted);
+  EXPECT_EQ(persisted->numRows, 5);
+  ASSERT_EQ(persisted->columns.size(), 1);
+  EXPECT_EQ(persisted->columns.front().numDistinct, 5);
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});

@@ -242,6 +242,12 @@ void PersistedStats::merge(
   }
 
   numRows += otherNumRows;
+  for (auto& column : columns) {
+    column.nullPct = numRows == 0
+        ? 0
+        : 100.0f * static_cast<float>(numRows - column.numValues) /
+            static_cast<float>(numRows);
+  }
 }
 
 std::optional<PersistedStats> PersistedStats::read(
@@ -292,12 +298,6 @@ void PersistedStats::replace(
     uint64_t numRows,
     std::vector<ColumnStatistics> columns,
     const std::vector<std::string>& tableColumns) {
-  for (auto& column : columns) {
-    column.nullPct = numRows == 0
-        ? 0
-        : 100.0f * static_cast<float>(numRows - column.numValues) /
-            static_cast<float>(numRows);
-  }
   PersistedStats stats{numRows, std::move(columns)};
   for (const auto& name : tableColumns) {
     if (std::none_of(

@@ -79,8 +79,10 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Runs 'sql', which must return a single row and a single column, and returns
   // that value.
   template <typename T>
-  T fetchSingleValue(std::string_view sql) {
-    return fetchSingleRow(sql)->childAt(0)->variantAt(0).value<T>();
+  T fetchSingleValue(
+      std::string_view sql,
+      const SqlQueryRunner::RunOptions& options = {}) {
+    return fetchSingleRow(sql, options)->childAt(0)->variantAt(0).value<T>();
   }
 
   // Runs 'sql', which must return a single row and a single BIGINT column, and
@@ -88,10 +90,7 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   int64_t fetchSingleInt64(
       std::string_view sql,
       const SqlQueryRunner::RunOptions& options = {}) {
-    return fetchSingleRow(sql, options)
-        ->childAt(0)
-        ->variantAt(0)
-        .value<int64_t>();
+    return fetchSingleValue<int64_t>(sql, options);
   }
 
   // Default schema of the TestConnectors makeRunner() creates.

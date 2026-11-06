@@ -28,31 +28,7 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace {
 
-class DdlParserTest : public PrestoParserTestBase {
- protected:
-  void testAnalyze(
-      std::string_view sql,
-      std::string_view tableName,
-      const std::vector<std::string>& columnNames) {
-    SCOPED_TRACE(sql);
-    auto parser = makeParser();
-
-    auto statement = parser.parse(sql);
-    ASSERT_TRUE(statement->isAnalyze());
-
-    auto logicalPlan = statement->as<AnalyzeStatement>()->plan();
-    ASSERT_TRUE(matchScan(std::string(tableName))
-                    .tableWrite()
-                    .build()
-                    ->match(logicalPlan))
-        << logicalPlan->toString();
-
-    const auto* write = logicalPlan->as<lp::TableWriteNode>();
-    EXPECT_EQ(lp::WriteKind::kAnalyze, write->writeKind());
-    EXPECT_EQ(tableName, write->tableName().table);
-    EXPECT_EQ(columnNames, write->columnNames());
-  }
-};
+class DdlParserTest : public PrestoParserTestBase {};
 
 TEST_F(DdlParserTest, insertIntoTable) {
   {
@@ -132,36 +108,50 @@ TEST_F(DdlParserTest, deleteFromTable) {
 }
 
 TEST_F(DdlParserTest, analyzeTable) {
-  testAnalyze(
-      "ANALYZE nation",
-      "nation",
-      {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
-  testAnalyze(
-      "ANALYZE nation WITH (columns = ARRAY['n_name', 'n_nationkey'])",
-      "nation",
-      {"n_name", "n_nationkey"});
-  testAnalyze("ANALYZE nation WITH (columns = ARRAY[])", "nation", {});
-
-  for (const auto& [sql, error] :
-       std::vector<std::pair<std::string, std::string>>{
-           {"ANALYZE no_such_table", "Table not found: no_such_table"},
-           {"ANALYZE nation WITH (columns = ARRAY['bad'])",
-            "Unknown ANALYZE column: bad"},
-           {"ANALYZE nation WITH (columns = ARRAY['n_name', 'n_name'])",
-            "Duplicate ANALYZE column: n_name"},
-           {"ANALYZE nation WITH (columns = 1)",
-            "ANALYZE property columns must be an array of column names"},
-           {"ANALYZE nation WITH (columns = ARRAY[NULL])",
-            "ANALYZE property columns must be an array of column names"},
-           {"ANALYZE nation WITH (unknown = 1)",
-            "Unknown ANALYZE property: unknown"},
-           {"ANALYZE nation WITH (columns = ARRAY['n_name'], "
-            "columns = ARRAY['n_nationkey'])",
-            "Duplicate property"},
-       }) {
+  auto parser = makeParser();
+  const auto matcher = matchScan("nation").tableWrite().build();
+  const auto testAnalyze = [&](std::string_view withClause,
+                               const std::vector<std::string>& columnNames) {
+    const auto sql = fmt::format("ANALYZE nation{}", withClause);
     SCOPED_TRACE(sql);
-    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseSql(sql), error);
-  }
+    const auto statement = parser.parse(sql);
+    ASSERT_TRUE(statement->isAnalyze());
+    const auto plan = statement->as<AnalyzeStatement>()->plan();
+    ASSERT_TRUE(matcher->match(plan)) << plan->toString();
+
+    const auto* write = plan->as<lp::TableWriteNode>();
+    EXPECT_EQ(lp::WriteKind::kAnalyze, write->writeKind());
+    EXPECT_EQ("nation", write->tableName().table);
+    EXPECT_EQ(columnNames, write->columnNames());
+  };
+  testAnalyze("", {"n_nationkey", "n_name", "n_regionkey", "n_comment"});
+  testAnalyze(
+      " WITH (columns = ARRAY['n_name', 'n_nationkey'])",
+      {"n_name", "n_nationkey"});
+  testAnalyze(" WITH (columns = ARRAY[])", {});
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE no_such_table"), "Table not found: no_such_table");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE nation WITH (columns = ARRAY['bad'])"),
+      "Unknown ANALYZE column: bad");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE nation WITH (columns = ARRAY['n_name', 'n_name'])"),
+      "Duplicate ANALYZE column: n_name");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE nation WITH (columns = 1)"),
+      "ANALYZE property columns must be an array of column names");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE nation WITH (columns = ARRAY[NULL])"),
+      "ANALYZE property columns must be an array of column names");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse("ANALYZE nation WITH (unknown = 1)"),
+      "Unknown ANALYZE property: unknown");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parser.parse(
+          "ANALYZE nation WITH (columns = ARRAY['n_name'], "
+          "columns = ARRAY['n_nationkey'])"),
+      "Duplicate property");
 }
 
 TEST_F(DdlParserTest, createTableAsSelect) {

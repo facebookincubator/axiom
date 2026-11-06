@@ -329,59 +329,21 @@ TestTable& TestTable::setStats(
   return *this;
 }
 
-std::shared_ptr<TestTable> TestTable::withAnalyzedStatistics(
-    const std::vector<ColumnStatistics>& statistics) const {
-  std::vector<std::string> hiddenNames;
-  std::vector<velox::TypePtr> hiddenTypes;
-  folly::F14FastMap<std::string, std::string> comments;
-  for (const auto* column : allColumns()) {
-    if (column->hidden() && column->name() != kRowId) {
-      hiddenNames.push_back(column->name());
-      hiddenTypes.push_back(column->type());
-    }
-    if (column->comment()) {
-      comments.emplace(column->name(), *column->comment());
-    }
-  }
-  auto replacement = std::make_shared<TestTable>(
-      name(),
-      type(),
-      velox::ROW(hiddenNames, hiddenTypes),
-      static_cast<TestConnector*>(connector_),
-      options(),
-      bucketSpec_,
-      comments,
-      comment(),
-      primaryKey(),
-      pool_);
-  replacement->data_ = data_;
-  replacement->dataBucketIds_ = dataBucketIds_;
-  replacement->nextRowId_ = nextRowId_;
-  replacement->rowLevelDeleteLayout_ = rowLevelDeleteLayout_;
-  replacement->numRows_ = numRows_;
-  replacement->dataRows_ = dataRows_;
-  replacement->hasColumnStatistics_ = hasColumnStatistics_;
-  replacement->columnTrackers_ = columnTrackers_;
-  replacement->tracksAllRows_ = tracksAllRows_;
-  replacement->statsGroupingKeys_ = statsGroupingKeys_;
-  for (const auto* column : replacement->allColumns()) {
-    const_cast<Column*>(column)->setStats(nullptr);
-  }
+void TestTable::replaceColumnStatistics(
+    const std::vector<ColumnStatistics>& statistics) {
+  // Validate column names and allocate the new statistics before publishing.
+  folly::F14FastMap<const Column*, std::unique_ptr<ColumnStatistics>> updates;
+  updates.reserve(statistics.size());
   for (const auto& stats : statistics) {
-    auto* column = replacement->findColumn(stats.name);
+    auto* column = findColumn(stats.name);
     VELOX_CHECK_NOT_NULL(column, "Unknown analyzed column: {}", stats.name);
+    updates.emplace(column, std::make_unique<ColumnStatistics>(stats));
+  }
+  for (const auto* column : allColumns()) {
+    auto it = updates.find(column);
     const_cast<Column*>(column)->setStats(
-        std::make_unique<ColumnStatistics>(stats));
+        it == updates.end() ? nullptr : std::move(it->second));
   }
-  std::vector<std::string> discreteNames;
-  for (const auto* column : exportedLayout_->discretePredicateColumns()) {
-    discreteNames.push_back(column->name());
-  }
-  if (!discreteNames.empty()) {
-    replacement->exportedLayout_->setDiscreteValues(
-        discreteNames, exportedLayout_->discreteValues());
-  }
-  return replacement;
 }
 
 namespace {
@@ -1325,25 +1287,6 @@ folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
 
 namespace {
 
-// The handle of an ANALYZE of 'table'. It has no writer.
-class TestAnalyzeHandle : public ConnectorWriteHandle {
- public:
-  explicit TestAnalyzeHandle(TablePtr table) : table_{std::move(table)} {}
-
-  // The table as ANALYZE found it, to detect a change before the commit.
-  const TablePtr& table() const {
-    return table_;
-  }
-
-  std::string toString() const override {
-    return fmt::format(
-        "replace the statistics of {}", table_->name().toString());
-  }
-
- private:
-  const TablePtr table_;
-};
-
 // Returns the sum of the last column of 'groupingKeys', which is $row_count.
 // 0 when 'groupingKeys' is null.
 int64_t sumRowCounts(const velox::RowVectorPtr& groupingKeys) {
@@ -1380,7 +1323,7 @@ ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
         !testTable->data().empty() || *testTable->numRows() == 0,
         "Cannot ANALYZE a table whose statistics were set without data: {}",
         table->name().table);
-    return std::make_shared<TestAnalyzeHandle>(table);
+    return std::make_shared<AnalyzeHandle>(table);
   }
   auto insertHandle = std::make_shared<TestInsertTableHandle>(table->name());
   return std::make_shared<ConnectorWriteHandle>(
@@ -1421,37 +1364,21 @@ RowsFuture TestConnectorMetadata::finishWrite(
     velox::RowVectorPtr groupingKeys,
     std::vector<std::vector<ColumnStatistics>> groupStats) {
   VELOX_CHECK_NOT_NULL(session);
-  // Checked before anything is stored, so a failed ANALYZE changes nothing.
-  std::shared_ptr<TestTable> replacement;
-  const auto* analyze = handle->as<TestAnalyzeHandle>();
-  // ANALYZE without grouping keys has one group, with only $row_count.
-  const bool ungrouped =
-      groupingKeys != nullptr && groupingKeys->childrenSize() == 1;
+  std::shared_ptr<TestTable> table;
+  const auto* analyze = handle->as<AnalyzeHandle>();
   if (analyze != nullptr && groupingKeys != nullptr) {
-    velox::DecodedVector rowCounts(
-        *groupingKeys->childAt(groupingKeys->childrenSize() - 1));
     VELOX_CHECK_EQ(groupStats.size(), groupingKeys->size());
-    for (size_t i = 0; i < groupStats.size(); ++i) {
-      const auto numRows = rowCounts.valueAt<int64_t>(i);
-      for (auto& stats : groupStats[i]) {
-        stats.nullPct = numRows == 0
-            ? 0
-            : 100.0f * static_cast<float>(numRows - stats.numValues) /
-                static_cast<float>(numRows);
-      }
+    // ANALYZE without grouping keys has one group, with only $row_count.
+    if (groupingKeys->childrenSize() == 1) {
+      table = tables_.at(analyze->table()->name());
+      VELOX_USER_CHECK(
+          table == analyze->table(),
+          "ANALYZE target metadata changed during collection");
+      VELOX_USER_CHECK_EQ(
+          sumRowCounts(groupingKeys),
+          *table->numRows(),
+          "ANALYZE target row count changed during collection");
     }
-  }
-  if (analyze != nullptr && ungrouped) {
-    const auto& name = analyze->table()->name();
-    auto current = tables_.at(name);
-    VELOX_USER_CHECK(
-        current == analyze->table(),
-        "ANALYZE target metadata changed during collection");
-    VELOX_USER_CHECK_EQ(
-        sumRowCounts(groupingKeys),
-        *current->numRows(),
-        "ANALYZE target row count changed during collection");
-    replacement = current->withAnalyzedStatistics(groupStats.at(0));
   }
   if (onFinishWrite) {
     onFinishWrite(writeResults, groupingKeys, groupStats);
@@ -1473,12 +1400,12 @@ RowsFuture TestConnectorMetadata::finishWrite(
       groupingKeys = std::static_pointer_cast<velox::RowVector>(
           velox::BaseVector::copy(*groupingKeys, analyzePool.get()));
     }
+    if (table) {
+      table->replaceColumnStatistics(groupStats.at(0));
+    }
     analyzedStatistics = AnalyzedStatistics{
         .groupingKeys = std::move(groupingKeys),
         .groupStats = std::move(groupStats)};
-    if (replacement) {
-      tables_.at(analyze->table()->name()) = std::move(replacement);
-    }
     return folly::makeSemiFuture(
         std::optional<int64_t>{analyzedStatistics->numRows()});
   }

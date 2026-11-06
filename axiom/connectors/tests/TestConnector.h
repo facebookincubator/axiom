@@ -326,12 +326,8 @@ class TestTable : public Table {
     return rowLevelDeleteLayout_;
   }
 
-  /// Returns a copy of this table that shares its data and replaces the
-  /// statistics with those of the given columns, discarding the others. Code
-  /// that still holds this table keeps seeing the old statistics. No data is
-  /// copied.
-  std::shared_ptr<TestTable> withAnalyzedStatistics(
-      const std::vector<ColumnStatistics>& statistics) const;
+  /// Replaces statistics for the given columns and clears the rest.
+  void replaceColumnStatistics(const std::vector<ColumnStatistics>& statistics);
 
   /// Groups the statistics that writes and ANALYZE collect by 'keys'.
   void setStatsGroupingKeys(std::vector<std::string> keys) {

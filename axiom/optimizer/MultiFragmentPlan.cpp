@@ -136,7 +136,13 @@ void extractStatField(
       auto* values = statsVector->asUnchecked<velox::SimpleVector<int64_t>>();
       for (auto i = 0; i < numRows; ++i) {
         if (!values->isNullAt(i)) {
-          stats[startRow + i][column].numValues = values->valueAt(i);
+          auto& entry = stats[startRow + i][column];
+          entry.numValues = values->valueAt(i);
+          const auto numGroupRows = rowCounts[startRow + i];
+          if (numGroupRows > 0) {
+            entry.nullPct =
+                100.0f * (numGroupRows - entry.numValues) / numGroupRows;
+          }
         }
       }
       break;

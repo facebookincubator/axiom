@@ -120,6 +120,9 @@ struct ColumnStatistics {
   /// map, may have one element for each key. In all cases, stats may be
   /// missing.
   std::vector<ColumnStatistics> children;
+
+  /// Marks an unmeasured column in FilteredTableStats. Only 'name' is valid.
+  bool isUnknown{false};
 };
 
 /// Result of estimating a conjunction of filters against column statistics.
@@ -520,7 +523,8 @@ struct FilteredTableStats {
 
   /// Per-column statistics corresponding 1:1 to the 'columns' parameter of
   /// co_estimateStats. Either empty (no column stats available) or has the
-  /// same size as 'columns', in the same order.
+  /// same size as 'columns', in the same order. An entry with 'isUnknown' set
+  /// indicates that statistics for that column are unavailable.
   std::vector<ColumnStatistics> columnStats;
 };
 
@@ -1178,6 +1182,24 @@ class ConnectorWriteHandle {
 
 using ConnectorWriteHandlePtr = std::shared_ptr<ConnectorWriteHandle>;
 
+/// A statistics replacement for 'table'. ANALYZE has no Velox writer.
+class AnalyzeHandle : public ConnectorWriteHandle {
+ public:
+  explicit AnalyzeHandle(TablePtr table) : table_{std::move(table)} {}
+
+  const TablePtr& table() const {
+    return table_;
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "replace the statistics of {}", table_->name().toString());
+  }
+
+ private:
+  const TablePtr table_;
+};
+
 /// Describes how rows must reach the Velox writer of a row-level DELETE:
 /// distribution across writers and order within each. A metadata-only DELETE
 /// has no writer.
@@ -1673,9 +1695,10 @@ class ConnectorMetadata {
   /// replaces each group's stored row count and column statistics. Discard
   /// statistics for columns absent from groupStats, even if the row count is
   /// unchanged. An empty column list refreshes only row counts and grouping
-  /// columns. Derive nullPct from numValues and the group's row count, as for
-  /// writes. When an ANALYZE returns, the next query must see the new
-  /// statistics through findTable and co_estimateStats.
+  /// columns. The engine populates nullPct from numValues and the group's row
+  /// count for both writes and ANALYZE, with zero for an empty group. When an
+  /// ANALYZE returns, the next query must see the new statistics through
+  /// findTable and co_estimateStats.
   virtual RowsFuture finishWrite(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorWriteHandlePtr& handle,
