@@ -19,7 +19,6 @@
 #include <map>
 
 #include "axiom/sql/presto/ColumnExprs.h"
-#include "axiom/sql/presto/KMeans.h"
 
 namespace axiom::sql::presto {
 
@@ -166,8 +165,7 @@ lp::PlanBuilder selectedPartitions(
 }
 
 // Returns a stratified sample of 'rows': up to kSamplesPerCluster times the
-// number of clusters points of each partition, in the order of a hash of their
-// keys, numbered from 1 in 'sample_row'.
+// number of clusters points of each partition, chosen by a hash of their keys.
 lp::PlanBuilder sample(
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
@@ -201,19 +199,14 @@ lp::LogicalPlanNodePtr planTrain(
       VectorIndex::codecTableType(index.partitionColumns)->names();
 
   auto codecs =
-      KMeans::expand(
-          sample(index, partitions, rows),
-          partitions,
-          std::string(kEmbedding),
-          "sample_row",
-          index.properties.numClusters,
-          index.properties.metric)
+      sample(index, partitions, rows)
           .aggregate(
               ColumnExprs::of(partitions),
               {lp::Call(
-                   "vector_index_pack",
-                   lp::Col("cluster_id"),
-                   lp::Col("centroid"),
+                   "vector_index_train",
+                   lp::Col(std::string(kEmbedding)),
+                   lp::Col(std::string(kKey)),
+                   lp::Lit(index.properties.numClusters),
                    lp::Lit(metric))
                    .as("codec")})
           .project(

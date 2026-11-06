@@ -41,7 +41,6 @@ add_library(
   GraphTablePlanner.cpp
   GroupByPlanner.cpp
   IntervalParser.cpp
-  KMeans.cpp
   RecursiveCteValidator.cpp
   SortProjection.cpp
   PrestoParser.cpp

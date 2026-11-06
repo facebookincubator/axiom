@@ -66,7 +66,7 @@ class VectorIndexRefreshTest : public SqlQueryRunnerTestBase {
   }
 
   // Expects 'text' to show the two plans of a refresh: the train plan, which
-  // packs the codecs, then the build plan, which builds the local indexes.
+  // trains the codecs, then the build plan, which builds the local indexes.
   static void expectRefreshPlans(const std::string& text) {
     const auto buildStart = text.find("Build plan:");
     ASSERT_NE(buildStart, std::string::npos);
@@ -74,7 +74,7 @@ class VectorIndexRefreshTest : public SqlQueryRunnerTestBase {
         text.substr(0, buildStart),
         testing::AllOf(
             testing::HasSubstr("Train plan:"),
-            testing::HasSubstr("vector_index_pack")));
+            testing::HasSubstr("vector_index_train")));
     EXPECT_THAT(
         text.substr(buildStart), testing::HasSubstr("vector_index_build"));
   }

@@ -191,23 +191,20 @@ partition value fails the refresh.
 TableWrite <codec table>, codec_id = ?1
   LeftJoin on partitions
     Aggregate distinct partitions          -- every selected partition
-    Aggregate vector_index_pack(cluster_id, centroid) by partitions
-      KMeans
-        Filter sample_row <= 256 * num_clusters
-          Window sample_row := row_number() by partitions
-                               ordered by xxhash64(key)
-            valid rows
+    Aggregate vector_index_train(embedding, key, num_clusters, metric)
+              by partitions
+      Filter sample_row <= 256 * num_clusters
+        Window sample_row := row_number() by partitions
+                             ordered by xxhash64(key)
+          valid rows
 ```
 
 - **Sample.** Up to 256 points per cluster from each partition, chosen by a
   hash of the key, so the sample is the same on every run.
-- **K-means.** `KMeans::expand` (`axiom/sql/presto/KMeans.h`) clusters each
-  partition's sample with a fixed-point loop: spherical k-means, seeded with
-  the first `num_clusters` sampled points, until no centroid moves more than a
-  tolerance or a fixed number of iterations. The loop is in
-  [FixedPoint-kmeans.md](../optimizer/docs/FixedPoint-kmeans.md).
-- **Pack.** The `vector_index_pack` aggregate packs each partition's
-  centroids into a codec.
+- **Train.** The `vector_index_train` aggregate clusters each partition's
+  sample with FAISS's spherical k-means and returns the codec of the
+  clusters. It orders the sample by key first, so the codec does not depend
+  on the order rows arrive in.
 - The left join writes a NULL codec for a selected partition with no valid
   rows.
 
@@ -452,7 +449,6 @@ also prunes files by cluster.
   Bucketing or sorting the index table by `cluster_id`, and passing the
   probed clusters to the index scan as a dynamic filter, lets the scan skip
   the rest.
-
 - **Skip the merge in the centroids search.** REFRESH's assignment matches
   each row with exactly one codec, so the per-query top-N is a no-op, yet it
   holds an entry per row. Declaring (partition columns, codec_id) as the codec
@@ -463,3 +459,11 @@ also prunes files by cluster.
 - **One listing per query.** The coverage check lists partitions at planning,
   and split generation lists the index's partitions again. Once connectors
   keep per-query state, split generation can reuse the listing.
+- **Show an index's partitions and stats.** A user sees an index's settings
+  in SHOW CREATE TABLE but has no way to see which partitions it covers or
+  how many embeddings each holds, short of knowing the connector's names for
+  the storage tables. A virtual table per index, `"products$pi$partitions"`,
+  named like the centroids table, would list each covered partition with its
+  `codec_id` and number of embeddings. Each connector fills it from metadata.
+  A write to it fails, since a connector resolves only stored tables for a
+  write.
