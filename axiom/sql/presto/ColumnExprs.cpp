@@ -42,6 +42,14 @@ std::vector<lp::ExprApi> ColumnExprs::concat(
 }
 
 // static
+std::vector<lp::ExprApi> ColumnExprs::concat(
+    std::vector<lp::ExprApi> exprs,
+    const lp::ExprApi& expr) {
+  exprs.push_back(expr);
+  return exprs;
+}
+
+// static
 std::optional<lp::ExprApi> ColumnExprs::equal(
     const std::vector<std::string>& names,
     std::string_view prefix) {

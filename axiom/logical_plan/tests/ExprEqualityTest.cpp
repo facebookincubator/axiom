@@ -79,9 +79,8 @@ TEST_F(ExprEqualityTest, constant) {
   auto literalOne = resolve(Lit(1LL));
   auto literalOneCopy = resolve(Lit(1LL));
   auto literalTwo = resolve(Lit(2LL));
-  auto literalNull = resolve(Lit(Variant::null(TypeKind::BIGINT), BIGINT()));
-  auto literalNullCopy =
-      resolve(Lit(Variant::null(TypeKind::BIGINT), BIGINT()));
+  auto literalNull = resolve(NullLit(BIGINT()));
+  auto literalNullCopy = resolve(NullLit(BIGINT()));
 
   EXPECT_EQ(*literalOne, *literalOneCopy);
   EXPECT_NE(*literalOne, *literalTwo);

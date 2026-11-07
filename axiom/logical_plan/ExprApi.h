@@ -26,6 +26,7 @@
 ///
 /// - Col(<name>) - column reference
 /// - Lit(<value>) - literal value
+/// - NullLit(<type>) - NULL of a type
 /// - Call(<name>, arg1, arg2,...) - function call; supports zero or more
 /// argumnts
 /// - Cast(<type>, arg) - cast expression
@@ -322,6 +323,12 @@ class ExprApi {
 
   ExprApi operator!=(const velox::Variant& value) const;
 
+  /// Returns 'this IS NULL'.
+  ExprApi isNull() const;
+
+  /// Returns 'this IS NOT NULL'.
+  ExprApi isNotNull() const;
+
   // TODO Remove in favor of 'alias'.
   const std::optional<std::string>& name() const {
     return alias_;
@@ -335,8 +342,8 @@ class ExprApi {
     return unnestedAliases_;
   }
 
-  ExprApi as(std::string alias) const {
-    return ExprApi(expr_, std::move(alias));
+  ExprApi as(std::string_view alias) const {
+    return ExprApi(expr_, std::string(alias));
   }
 
   ExprApi unnestAs(std::vector<std::string> aliases) const;
@@ -373,6 +380,9 @@ ExprApi Lit(velox::Variant&& val, velox::TypePtr type);
 ExprApi Lit(const velox::Variant& val);
 
 ExprApi Lit(const velox::Variant& val, velox::TypePtr type);
+
+/// Returns a NULL of 'type'.
+ExprApi NullLit(velox::TypePtr type);
 
 template <typename T>
 inline ExprApi Lit(T&& val) {

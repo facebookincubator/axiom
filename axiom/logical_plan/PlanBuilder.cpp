@@ -2169,8 +2169,8 @@ WindowExprPtr PlanBuilder::resolveWindowTypes(
       });
 }
 
-PlanBuilder& PlanBuilder::as(const std::string& alias) {
-  outputMapping_->setAlias(alias);
+PlanBuilder& PlanBuilder::as(std::string_view alias) {
+  outputMapping_->setAlias(std::string(alias));
   return *this;
 }
 

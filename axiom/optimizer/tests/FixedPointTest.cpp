@@ -137,9 +137,7 @@ TEST_F(FixedPointTest, selfJoinInStep) {
   auto context = makeContext();
   auto anchor = lp::PlanBuilder(context).tableScan("t");
   auto state = [&](std::string_view alias) {
-    return lp::PlanBuilder(context)
-        .fixedPointState("r", anchor)
-        .as(std::string(alias));
+    return lp::PlanBuilder(context).fixedPointState("r", anchor).as(alias);
   };
 
   auto logicalPlan =
@@ -1483,14 +1481,13 @@ TEST_F(FixedPointTest, kMeans) {
               // Stops at the first centroid that still moves.
               lp::PlanBuilder(context)
                   .values(ROW({}), std::vector<Variant>{Variant::row({})})
-                  .project({lp::Call(
-                      "is_null",
-                      lp::Subquery(
-                          state()
-                              .filter("NOT converged")
-                              .limit(1)
-                              .project({"converged"})
-                              .planNode()))}),
+                  .project({lp::Subquery(
+                                state()
+                                    .filter("NOT converged")
+                                    .limit(1)
+                                    .project({"converged"})
+                                    .planNode())
+                                .isNull()}),
               /*maxIterations=*/20,
               /*failAtBound=*/false,
               /*keyColumns=*/{"cluster"})
