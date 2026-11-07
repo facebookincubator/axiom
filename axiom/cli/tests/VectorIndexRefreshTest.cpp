@@ -150,7 +150,8 @@ TEST_F(VectorIndexRefreshTest, refresh) {
 }
 
 // EXPLAIN shows the two plans of a refresh and writes nothing. EXPLAIN ANALYZE
-// and EXPLAIN (TYPE IO) are not supported.
+// runs the refresh and shows both plans with their runtime stats. EXPLAIN
+// (TYPE IO) is not supported.
 TEST_F(VectorIndexRefreshTest, explain) {
   createTable();
   run(fmt::format("INSERT INTO t {}", makePoints("a")));
@@ -163,17 +164,21 @@ TEST_F(VectorIndexRefreshTest, explain) {
     expectRefreshPlans(*result.message);
   }
 
-  for (const auto* explain : {"EXPLAIN ANALYZE", "EXPLAIN (TYPE IO)"}) {
-    SCOPED_TRACE(explain);
-    VELOX_ASSERT_THROW(
-        run(fmt::format(
-            "{} REFRESH VECTOR INDEX i ON t WHERE ds = 'a'", explain)),
-        fmt::format("{} is not supported for REFRESH VECTOR INDEX", explain));
-  }
+  VELOX_ASSERT_THROW(
+      run("EXPLAIN (TYPE IO) REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"),
+      "EXPLAIN (TYPE IO) is not supported for REFRESH VECTOR INDEX");
 
   // EXPLAIN writes nothing.
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 0);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 0);
+
+  const auto result =
+      run("EXPLAIN ANALYZE REFRESH VECTOR INDEX i ON t WHERE ds = 'a'");
+  ASSERT_TRUE(result.message.has_value());
+  expectRefreshPlans(*result.message);
+  EXPECT_THAT(*result.message, testing::HasSubstr("Peak memory"));
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 1);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 3);
 }
 
 // A table partitioned by several columns gets a codec and local indexes for

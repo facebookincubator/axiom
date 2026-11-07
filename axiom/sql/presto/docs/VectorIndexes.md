@@ -127,7 +127,54 @@ refresh is one index write, which runs two plans in order:
 2. Assigns each row to the nearest cluster of its partition's codec, and
    builds a local index for each cluster.
 
-The result is the number of embeddings written. `EXPLAIN` shows both plans.
+The result is the number of embeddings written, summed over the local indexes.
+For a partition of 30 valid rows and 3 clusters, the refresh writes 3 local
+indexes holding 30 embeddings:
+
+```
+ rows
+------
+   30
+```
+
+`EXPLAIN` shows both plans; `EXPLAIN ANALYZE` runs the refresh and shows both
+plans with their runtime stats:
+
+```sql
+EXPLAIN ANALYZE REFRESH VECTOR INDEX product_index ON products WHERE ds = '2026-10-31'
+```
+
+<details>
+<summary>Output (abridged)</summary>
+
+```
+Train plan:
+Fragment 1: SINGLE:
+-- TableWrite[11][hive, codec, ds, codec_id, ...] -> rows:BIGINT, ...
+   Output: 3 rows (155.10KB, 2 batches), Cpu time: 5.94ms, Wall time: 6.03ms, Peak memory: 1.00MB, ...
+  ...
+        -- Aggregation[7][SINGLE [p0] codec := vector_index_train("embedding","id",3,cosine)] -> p0:VARCHAR, codec:VECTOR_INDEX
+           Output: 1 rows (431.72KB, 1 batches), Cpu time: 11.98ms, Wall time: 15.46ms, Peak memory: 757.38KB, ...
+          ...
+            -- TopNRowNumber[5][row_number order by (__p5 ASC NULLS LAST) limit 768] -> id:BIGINT, embedding:ARRAY<REAL>, __p5:VARBINARY
+               Output: 30 rows (383.91KB, 1 batches), Cpu time: 1.87ms, Wall time: 1.89ms, Peak memory: 576.62KB, ...
+              ...
+
+Build plan:
+Fragment 1: SINGLE:
+-- TableWrite[14][hive, codec_id, cluster_id, group_id, local_index, ds, ...] -> rows:BIGINT, ...
+   Output: 3 rows (196.50KB, 2 batches), Cpu time: 35.95ms, Wall time: 40.35ms, Peak memory: 1.00MB, ...
+  ...
+      -- Aggregation[11][SINGLE [cluster_id_6, group_id] local_index := vector_index_build("embedding","id",flat,cosine,<empty>)] -> cluster_id_6:BIGINT, group_id:BIGINT, local_index:VECTOR_INDEX
+         Output: 3 rows (431.62KB, 1 batches), Cpu time: 1.91ms, Wall time: 1.94ms, Peak memory: 950.12KB, ...
+        ...
+                -- VectorSearchJoin[6][LEFT embedding nearest in codec19 (faiss, cosine), k: 1] -> id:BIGINT, embedding:ARRAY<REAL>, __query_id22:BIGINT, __cluster_id23:BIGINT, __score24:REAL
+                   Output: 30 rows (1.62KB, 1 batches), Cpu time: 1.25ms, Wall time: 1.27ms, Peak memory: 3.62KB, ...
+                  ...
+```
+
+</details>
+
 The refresh skips a row whose key is `NULL`, or whose embedding is `NULL`, has
 a `NULL`, `NaN` or infinite element, is all zeros, or has a length other than
 `dimension`. A valid row with a `NULL` partition value fails the refresh.
