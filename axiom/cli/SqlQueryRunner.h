@@ -648,13 +648,16 @@ class SqlQueryRunner {
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
           schemaResolver);
 
+  // Runs 'logicalPlan', binding 'placeholderValues' to its placeholders, and
+  // returns its Velox plan with the runtime stats of each operator.
   folly::coro::Task<std::string> co_runExplainAnalyze(
       const facebook::axiom::logical_plan::LogicalPlanNodePtr& logicalPlan,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
       std::shared_ptr<facebook::axiom::connector::SchemaResolver>
-          schemaResolver = nullptr);
+          schemaResolver,
+      std::vector<facebook::velox::Variant> placeholderValues);
 
   // Runs SHOW STATS FOR (<query>): optimizes the inner query's logical plan
   // and returns per-column and table-level statistics as a VALUES result.
@@ -735,14 +738,16 @@ class SqlQueryRunner {
       std::string& planString);
 
   // Runs a REFRESH VECTOR INDEX inside an index write and returns the
-  // number of embeddings it wrote.
+  // number of embeddings it wrote. Puts the text of its two plans in
+  // 'planString', with each operator's runtime stats if 'analyze'.
   folly::coro::Task<facebook::velox::RowVectorPtr> co_runRefreshVectorIndex(
       const presto::RefreshVectorIndexStatement& refresh,
       std::string_view queryId,
       const RunOptions& options,
       const facebook::axiom::connector::ConnectorContextPtr& context,
       QueryTiming& timing,
-      std::string& planString);
+      std::string& planString,
+      bool analyze);
 
   // Executes a CREATE, DROP, or ALTER statement and returns its status message.
   folly::coro::Task<std::string> co_runDataDefinitionStatement(

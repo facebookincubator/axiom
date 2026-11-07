@@ -1175,12 +1175,18 @@ SqlQueryRunner::co_runExplainStatement(
     co_return;
   } else if (statement->isRefreshVectorIndex()) {
     VELOX_USER_CHECK(
-        !explain.isAnalyze(),
-        "EXPLAIN ANALYZE is not supported for REFRESH VECTOR INDEX");
-    VELOX_USER_CHECK(
         explain.type() != presto::ExplainStatement::Type::kIo,
         "EXPLAIN (TYPE IO) is not supported for REFRESH VECTOR INDEX");
     const auto* refresh = statement->as<presto::RefreshVectorIndexStatement>();
+    // As for any statement, EXPLAIN ANALYZE runs the refresh, writing the
+    // index.
+    if (explain.isAnalyze()) {
+      std::string text;
+      co_await co_runRefreshVectorIndex(
+          *refresh, queryId, options, context, timing, text, /*analyze=*/true);
+      co_yield SqlResultChunk{std::move(text)};
+      co_return;
+    }
     // The connector chooses the codec id when the write begins; EXPLAIN
     // begins no write, so it binds an arbitrary one.
     const std::vector<velox::Variant> placeholderValues{
@@ -1244,7 +1250,12 @@ SqlQueryRunner::co_runExplainStatement(
 
   if (explain.isAnalyze()) {
     co_yield SqlResultChunk{co_await co_runExplainAnalyze(
-        logicalPlan, options, context, timing, schemaResolver)};
+        logicalPlan,
+        options,
+        context,
+        timing,
+        schemaResolver,
+        /*placeholderValues=*/{})};
     co_return;
   }
   co_yield SqlResultChunk{runExplain(
@@ -1427,14 +1438,16 @@ folly::coro::Task<velox::RowVectorPtr> SqlQueryRunner::co_runRefreshVectorIndex(
     const RunOptions& options,
     const connector::ConnectorContextPtr& context,
     QueryTiming& timing,
-    std::string& planString) {
+    std::string& planString,
+    bool analyze) {
   auto metadata = context->metadataRegistry().get(refresh.connectorId());
   auto session = makeConnectorSession(context, refresh.connectorId());
   const auto& plans = refresh.plans();
   checkLogicalPlan(*plans.trainPlan);
   checkLogicalPlan(*plans.buildPlan);
   // Each plan runs as a query of its own, which ends, releasing its runner,
-  // before the next starts. Each puts its plan's text in 'text'.
+  // before the next starts. Each puts its plan's text in 'text', with stats if
+  // 'analyze'.
   const auto runPlan = [&](const logical_plan::LogicalPlanNodePtr& plan,
                            std::string_view name,
                            int64_t codecId,
@@ -1443,6 +1456,16 @@ folly::coro::Task<velox::RowVectorPtr> SqlQueryRunner::co_runRefreshVectorIndex(
     planOptions.queryId = fmt::format("{}_{}", queryId, name);
     std::vector<velox::Variant> placeholderValues;
     placeholderValues.emplace_back(codecId);
+    if (analyze) {
+      text = co_await co_runExplainAnalyze(
+          plan,
+          planOptions,
+          context,
+          timing,
+          /*schemaResolver=*/nullptr,
+          std::move(placeholderValues));
+      co_return;
+    }
     auto&& [generator] = co_await folly::coro::co_scope_exit(
         folly::coro::co_cleanup,
         co_runLogicalPlan(
@@ -1538,7 +1561,8 @@ SqlQueryRunner::co_runUnchecked(
         options,
         context,
         timing,
-        planString)};
+        planString,
+        /*analyze=*/false)};
     co_return;
   }
 
@@ -2181,7 +2205,8 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
     const RunOptions& options,
     const connector::ConnectorContextPtr& context,
     QueryTiming& timing,
-    std::shared_ptr<connector::SchemaResolver> schemaResolver) {
+    std::shared_ptr<connector::SchemaResolver> schemaResolver,
+    std::vector<velox::Variant> placeholderValues) {
   auto queryCtx = newQuery(options);
   optimizer::PlanAndStats planAndStats;
   {
@@ -2199,7 +2224,8 @@ folly::coro::Task<std::string> SqlQueryRunner::co_runExplainAnalyze(
         nullptr,
         nullptr,
         schemaResolver,
-        /*explain=*/false);
+        /*explain=*/false,
+        placeholderValues);
   }
 
   auto runner = makeLocalRunner(planAndStats, queryCtx, options, context);
