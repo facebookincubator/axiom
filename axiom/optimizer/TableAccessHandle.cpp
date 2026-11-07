@@ -112,6 +112,7 @@ TableAccessHandle buildTableAccess(
 
   // Each rejected index selects a conjunct the caller must apply above the
   // scan; the rest are the connector's responsibility, inside 'tableHandle'.
+  std::vector<bool> accepted(filters.size(), true);
   for (int32_t index : rejectedFilterIndices) {
     VELOX_CHECK_GE(
         index,
@@ -122,6 +123,13 @@ TableAccessHandle buildTableAccess(
         static_cast<int32_t>(filters.size()),
         "createTableHandle returned an out-of-range rejected filter index");
     rejected.push_back(filters[index]);
+    accepted[index] = false;
+  }
+  ExprVector acceptedFilters;
+  for (size_t i = 0; i < filters.size(); ++i) {
+    if (accepted[i]) {
+      acceptedFilters.push_back(filters[i]);
+    }
   }
 
   const auto rejectedColumns = PlanObjectSet::columnsOf(rejected);
@@ -133,6 +141,7 @@ TableAccessHandle buildTableAccess(
 
   return TableAccessHandle{
       .tableHandle = std::move(tableHandle),
+      .acceptedFilters = std::move(acceptedFilters),
       .columnHandles = std::move(columnHandles),
   };
 }

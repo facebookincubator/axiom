@@ -755,16 +755,43 @@ Partitioning scanGlobalPartition(
       baseTable->layout(), outputColumns, groupedPartitionType);
 }
 
-// Unique keys of a scan: the table's primary key when the scan outputs every
-// key column whole.
+// The columns 'conjuncts' make constant, as `column = literal` does.
+PlanObjectSet constantColumns(const ExprVector& conjuncts) {
+  PlanObjectSet columns;
+  for (ExprCP conjunct : conjuncts) {
+    if (const auto equality = ExprFactory::literalEquality(conjunct);
+        equality.has_value() && equality->first->isColumn()) {
+      columns.add(equality->first);
+    }
+  }
+  return columns;
+}
+
+// Unique keys of a scan: the table's primary key, without the columns the
+// connector's filters ('scanHandle') make constant, when the scan outputs the
+// rest of the key whole.
 QGVector<PlanObjectSet> scanUnique(
     BaseTableCP baseTable,
-    const ColumnVector& outputColumns) {
+    const ColumnVector& outputColumns,
+    const TableAccessHandle* scanHandle) {
   const auto& primaryKey = baseTable->schemaTable->connectorTable->primaryKey();
   if (primaryKey.empty()) {
     return {};
   }
-  auto key = findScanColumns(outputColumns, primaryKey);
+  folly::F14FastSet<std::string_view> constantNames;
+  if (scanHandle != nullptr) {
+    constantColumns(scanHandle->acceptedFilters)
+        .forEach<Column>([&](ColumnCP column) {
+          if (!column->isSubfield()) {
+            constantNames.insert(column->schemaName());
+          }
+        });
+  }
+  auto key = findScanColumns(
+      outputColumns,
+      primaryKey | std::views::filter([&](const std::string& name) {
+        return !constantNames.contains(name);
+      }));
   if (!key.has_value()) {
     return {};
   }
@@ -792,7 +819,7 @@ Scan::Scan(Key key)
                         key.outputColumns,
                         key.groupedPartitionType)};
               },
-              scanUnique(key.baseTable, key.outputColumns))),
+              scanUnique(key.baseTable, key.outputColumns, key.scanHandle))),
       baseTable_(key.baseTable),
       scanHandle_(key.scanHandle),
       groupedPartitionType_(key.groupedPartitionType),
@@ -937,14 +964,57 @@ Partitioning Filter::globalPartition(
   return inheritedPartition(inputPartitions[0]);
 }
 
+namespace {
+
+// Given the unique keys of a filter's input, 'keys', returns the unique keys of
+// its output: each input key without the columns that 'predicates' make
+// constant, as `column = literal` does. The filter keeps a subset of the rows,
+// so every input key still holds. A constant column adds nothing to a key. For
+// an input unique on (a, b, c):
+//   - `c = 2` -> unique on (a, b)
+//   - `a = 1 AND b = 1 AND c = 2` -> unique on (), i.e. at most one row
+QGVector<PlanObjectSet> uniqueKeysAfterFilter(
+    QGVector<PlanObjectSet> keys,
+    const ExprVector& predicates) {
+  const PlanObjectSet constants = constantColumns(predicates);
+  for (PlanObjectSet& key : keys) {
+    key.except(constants);
+  }
+  return keys;
+}
+
+} // namespace
+
 Filter::Filter(Key key)
     : Node(
           NodeType::kFilter,
           ColumnVector{key.input->outputColumns()},
           derivedProperties(
               {key.input},
-              [&] { return passThroughPhysical(key.input); },
-              [&] { return subsetRelational(key.input); })),
+              [&] {
+                PhysicalProperties properties = passThroughPhysical(key.input);
+                properties.globalUnique = uniqueKeysAfterFilter(
+                    std::move(properties.globalUnique), key.predicates);
+                properties.driverUnique = uniqueKeysAfterFilter(
+                    std::move(properties.driverUnique), key.predicates);
+                // A driver key that contains a global key adds nothing.
+                std::erase_if(
+                    properties.driverUnique,
+                    [&](const PlanObjectSet& driverKey) {
+                      return std::ranges::any_of(
+                          properties.globalUnique,
+                          [&](const PlanObjectSet& globalKey) {
+                            return globalKey.isSubset(driverKey);
+                          });
+                    });
+                return properties;
+              },
+              [&] {
+                return RelationalProperties{
+                    .unique = uniqueKeysAfterFilter(
+                        key.input->relationalProperties().unique,
+                        key.predicates)};
+              })),
       input_(key.input),
       predicates_(std::move(key.predicates)) {
   VELOX_CHECK_NOT_NULL(input_);

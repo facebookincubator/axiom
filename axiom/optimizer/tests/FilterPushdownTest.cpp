@@ -96,6 +96,39 @@ TEST_P(FilterPushdownTest, throughAggregation) {
   }
 }
 
+// A filter the connector accepts and that makes a primary key column constant
+// leaves the rest of the key unique: grouping by it streams, without an
+// exchange.
+TEST_P(FilterPushdownTest, constantPrimaryKeyColumn) {
+  if (!useV2_) {
+    return;
+  }
+
+  auto definition =
+      connector::TableDefinition::create(ROW({"k1", "k2", "g"}, BIGINT()), {});
+  definition.primaryKey = {"k1", "k2"};
+  createEmptyTable("v", std::move(definition));
+
+  auto logicalPlan = lp::PlanBuilder(makeContext())
+                         .tableScan("v")
+                         .filter("k2 = 1")
+                         .aggregate({"k1", "g"}, {"count(*)"})
+                         .build();
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchHiveScan("v", test::eq("k2", (int64_t)1))
+          .streamingAggregation({"k1", "g"}, {"count(*)"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchHiveScan("v", test::eq("k2", (int64_t)1))
+          .streamingAggregation({"k1", "g"}, {"count(*)"})
+          .gather()
+          .build());
+}
+
 TEST_P(FilterPushdownTest, redundantCast) {
   auto logicalPlan = lp::PlanBuilder(makeContext())
                          .tableScan("nation")

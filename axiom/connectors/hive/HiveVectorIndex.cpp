@@ -125,11 +125,10 @@ HiveVectorIndex::storageTableDefinitions(
     return velox::Variant::array(
         std::vector<velox::Variant>(names.begin(), names.end()));
   };
-  auto codecProperties = storageProperties;
-  auto codecPartitions = index.partitionColumns->names();
-  codecPartitions.emplace_back(VectorIndex::kCodecId);
-  codecProperties[HiveWriteOptions::kPartitionedBy] =
-      partitionedBy(std::move(codecPartitions));
+  auto codecDefinition = VectorIndex::codecTableDefinition(
+      index.partitionColumns, storageProperties);
+  codecDefinition.properties[HiveWriteOptions::kPartitionedBy] =
+      partitionedBy(codecDefinition.primaryKey);
   auto indexProperties = storageProperties;
   if (index.partitionColumns->size() > 0) {
     indexProperties[HiveWriteOptions::kPartitionedBy] =
@@ -138,9 +137,7 @@ HiveVectorIndex::storageTableDefinitions(
   return {{
       {
           index.codecTable,
-          TableDefinition::create(
-              VectorIndex::codecTableType(index.partitionColumns),
-              std::move(codecProperties)),
+          std::move(codecDefinition),
       },
       {
           index.indexTable,

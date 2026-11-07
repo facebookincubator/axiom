@@ -63,6 +63,9 @@ struct TableAccessHandle {
   /// Table handle with the accepted filters pushed into the connector.
   velox::connector::ConnectorTableHandlePtr tableHandle;
 
+  /// The filters the connector accepted, which the read applies.
+  ExprVector acceptedFilters;
+
   /// Column handle per column of the connector read schema: every column the
   /// `Scan` outputs, plus the ones only the connector's own filters read,
   /// which it reads without projecting.

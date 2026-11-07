@@ -68,7 +68,10 @@ flowchart TD
 - A **codec** holds a partition's centroids: a flat FAISS index over the
   normalized centroids, with each cluster's id as its centroid's id.
 - `codec_id` identifies the index write that trained the codec. A
-  partition's local indexes all name one codec.
+  partition's local indexes all name one codec. A write that never ended can
+  leave other codecs in the partition, which no local index names, until the
+  next write of the partition drops them. The partition columns and `codec_id`
+  are the codec table's primary key.
 - A **local index** holds one group of one cluster's rows, with each row's key
   as its id. A cluster larger than 50,000 rows is split into groups.
 - The `codec` and `local_index` columns are of type VECTOR_INDEX.
@@ -81,7 +84,8 @@ seven centroids into one value:
 The engine reserves a third name, `"t$<index>$centroids"`, for a table of
 `(partition columns, codec_id, cluster_id, centroid)` with a row per cluster.
 Nothing stores or writes it. A vector search of it is planned as a search of
-the codec table, which lets a logical plan assign rows to clusters.
+the codec table, which lets a logical plan assign rows to clusters. It has the
+clusters of every codec in the codec table.
 
 An empty partition has a NULL codec and one index row of NULLs. It is covered
 and matches nothing.
@@ -286,8 +290,14 @@ match, and the score. For cosine, the score is the cosine similarity: larger
 is nearer.
 
 A search of `"t$i$centroids"` is one search of the codecs of the selected
-partitions, returning each match's cluster. It is not checked for coverage:
-REFRESH searches codecs whose partitions have no local indexes yet.
+partitions, returning each match's cluster. A query that matches several
+codecs keeps its `k` nearest clusters across them. A query matches at most one
+codec when each column of the codec table's primary key is a search key or is
+made constant by a filter. The search then returns its matches as they are.
+REFRESH's search keys every partition column and filters on one `codec_id`.
+
+The centroids search is not checked for coverage: REFRESH searches codecs
+whose partitions have no local indexes yet.
 
 ### Velox
 
@@ -449,10 +459,6 @@ also prunes files by cluster.
   Bucketing or sorting the index table by `cluster_id`, and passing the
   probed clusters to the index scan as a dynamic filter, lets the scan skip
   the rest.
-- **Skip the merge in the centroids search.** REFRESH's assignment matches
-  each row with exactly one codec, so the per-query top-N is a no-op, yet it
-  holds an entry per row. Declaring (partition columns, codec_id) as the codec
-  table's primary key lets the planner skip it.
 - **Rebuild a covered partition.** Once connectors support INSERT OVERWRITE,
   REFRESH can write a new codec and overwrite the partition's local indexes in
   one swap. Finish already drops the old codec.

@@ -217,6 +217,17 @@ velox::RowTypePtr VectorIndex::codecTableType(
 }
 
 // static
+TableDefinition VectorIndex::codecTableDefinition(
+    const velox::RowTypePtr& partitionColumns,
+    folly::F14FastMap<std::string, velox::Variant> properties) {
+  auto definition = TableDefinition::create(
+      codecTableType(partitionColumns), std::move(properties));
+  definition.primaryKey = partitionColumns->names();
+  definition.primaryKey.emplace_back(kCodecId);
+  return definition;
+}
+
+// static
 velox::RowTypePtr VectorIndex::indexTableType(
     const velox::RowTypePtr& partitionColumns) {
   checkPartitionColumnNames(partitionColumns);

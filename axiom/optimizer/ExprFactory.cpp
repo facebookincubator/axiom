@@ -121,12 +121,12 @@ ExprCP ExprFactory::makeNotDistinctFrom(ExprCP lhs, ExprCP rhs) {
 }
 
 std::optional<std::pair<ExprCP, ExprCP>> ExprFactory::literalEquality(
-    ExprCP expr) const {
+    ExprCP expr) {
   if (expr->isNot(PlanType::kCallExpr)) {
     return std::nullopt;
   }
   const auto* call = expr->as<Call>();
-  if (call->name() != builder_.functionNames().equality ||
+  if (call->name() != queryCtx()->functionNames().equality ||
       call->args()[1]->isNot(PlanType::kLiteralExpr)) {
     return std::nullopt;
   }

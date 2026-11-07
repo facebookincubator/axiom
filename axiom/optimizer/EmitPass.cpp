@@ -1142,11 +1142,12 @@ velox::core::AggregationNode::Aggregate toVeloxFinalAggregate(
 
 // Subset of `groupingKeys` that 'properties' guarantee are pre-grouped
 // (equal-key rows contiguous within each driver), so an aggregation over them
-// can stream rather than build a full hash table. The largest of: the leading
-// `Sorted` run that are grouping keys; a `Grouped(S)` whose columns are all
-// grouping keys (the whole `S`, since rows are contiguous on the set jointly,
-// not on a bare subset); and a unique key made of grouping keys, whose values
-// occur at most once per driver. Empty when nothing is pre-grouped.
+// can stream rather than build a full hash table. All of them when a unique key
+// is made of grouping keys, since each group then has one row in each driver.
+// Otherwise the larger of: the leading `Sorted` run that are grouping keys; and
+// a `Grouped(S)` whose columns are all grouping keys (the whole `S`, since rows
+// are contiguous on the set jointly, not on a bare subset). Empty when nothing
+// is pre-grouped.
 ExprVector computePreGroupedKeys(
     const PhysicalProperties& properties,
     const ExprVector& groupingKeys) {
@@ -1163,17 +1164,16 @@ ExprVector computePreGroupedKeys(
     return false;
   };
 
-  ExprVector best;
   for (const auto* keys :
        {&properties.globalUnique, &properties.driverUnique}) {
     for (const PlanObjectSet& key : *keys) {
-      ColumnVector columns = key.toObjects<Column>();
-      if (std::ranges::all_of(columns, isGroupingKey) &&
-          columns.size() > best.size()) {
-        best = ExprVector{columns.begin(), columns.end()};
+      if (std::ranges::all_of(key.toObjects<Column>(), isGroupingKey)) {
+        return groupingKeys;
       }
     }
   }
+
+  ExprVector best;
   for (const DriverOrder& property : properties.driverOrder) {
     ExprVector candidate;
     if (property.kind == DriverOrderKind::kSorted) {

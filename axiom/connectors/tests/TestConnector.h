@@ -948,6 +948,9 @@ class TestConnectorMetadata : public ConnectorMetadata {
   // products__i__codecs.
   void createVectorIndex(TestTable& table, ResolvedVectorIndex index);
 
+  // Registers 'table' under its name. Throws if the name is already taken.
+  std::shared_ptr<TestTable> registerTable(std::shared_ptr<TestTable> table);
+
   // Throws a user error if a table has the name of a storage table of the
   // index 'name' of 'tableName'.
   void checkStorageTablesFree(

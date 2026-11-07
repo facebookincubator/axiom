@@ -53,6 +53,11 @@ class RelationalPropertiesTest : public optimizer::test::QueryTestBase {
   void configureTestConnector() override {
     testConnector_->addTable("t", velox::ROW({"a", "b"}, velox::BIGINT()));
     testConnector_->addTable("u", velox::ROW({"c", "d"}, velox::BIGINT()));
+
+    auto definition = connector::TableDefinition::create(
+        velox::ROW({"k1", "k2", "g"}, velox::BIGINT()), {});
+    definition.primaryKey = {"k1", "k2"};
+    testConnector_->addTable("v", std::move(definition));
   }
 
   // Returns the relational properties of the root of 'sql''s plan, just before
@@ -83,11 +88,6 @@ class RelationalPropertiesTest : public optimizer::test::QueryTestBase {
 };
 
 TEST_F(RelationalPropertiesTest, scan) {
-  auto definition = connector::TableDefinition::create(
-      velox::ROW({"k1", "k2", "g"}, velox::BIGINT()), {});
-  definition.primaryKey = {"k1", "k2"};
-  testConnector_->addTable("v", std::move(definition));
-
   verify({
       // A scan is unique on the table's primary key when it outputs every key
       // column.
@@ -144,12 +144,17 @@ TEST_F(RelationalPropertiesTest, project) {
 
 TEST_F(RelationalPropertiesTest, passThrough) {
   verify({
-      // A filter keeps the keys and may drop the single row.
+      // A filter keeps the keys, without the columns it makes constant,
+      // and may drop the single row.
       {"SELECT a, n "
        "FROM (SELECT a, count(*) AS n FROM t GROUP BY a) "
        "WHERE n > 1",
        {{{"a"}}}},
       {"SELECT n FROM (SELECT count(*) AS n FROM t) WHERE n > 1", {{{}}}},
+      {"SELECT k1, k2, g FROM v WHERE k2 = 1", {{{"k1"}}}},
+      {"SELECT k1, k2, g FROM v WHERE k1 = 1 AND k2 = 1", {{{}}}},
+      {"SELECT k1, k2, g FROM v WHERE k2 > 1", {{{"k1", "k2"}}}},
+      {"SELECT k1, k2, g FROM v WHERE k2 % 10 = 1", {{{"k1", "k2"}}}},
       // Sorting and window functions keep every row and its keys.
       {"SELECT a, n "
        "FROM (SELECT a, count(*) AS n FROM t GROUP BY a) "
