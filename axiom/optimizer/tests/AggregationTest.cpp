@@ -338,8 +338,6 @@ TEST_P(AggregationTest, orderBy) {
                     .tableScan("t")
                     .aggregate({"k"}, {"sum(v1)"})
                     .build();
-  auto plan = planVelox(logicalPlan);
-
   matcher = matchScan("t")
                 .partialAggregation({"k"}, {"sum(v1)"})
                 .shuffle()
@@ -347,7 +345,7 @@ TEST_P(AggregationTest, orderBy) {
                 .finalAggregation()
                 .shuffle()
                 .build();
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
 }
 
 // Verifies plan construction succeeds when partial-aggregation
@@ -440,8 +438,6 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                            .with({"a + b as d"})
                            .aggregate({"a", "b", "d"}, {})
                            .build();
-    auto plan = planVelox(logicalPlan);
-
     // The projection preserves partitioning on [a, b], which also co-locates
     // the second aggregation's groups on [a, b, d].
     auto matcher = matchScan("t")
@@ -453,7 +449,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                        .singleAggregation({"a", "b", "d"}, {})
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
   }
 
   {
@@ -464,8 +460,6 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                            .aggregate({"a", "b", "c"}, {})
                            .aggregate({"a", "b"}, {})
                            .build();
-    auto plan = planVelox(logicalPlan);
-
     // There should be TWO shuffles. The second aggregation
     // MUST be after a shuffle because partitionKeys [a, b, c] ⊄ groupingKeys
     // [a, b].
@@ -477,7 +471,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                        .build();
     // v2 two-stages every eligible aggregate, so it plans partial + final
     // where the unique grouping keys above make single-stage the better plan.
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -794,6 +788,37 @@ TEST_P(AggregationTest, bucketedAggregation) {
   }
 }
 
+TEST_P(AggregationTest, uniqueInput) {
+  if (!useV2_) {
+    return;
+  }
+
+  // Grouping by a superset of the primary key puts each group in one row, so
+  // the aggregation runs where the rows are read, without an exchange.
+  auto definition =
+      connector::TableDefinition::create(ROW({"k1", "k2", "g"}, BIGINT()), {});
+  definition.primaryKey = {"k1", "k2"};
+  testConnector_->addTable("v", std::move(definition));
+
+  const auto logicalPlan = parseSelect(
+      "SELECT k1, k2, g, count(*) AS n "
+      "FROM v "
+      "GROUP BY k1, k2, g");
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("v")
+          .singleAggregation({"k1", "k2", "g"}, {"count(*)"})
+          .build());
+
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("v")
+          .singleAggregation({"k1", "k2", "g"}, {"count(*)"})
+          .gather()
+          .build());
+}
+
 // TODO: Add tests for maybeProject() cost tracking once Project::unitCost is
 // implemented (currently 0, see the TODO in Project::Project). The
 // optimizationCost() helper is available for verifying cost differences between
@@ -825,8 +850,6 @@ TEST_P(AggregationTest, groupingSets) {
 
   // Distributed plan shape.
   {
-    auto plan = planVelox(logicalPlan);
-
     auto matcher =
         matchScan("t")
             .groupId({{"a", "b"}, {"a"}, {}}, {"c"}, "gid")
@@ -834,7 +857,7 @@ TEST_P(AggregationTest, groupingSets) {
             .project({"a", "b", "total", "gid"})
             .gather()
             .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -911,8 +934,6 @@ TEST_P(AggregationTest, groupingSetsNoGlobalSet) {
   // Distributed plan — without global sets, the optimizer chooses
   // split (partial + final) aggregation based on cost.
   {
-    auto plan = planVelox(logicalPlan);
-
     auto matcher = matchScan("t")
                        .groupId({{"a"}, {"b"}}, {}, "gid")
                        .partialAggregation({"a", "b", "gid"}, {"count(1) as c"})
@@ -922,7 +943,7 @@ TEST_P(AggregationTest, groupingSetsNoGlobalSet) {
                        .project({"a", "b", "c", "gid"})
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -955,11 +976,6 @@ TEST_P(AggregationTest, groupingSetsOrderByWithGlobalSet) {
 
   // Distributed plan shape.
   {
-    auto plan = planVelox(
-        logicalPlan,
-        MultiFragmentPlan::Options{
-            .maxRemotePartitions = 4, .maxLocalPartitions = 4});
-
     auto matcher =
         matchScan("t")
             .groupId({{"a"}, {}}, {"b"}, "gid")
@@ -968,7 +984,7 @@ TEST_P(AggregationTest, groupingSetsOrderByWithGlobalSet) {
             .singleAggregation({"a", "gid"}, {"array_agg(b ORDER BY b) as arr"})
             .project({"a", "arr", "gid"})
             .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -996,8 +1012,6 @@ TEST_P(AggregationTest, groupingSetsLiteralArgs) {
 
   // Distributed plan.
   {
-    auto plan = planVelox(logicalPlan);
-
     auto matcher = matchScan("t")
                        .groupId({{"a"}, {}}, {}, "gid")
                        .partialAggregation({"a", "gid"}, {"count(1) as c"})
@@ -1007,7 +1021,7 @@ TEST_P(AggregationTest, groupingSetsLiteralArgs) {
                        .project({"a", "c", "gid"})
                        .gather()
                        .build();
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(plan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
   }
 }
 
@@ -1045,10 +1059,7 @@ TEST_P(AggregationTest, mask) {
           .finalAggregation({}, {"sum(s)", "avg(a)"})
           .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planVelox(
-          logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4})
-          .plan,
-      distributedMatcher);
+      planVelox(logicalPlan).plan, distributedMatcher);
 }
 
 TEST_P(AggregationTest, ifToMask) {
@@ -1291,10 +1302,7 @@ TEST_P(AggregationTest, dropOrderByFromOrderInsensitiveAggregates) {
                                 .project()
                                 .build();
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planVelox(
-          logicalPlan, {.maxRemotePartitions = 4, .maxLocalPartitions = 4})
-          .plan,
-      distributedMatcher);
+      planVelox(logicalPlan).plan, distributedMatcher);
 }
 
 // The ORDER BY of an order-insensitive aggregate is never translated, so

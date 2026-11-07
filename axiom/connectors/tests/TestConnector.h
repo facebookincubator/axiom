@@ -1163,6 +1163,12 @@ class TestConnector : public velox::connector::Connector {
       const velox::RowTypePtr& schema,
       const folly::F14FastMap<std::string, velox::Variant>& options);
 
+  /// Registers a TestTable in the default schema as CREATE TABLE 'definition'
+  /// does.
+  std::shared_ptr<TestTable> addTable(
+      const std::string& name,
+      TableDefinition definition);
+
   /// Adds the table 'name' of kDefaultSchema, partitioned by
   /// 'partitionColumns' (see TestConnectorMetadata::kPartitionedBy).
   std::shared_ptr<TestTable> addPartitionedTable(

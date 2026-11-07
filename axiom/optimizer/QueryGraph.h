@@ -264,6 +264,11 @@ class Column : public Expr {
     return topColumn_;
   }
 
+  /// True if 'this' is a subfield of 'topColumn()'.
+  bool isSubfield() const {
+    return topColumn_ != nullptr;
+  }
+
   /// Path from 'topColumn'.
   PathCP path() const {
     return path_;

@@ -17,6 +17,7 @@
 #include "axiom/optimizer/Node.h"
 
 #include <optional>
+#include <ranges>
 #include <type_traits>
 
 #include "axiom/connectors/ConnectorMetadata.h"
@@ -206,14 +207,19 @@ bool onOneDriverPerTask(Placement placement) {
       placement == Placement::kSingleThread;
 }
 
-// The properties of a leaf: 'physical()' when PlanPhysical placed it, with
-// the partitioning one task or one driver per task implies; none otherwise.
+// The properties of a leaf with the unique keys 'unique': 'physical()' when
+// PlanPhysical placed it, with 'unique' as its global keys and the partitioning
+// one task or one driver per task implies; the relational properties otherwise.
 template <typename Physical>
-Node::Properties leafProperties(Placement placement, Physical&& physical) {
+Node::Properties leafProperties(
+    Placement placement,
+    Physical&& physical,
+    QGVector<PlanObjectSet> unique) {
   if (placement == Placement::kUnplaced) {
-    return RelationalProperties{};
+    return RelationalProperties{.unique = std::move(unique)};
   }
   PhysicalProperties properties = physical();
+  properties.globalUnique = std::move(unique);
   if (onOneTask(placement)) {
     properties.globalPartition = Partitioning::gather(PropertyScope::kGlobal);
   }
@@ -687,6 +693,25 @@ ColumnVector aggregateGroupingColumns(
       outputColumns.begin() + static_cast<ptrdiff_t>(numGroupingKeys)};
 }
 
+// The columns of a scan's 'outputColumns' that are the table columns 'names'
+// whole, in order. Nullopt when one of them is not among 'outputColumns'.
+template <typename Names>
+std::optional<ColumnVector> findScanColumns(
+    const ColumnVector& outputColumns,
+    Names&& names) {
+  ColumnVector columns;
+  for (const auto& name : names) {
+    auto it = std::ranges::find_if(outputColumns, [&](ColumnCP column) {
+      return !column->isSubfield() && column->schemaName() == name;
+    });
+    if (it == outputColumns.end()) {
+      return std::nullopt;
+    }
+    columns.push_back(*it);
+  }
+  return columns;
+}
+
 // Partitioning of 'partitionType' expressed over 'outputColumns': the
 // connector's partition function on the columns matching 'layout's partition
 // columns. Unspecified when a partition column is not among 'outputColumns',
@@ -706,25 +731,16 @@ Partitioning bucketPartition(
     return {};
   }
 
-  ExprVector keys;
-  keys.reserve(partitionColumns.size());
-  for (const auto* partitionColumn : partitionColumns) {
-    ColumnCP match = nullptr;
-    for (ColumnCP column : outputColumns) {
-      if (column->name() == partitionColumn->name()) {
-        match = column;
-        break;
-      }
-    }
-    if (match == nullptr) {
-      return {};
-    }
-    keys.push_back(match);
+  auto keys = findScanColumns(
+      outputColumns,
+      partitionColumns | std::views::transform(&connector::Column::name));
+  if (!keys.has_value()) {
+    return {};
   }
   return Partitioning{
       .kind = PartitionKind::kPartitioned,
       .partitionType = partitionType,
-      .keys = std::move(keys),
+      .keys = ExprVector{keys->begin(), keys->end()},
       .scope = PropertyScope::kGlobal};
 }
 
@@ -737,6 +753,22 @@ Partitioning scanGlobalPartition(
     const connector::PartitionType* groupedPartitionType) {
   return bucketPartition(
       baseTable->layout(), outputColumns, groupedPartitionType);
+}
+
+// Unique keys of a scan: the table's primary key when the scan outputs every
+// key column whole.
+QGVector<PlanObjectSet> scanUnique(
+    BaseTableCP baseTable,
+    const ColumnVector& outputColumns) {
+  const auto& primaryKey = baseTable->schemaTable->connectorTable->primaryKey();
+  if (primaryKey.empty()) {
+    return {};
+  }
+  auto key = findScanColumns(outputColumns, primaryKey);
+  if (!key.has_value()) {
+    return {};
+  }
+  return {PlanObjectSet::fromObjects(*key)};
 }
 
 } // namespace
@@ -759,7 +791,8 @@ Scan::Scan(Key key)
                         key.baseTable,
                         key.outputColumns,
                         key.groupedPartitionType)};
-              })),
+              },
+              scanUnique(key.baseTable, key.outputColumns))),
       baseTable_(key.baseTable),
       scanHandle_(key.scanHandle),
       groupedPartitionType_(key.groupedPartitionType),
@@ -1603,7 +1636,10 @@ Values::Values(Key key)
     : Node(
           NodeType::kValues,
           ColumnVector{key.outputColumns},
-          leafProperties(key.placement, [] { return PhysicalProperties{}; })),
+          leafProperties(
+              key.placement,
+              [] { return PhysicalProperties{}; },
+              {})),
       source_(key.source),
       rows_(key.rows),
       channels_(std::move(key.channels)),
@@ -4358,7 +4394,8 @@ WorkingTable::WorkingTable(const Key& key)
               [&] {
                 return PhysicalProperties{
                     .globalPartition = readPartitioning(key)};
-              })),
+              },
+              {})),
       name_(key.name),
       stateColumns_(key.stateColumns),
       readMode_(key.readMode),

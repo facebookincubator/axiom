@@ -1742,11 +1742,17 @@ std::shared_ptr<TestTable> TestConnector::addTable(
     const std::string& name,
     const velox::RowTypePtr& schema,
     const folly::F14FastMap<std::string, velox::Variant>& options) {
+  return addTable(name, TableDefinition::create(schema, options));
+}
+
+std::shared_ptr<TestTable> TestConnector::addTable(
+    const std::string& name,
+    TableDefinition definition) {
   const SchemaTableName tableName{std::string(kDefaultSchema), name};
   folly::coro::blockingWait(metadata_->co_createTable(
       nullptr,
       tableName,
-      TableDefinition::create(schema, options),
+      std::move(definition),
       /*ifNotExists=*/false,
       /*explain=*/false));
   return std::static_pointer_cast<TestTable>(

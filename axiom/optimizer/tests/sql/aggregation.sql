@@ -1,4 +1,10 @@
 -- setup_file: common_setup.sql
+-- setup
+-- 'v' has the primary key (k1, k2).
+CREATE TABLE v (k1 BIGINT, k2 BIGINT, g BIGINT, PRIMARY KEY (k1, k2))
+----
+INSERT INTO v SELECT a, b, a + b FROM t
+-- end_setup
 
 -- Table t(a BIGINT, b BIGINT, c DOUBLE) with 15 rows across 3 splits:
 --   a |   b |    c
@@ -37,6 +43,9 @@ SELECT 'foo', 'bar', count(*) FROM t GROUP BY 'foo', 'bar'
 -- Multiple constant grouping keys over empty input produce no groups.
 -- count 0
 SELECT 'foo', 'bar', count(*) FROM t WHERE false GROUP BY 'foo', 'bar'
+----
+-- Grouping keys that include a primary key make each row its own group.
+SELECT k1, k2, g, count(*) AS n FROM v GROUP BY k1, k2, g
 ----
 -- Dedup: column used in both GROUP BY and aggregate.
 SELECT a + b AS x, a + b AS y, count(a + b) AS z FROM t GROUP BY 1, 2

@@ -618,7 +618,7 @@ NodeCP EstimateLeafStatsPass::run(
     std::vector<ColumnCP> statColumns;
     std::vector<std::string> columnNames;
     for (ColumnCP column : scan->outputColumns()) {
-      if (column->topColumn() == nullptr) {
+      if (!column->isSubfield()) {
         statColumns.push_back(column);
         columnNames.emplace_back(column->schemaName());
       }
