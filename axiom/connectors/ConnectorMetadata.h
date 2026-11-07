@@ -1026,7 +1026,9 @@ class Table : public std::enable_shared_from_this<Table> {
     return comment_;
   }
 
-  /// The primary key's columns. Empty when the table has no primary key.
+  /// The primary key's columns. No two rows of the table agree on them, with
+  /// NULL equal to NULL, which the optimizer relies on. Empty when the table
+  /// has no primary key.
   const std::vector<std::string>& primaryKey() const {
     return primaryKey_;
   }

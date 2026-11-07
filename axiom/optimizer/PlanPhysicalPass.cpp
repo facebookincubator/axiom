@@ -2486,7 +2486,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return {gather(input), keys};
     }
 
-    if (input->physicalProperties().globalPartition.coLocates(keys)) {
+    if (input->physicalProperties().coLocates(PropertyScope::kGlobal, keys)) {
       return {input, keys};
     }
 
@@ -2726,7 +2726,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     if (keys.empty()) {
       return true;
     }
-    return !input->physicalProperties().globalPartition.coLocates(keys);
+    return !input->physicalProperties().coLocates(PropertyScope::kGlobal, keys);
   }
 
   // Lowers an aggregate to partial → exchange → final so the remote shuffle

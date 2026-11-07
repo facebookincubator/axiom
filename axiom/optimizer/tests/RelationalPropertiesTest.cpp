@@ -82,6 +82,42 @@ class RelationalPropertiesTest : public optimizer::test::QueryTestBase {
   }
 };
 
+TEST_F(RelationalPropertiesTest, scan) {
+  auto definition = connector::TableDefinition::create(
+      velox::ROW({"k1", "k2", "g"}, velox::BIGINT()), {});
+  definition.primaryKey = {"k1", "k2"};
+  testConnector_->addTable("v", std::move(definition));
+
+  verify({
+      // A scan is unique on the table's primary key when it outputs every key
+      // column.
+      {"SELECT k1, k2 FROM v", {{{"k1", "k2"}}}},
+      {"SELECT k1, g FROM v", {}},
+      {"SELECT a, b FROM t", {}},
+      // A join keeps the key of a scan when the other side has at most one row
+      // per join key: another scan's primary key or an aggregation's grouping
+      // keys, not a table without a key.
+      {
+          "SELECT v1.* "
+          "FROM v AS v1, v AS v2 "
+          "WHERE v1.k1 = v2.k1 AND v1.k2 = v2.k2",
+          {{{"k1", "k2"}}},
+      },
+      {
+          "SELECT v.* "
+          "FROM v, (SELECT a, b, count(*) AS n FROM t GROUP BY a, b) t "
+          "WHERE v.k1 = t.a AND v.k2 = t.b",
+          {{{"k1", "k2"}}},
+      },
+      {
+          "SELECT v.* "
+          "FROM v, t "
+          "WHERE v.k1 = t.a AND v.k2 = t.b",
+          {},
+      },
+  });
+}
+
 TEST_F(RelationalPropertiesTest, aggregate) {
   verify({
       {"SELECT a, b, count(*) AS n FROM t GROUP BY a, b", {{{"a", "b"}}}},
