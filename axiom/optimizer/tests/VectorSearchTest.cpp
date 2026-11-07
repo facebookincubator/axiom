@@ -31,12 +31,11 @@ namespace lp = facebook::axiom::logical_plan;
 // - 'queries' holds what to search for: a 'name', an 'embedding' and the day
 //   'ds' to search.
 // - 'products' holds products, of ids 'id', embeddings 'embedding' and titles
-//   'title', with a partition per day 'ds'. Its vector index 'product_index'
-//   indexes the embeddings, keyed by the id.
+//   'title', with a partition per day 'ds'. Its vector index 'pi' indexes the
+//   embeddings, keyed by the id.
 //
-// A search of 'products' reads the index's codec table,
-// 'products__product_index__codecs', and its index table,
-// 'products__product_index__index'.
+// A search of 'products' reads the index's codec table, 'products__pi__codecs',
+// and its index table, 'products__pi__index'.
 class VectorSearchTest : public test::QueryTestBase {
  protected:
   // The partitions of a partitioned table.
@@ -73,7 +72,7 @@ class VectorSearchTest : public test::QueryTestBase {
             }),
             {"ds"})
         ->setDiscreteValues({"ds"}, kPartitions);
-    addVectorIndex("products", "product_index", "id");
+    addVectorIndex("products", "pi", "id");
   }
 
   // Adds the vector index 'name' of 'table' over its 'embedding', keyed by
@@ -140,7 +139,7 @@ class VectorSearchTest : public test::QueryTestBase {
       const std::optional<std::string>& queryFilter,
       const std::optional<std::string>& ds,
       int64_t numProbes,
-      std::string_view index = "product_index",
+      std::string_view index = "pi",
       bool distributed = false) {
     auto matcher = matchScan("queries");
     matcher.aliases({"name", "embedding"})
@@ -249,18 +248,17 @@ TEST_F(VectorSearchTest, placement) {
           /*queryFilter=*/std::nullopt,
           "2026-01-01",
           3,
-          "product_index",
+          "pi",
           /*distributed=*/true)
           .project({"name", "id"})
           .gather()
           .build());
 }
 
-// A search of an index's centroids is one search of the codecs, each query
-// keyed to the codec of its day, then keeps the nearest clusters of each query.
-// A left search keeps a query whose day has no codec. Conditions on the day of
-// the clusters, and on the queries' columns of an inner search, filter the
-// inputs.
+// A search of an index's centroids is one search of the codecs, whose primary
+// key is the day and the codec id. A query that matches at most one codec gets
+// that codec's nearest clusters. Otherwise the search keeps its nearest
+// clusters across the codecs it matches.
 TEST_F(VectorSearchTest, centroids) {
   const auto searchCentroids = [&](lp::JoinType joinType,
                                    const std::string& condition) {
@@ -268,10 +266,7 @@ TEST_F(VectorSearchTest, centroids) {
     return plan.tableScan("queries")
         .as("q")
         .vectorSearch(
-            plan.newPlan()
-                .tableScan("products$product_index$centroids")
-                .as("p")
-                .filter("codec_id = 7"),
+            plan.newPlan().tableScan("products$pi$centroids").as("p"),
             condition,
             joinType,
             {
@@ -283,24 +278,77 @@ TEST_F(VectorSearchTest, centroids) {
         .project({"name", "cluster_id", "p.ds"})
         .build();
   };
-  const auto matchCentroidsSearch =
-      [&](const std::optional<std::string>& queryFilter,
-          const std::optional<std::string>& ds,
-          core::JoinType joinType) {
+
+  // The codecs, filtered by 'filter' if set.
+  const auto matchCodecs = [](const std::optional<std::string>& filter) {
+    auto codecs = matchScan("products__pi__codecs");
+    if (filter.has_value()) {
+      codecs.aliases({"codec", "products_ds", "codec_id"}).filter(*filter);
+    } else {
+      codecs.aliases({"codec", "products_ds"});
+    }
+    return codecs.project({"codec", "products_ds"});
+  };
+
+  // A search that matches each query with at most one codec: that codec's
+  // nearest clusters are the result.
+  const auto matchOneCodec = [&](core::PlanMatcherBuilder queries,
+                                 const std::optional<std::string>& codecFilter,
+                                 core::JoinType joinType,
+                                 const std::vector<std::string>& keys) {
+    return queries
+        .vectorSearchJoin(
+            matchCodecs(codecFilter), joinType, keys, "embedding", "codec", 1)
+        .aliases({"name", "products_ds", "cluster_id"})
+        .project({"name", "cluster_id", "products_ds"})
+        .build();
+  };
+
+  // Keyed by day, on one codec id: one codec. REFRESH runs this left search.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(
+          lp::JoinType::kLeft, "q.ds = p.ds AND p.codec_id = 7")),
+      matchOneCodec(
+          matchScan("queries"),
+          "codec_id = 7",
+          core::JoinType::kLeft,
+          {"ds = products_ds"}));
+
+  // Conditions on the queries' columns and on the codecs' day filter the
+  // inputs.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(
+          lp::JoinType::kInner,
+          "q.ds = p.ds AND q.name LIKE 'red%' AND p.ds > '2026-01-01' AND "
+          "p.codec_id = 7")),
+      matchOneCodec(
+          matchScan("queries").filter("name LIKE 'red%'"),
+          "codec_id = 7 AND products_ds > '2026-01-01'",
+          core::JoinType::kInner,
+          {"ds = products_ds"}));
+
+  // One day and one codec id: one codec.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(
+          lp::JoinType::kInner, "p.ds = '2026-01-01' AND p.codec_id = 7")),
+      matchOneCodec(
+          matchScan("queries"),
+          "codec_id = 7 AND products_ds = '2026-01-01'",
+          core::JoinType::kInner,
+          {}));
+
+  // A search that may match a query with several codecs: each query gets an
+  // id, and the search keeps its nearest cluster across the codecs.
+  const auto matchNearestAcrossCodecs =
+      [&](const std::optional<std::string>& codecFilter,
+          core::JoinType joinType,
+          const std::vector<std::string>& keys) {
         return matchScan("queries")
-            .filterIf(queryFilter.has_value(), queryFilter.value_or(""))
             .assignUniqueId("query_id")
             .vectorSearchJoin(
-                matchScan("products__product_index__codecs")
-                    .aliases({"codec", "products_ds", "codec_id"})
-                    .filter(
-                        ds.has_value()
-                            ? fmt::format(
-                                  "codec_id = 7 AND products_ds {}", *ds)
-                            : std::string("codec_id = 7"))
-                    .project({"codec", "products_ds"}),
+                matchCodecs(codecFilter),
                 joinType,
-                {"ds = products_ds"},
+                keys,
                 "embedding",
                 "codec",
                 1)
@@ -311,28 +359,23 @@ TEST_F(VectorSearchTest, centroids) {
             .build();
       };
 
+  // One codec id and any day: a codec per day.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(searchCentroids(lp::JoinType::kInner, "p.codec_id = 7")),
+      matchNearestAcrossCodecs("codec_id = 7", core::JoinType::kInner, {}));
+
+  // Keyed by day, any codec id: a day may have several codecs.
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan(searchCentroids(lp::JoinType::kInner, "q.ds = p.ds")),
-      matchCentroidsSearch(
-          /*queryFilter=*/std::nullopt,
-          /*ds=*/std::nullopt,
-          core::JoinType::kInner));
+      matchNearestAcrossCodecs(/*codecFilter=*/std::nullopt,
+                               core::JoinType::kInner,
+                               {"ds = products_ds"}));
 
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan(searchCentroids(lp::JoinType::kLeft, "q.ds = p.ds")),
-      matchCentroidsSearch(
-          /*queryFilter=*/std::nullopt,
-          /*ds=*/std::nullopt,
-          core::JoinType::kLeft));
-
-  AXIOM_ASSERT_PLAN(
-      toSingleNodePlan(searchCentroids(
-          lp::JoinType::kInner,
-          "q.ds = p.ds AND q.name LIKE 'red%' AND p.ds > '2026-01-01'")),
-      matchCentroidsSearch(
-          /*queryFilter=*/"name LIKE 'red%'",
-          /*ds=*/"> '2026-01-01'",
-          core::JoinType::kInner));
+      matchNearestAcrossCodecs(/*codecFilter=*/std::nullopt,
+                               core::JoinType::kLeft,
+                               {"ds = products_ds"}));
 }
 
 // A deterministic filter on the queries' columns applies to the queries before
@@ -564,7 +607,7 @@ TEST_F(VectorSearchTest, errors) {
       .k = 1,
       .scoreName = "score"};
   const auto centroidsTable =
-      plans.newPlan().tableScan("products$product_index$centroids").as("p");
+      plans.newPlan().tableScan("products$pi$centroids").as("p");
   VELOX_ASSERT_THROW(
       search(
           centroidsTable,
@@ -579,7 +622,7 @@ TEST_F(VectorSearchTest, errors) {
 // is more than one.
 TEST_F(VectorSearchTest, indexHint) {
   addVectorIndex("products", "another_index", "id");
-  for (const auto* index : {"product_index", "another_index"}) {
+  for (const auto* index : {"pi", "another_index"}) {
     SCOPED_TRACE(index);
     AXIOM_ASSERT_PLAN(
         toSingleNodePlan(parseSelect(
@@ -594,7 +637,7 @@ TEST_F(VectorSearchTest, indexHint) {
   }
   VELOX_ASSERT_THROW(
       toSingleNodePlan(parseSelect(searchQuery("name, id", "products", {}))),
-      "Found multiple matching vector indexes. Use the index hint to specify which one to use: \"default\".\"products\".embedding using cosine, indexes: product_index, another_index");
+      "Found multiple matching vector indexes. Use the index hint to specify which one to use: \"default\".\"products\".embedding using cosine, indexes: pi, another_index");
 }
 
 } // namespace

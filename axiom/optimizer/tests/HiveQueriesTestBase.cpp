@@ -185,6 +185,13 @@ void HiveQueriesTestBase::createEmptyTable(
     const std::string& name,
     const RowTypePtr& tableType,
     const folly::F14FastMap<std::string, velox::Variant>& options) {
+  createEmptyTable(
+      name, connector::TableDefinition::create(tableType, options));
+}
+
+void HiveQueriesTestBase::createEmptyTable(
+    const std::string& name,
+    connector::TableDefinition definition) {
   hiveMetadata().dropTableIfExists({kDefaultSchema, name});
 
   auto session = makeSession();
@@ -192,7 +199,7 @@ void HiveQueriesTestBase::createEmptyTable(
       hiveMetadata().co_createTable(
           session,
           {kDefaultSchema, name},
-          connector::TableDefinition::create(tableType, options),
+          std::move(definition),
           /*ifNotExists=*/false,
           /*explain=*/false));
   VELOX_CHECK_NOT_NULL(table);

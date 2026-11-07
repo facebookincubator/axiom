@@ -78,7 +78,7 @@ class ExprFactory {
 
   /// Returns the non-literal and literal sides of a canonical equality, or
   /// nullopt for any other expression.
-  std::optional<std::pair<ExprCP, ExprCP>> literalEquality(ExprCP expr) const;
+  static std::optional<std::pair<ExprCP, ExprCP>> literalEquality(ExprCP expr);
 
   /// Builds `lhs < rhs`.
   ExprCP makeLessThan(ExprCP lhs, ExprCP rhs);

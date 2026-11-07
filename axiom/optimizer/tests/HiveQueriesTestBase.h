@@ -104,6 +104,12 @@ class HiveQueriesTestBase : public QueryTestBase {
       const velox::RowTypePtr& tableType,
       const folly::F14FastMap<std::string, velox::Variant>& options = {});
 
+  /// Creates an empty table as CREATE TABLE 'definition' does. If a table with
+  /// the same name already exists, it is dropped first.
+  void createEmptyTable(
+      const std::string& name,
+      connector::TableDefinition definition);
+
   /// Checks that the data in the specified table matches the expected data.
   void checkTableData(
       const std::string& tableName,

@@ -1133,10 +1133,19 @@ void TestConnectorMetadata::createVectorIndex(
   const auto& tableName = table.name();
   const auto& partitionColumns = table.partitionColumns();
   auto [codecTable, indexTable] = storageTableNames(tableName, index.name);
-  addTable(
-      codecTable,
-      VectorIndex::codecTableType(partitionColumns),
-      velox::ROW({}));
+  auto codecDefinition =
+      VectorIndex::codecTableDefinition(partitionColumns, /*properties=*/{});
+  registerTable(
+      std::make_shared<TestTable>(
+          codecTable,
+          codecDefinition.rowType(),
+          velox::ROW({}),
+          connector_,
+          codecDefinition.properties,
+          /*bucketSpec=*/std::nullopt,
+          /*columnComments=*/folly::F14FastMap<std::string, std::string>{},
+          /*comment=*/std::nullopt,
+          std::move(codecDefinition.primaryKey)));
   addTable(
       indexTable,
       VectorIndex::indexTableType(partitionColumns),
@@ -1159,16 +1168,22 @@ std::shared_ptr<TestTable> TestConnectorMetadata::addTable(
     const velox::RowTypePtr& hiddenColumns,
     std::optional<TestBucketSpec> bucketSpec,
     folly::F14FastMap<std::string, std::string> columnComments) {
-  schemas_.insert(tableName.schema);
-  auto table = std::make_shared<TestTable>(
-      tableName,
-      schema,
-      hiddenColumns,
-      connector_,
-      folly::F14FastMap<std::string, velox::Variant>{},
-      std::move(bucketSpec),
-      std::move(columnComments));
-  auto [it, ok] = tables_.emplace(std::move(tableName), std::move(table));
+  return registerTable(
+      std::make_shared<TestTable>(
+          std::move(tableName),
+          schema,
+          hiddenColumns,
+          connector_,
+          folly::F14FastMap<std::string, velox::Variant>{},
+          std::move(bucketSpec),
+          std::move(columnComments)));
+}
+
+std::shared_ptr<TestTable> TestConnectorMetadata::registerTable(
+    std::shared_ptr<TestTable> table) {
+  auto name = table->name();
+  schemas_.insert(name.schema);
+  auto [it, ok] = tables_.emplace(std::move(name), std::move(table));
   VELOX_CHECK(ok, "Table already exists: {}", it->first.toString());
   return it->second;
 }

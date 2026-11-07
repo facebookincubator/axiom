@@ -21,11 +21,13 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <folly/container/F14Map.h>
 
 #include "axiom/common/Enums.h"
 #include "axiom/common/SchemaTableName.h"
+#include "axiom/connectors/TableDefinition.h"
 #include "velox/common/Casts.h"
 #include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
@@ -168,8 +170,12 @@ struct ResolvedVectorIndex {
 /// Two tables of the index's connector store the levels:
 /// - The codec table holds the clusters: (codec, partition columns, codec_id).
 ///   Each row is one codec, a single value with the centroids of all its
-///   clusters, identified by the partition columns and 'codec_id'. Each
-///   partition has one codec; 'codec_id' identifies the write that trained it.
+///   clusters, identified by the partition columns and 'codec_id', the write
+///   that trained it. These columns are the table's primary key (see
+///   codecTableDefinition()). The index rows of a partition all name one codec,
+///   the partition's codec. A write that never ended can leave other codecs in
+///   the partition, which no index row names, until the next write of the
+///   partition drops them (see ConnectorMetadata::co_beginVectorIndexWrite).
 /// - The index table holds the local indexes: (codec_id, cluster_id, group_id,
 ///   local_index, partition columns). Each row is one local index of the
 ///   cluster 'cluster_id' of the codec its partition columns and 'codec_id'
@@ -183,7 +189,8 @@ struct ResolvedVectorIndex {
 /// per cluster: (partition columns, codec_id, cluster_id, centroid). It is
 /// named after the table and the index, e.g.
 /// "products$product_index$centroids". It is not stored: a search of it reads
-/// the codec table (see centroidsTableName()).
+/// the codec table (see centroidsTableName()). It has the clusters of every
+/// codec in the codec table.
 struct VectorIndex {
   // The columns of the codec and index tables, which store the index.
 
@@ -217,6 +224,13 @@ struct VectorIndex {
   /// adds.
   static velox::RowTypePtr codecTableType(
       const velox::RowTypePtr& partitionColumns);
+
+  /// Returns the definition of the stored codec table: the columns of
+  /// codecTableType(), the primary key 'partitionColumns' then 'kCodecId', and
+  /// the table properties 'properties'.
+  static TableDefinition codecTableDefinition(
+      const velox::RowTypePtr& partitionColumns,
+      folly::F14FastMap<std::string, velox::Variant> properties);
 
   /// Returns the type of the stored index table, a row per local index:
   /// 'kCodecId', 'kClusterId', 'kGroupId', 'kLocalIndex', then the columns of

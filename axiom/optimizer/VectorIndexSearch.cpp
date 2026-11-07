@@ -562,14 +562,8 @@ class Planner {
         PlanObjectSet::fromObjects(node->probe()->outputColumns());
     ExprVector buildExprs{codec};
     ColumnVector buildColumns{codec};
-    // A probe row matches the codec of each partition its keys select, and
-    // each gives its 'k' nearest clusters, so the search keeps the 'k' nearest
-    // of each query.
-    ColumnCP queryId =
-        Column::create("__query_id", Value(toType(velox::BIGINT())));
-    NodeCP queries = builder_.make<AssignUniqueId>({probe, queryId});
-    ColumnVector outputColumns = queries->outputColumns();
-    ColumnVector sourceColumns = queries->outputColumns();
+    ColumnVector buildOutputColumns;
+    ColumnVector buildSourceColumns;
     folly::F14FastMap<ColumnCP, ExprCP> outputs;
     for (size_t i = 0; i < node->sourceColumns().size(); ++i) {
       ColumnCP source = node->sourceColumns()[i];
@@ -583,8 +577,8 @@ class Planner {
       // The search outputs the column as 'node' does: under a fresh identity
       // in a left search.
       ColumnCP output = node->outputColumns()[i];
-      outputColumns.push_back(output);
-      sourceColumns.push_back(source);
+      buildOutputColumns.push_back(output);
+      buildSourceColumns.push_back(source);
       outputs.emplace(source, output);
     }
     ExprVector buildKeys;
@@ -612,6 +606,24 @@ class Planner {
     NodeCP build = builder_.make<Project>(
         {codecs.node, std::move(buildExprs), std::move(buildColumns)});
 
+    // A query matches each codec its keys select, and each gives its 'k'
+    // nearest clusters, so the 'k' nearest of each query are kept, unless the
+    // build side has at most one codec per key.
+    const bool oneCodec =
+        Join::emittedOnceSides(
+            node->joinType(), probe, build, node->probeKeys(), buildKeys)
+            .left;
+    ColumnCP queryId = nullptr;
+    NodeCP queries = probe;
+    if (!oneCodec) {
+      queryId = Column::create("__query_id", Value(toType(velox::BIGINT())));
+      queries = builder_.make<AssignUniqueId>({probe, queryId});
+    }
+    ColumnVector outputColumns = queries->outputColumns();
+    ColumnVector sourceColumns = queries->outputColumns();
+    appendAll(outputColumns, buildOutputColumns);
+    appendAll(sourceColumns, buildSourceColumns);
+
     ColumnCP clusterId =
         Column::create("__cluster_id", Value(toType(velox::BIGINT())));
     ColumnCP score = Column::create("__score", Value(toType(velox::REAL())));
@@ -635,7 +647,10 @@ class Planner {
         .sourceColumns = std::move(sourceColumns),
     });
 
-    NodeCP nearest = keepNearest(searched, queryId, score, node->k());
+    NodeCP nearest = searched;
+    if (queryId != nullptr) {
+      nearest = keepNearest(searched, queryId, score, node->k());
+    }
     return projectSearchOutputs(
         node, nearest, score, [&](ColumnCP column) -> ExprCP {
           if (resolve(column) == indexClusterId) {

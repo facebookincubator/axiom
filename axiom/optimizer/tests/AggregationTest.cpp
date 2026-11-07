@@ -446,7 +446,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                        .localPartition({"a", "b"})
                        .finalAggregation({"a", "b"}, {})
                        .project({"a", "b", "a + b as d"})
-                       .singleAggregation({"a", "b", "d"}, {})
+                       .streamingAggregation({"a", "b", "d"}, {})
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
@@ -793,30 +793,60 @@ TEST_P(AggregationTest, uniqueInput) {
     return;
   }
 
-  // Grouping by a superset of the primary key puts each group in one row, so
-  // the aggregation runs where the rows are read, without an exchange.
+  // Grouping by a superset of a unique key puts each group in one row, so the
+  // aggregation runs where the rows are read, without an exchange. A filter
+  // that makes a key column constant leaves the rest of the key unique.
   auto definition =
       connector::TableDefinition::create(ROW({"k1", "k2", "g"}, BIGINT()), {});
   definition.primaryKey = {"k1", "k2"};
   testConnector_->addTable("v", std::move(definition));
 
-  const auto logicalPlan = parseSelect(
-      "SELECT k1, k2, g, count(*) AS n "
-      "FROM v "
-      "GROUP BY k1, k2, g");
+  {
+    SCOPED_TRACE("primary key");
+    const auto logicalPlan = parseSelect(
+        "SELECT k1, k2, g, count(*) AS n "
+        "FROM v "
+        "GROUP BY k1, k2, g");
 
-  AXIOM_ASSERT_PLAN_V2(
-      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
-      matchScan("v")
-          .singleAggregation({"k1", "k2", "g"}, {"count(*)"})
-          .build());
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+        matchScan("v")
+            .streamingAggregation({"k1", "k2", "g"}, {"count(*)"})
+            .build());
 
-  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
-      planVelox(logicalPlan).plan,
-      matchScan("v")
-          .singleAggregation({"k1", "k2", "g"}, {"count(*)"})
-          .gather()
-          .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("v")
+            .streamingAggregation({"k1", "k2", "g"}, {"count(*)"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("primary key with a constant column");
+    const auto logicalPlan = parseSelect(
+        "SELECT k1, g, count(*) AS n "
+        "FROM v "
+        "WHERE k2 = 1 "
+        "GROUP BY k1, g");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+        matchScan("v")
+            .filter("k2 = 1")
+            .project({"k1", "g"})
+            .streamingAggregation({"k1", "g"}, {"count(*)"})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("v")
+            .filter("k2 = 1")
+            .project({"k1", "g"})
+            .streamingAggregation({"k1", "g"}, {"count(*)"})
+            .gather()
+            .build());
+  }
 }
 
 // TODO: Add tests for maybeProject() cost tracking once Project::unitCost is

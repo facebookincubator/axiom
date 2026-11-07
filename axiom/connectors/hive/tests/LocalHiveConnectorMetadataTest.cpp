@@ -1282,6 +1282,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addVectorIndex) {
            {"codec_id", BIGINT()}}));
   EXPECT_THAT(
       partitionColumnNames(codecTable), testing::ElementsAre("ds", "codec_id"));
+  EXPECT_THAT(codecTable->primaryKey(), testing::ElementsAre("ds", "codec_id"));
 
   auto indexTable = metadata_->findTable(qualifiedName("products__i__index"));
   ASSERT_NE(indexTable, nullptr);

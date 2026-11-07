@@ -47,6 +47,10 @@ SELECT 'foo', 'bar', count(*) FROM t WHERE false GROUP BY 'foo', 'bar'
 -- Grouping keys that include a primary key make each row its own group.
 SELECT k1, k2, g, count(*) AS n FROM v GROUP BY k1, k2, g
 ----
+-- A filter that makes a primary key column constant leaves the rest of the key
+-- unique, so grouping by it and another column makes each row its own group.
+SELECT k2, g, count(*) AS n FROM v WHERE k1 = 1 GROUP BY k2, g
+----
 -- Dedup: column used in both GROUP BY and aggregate.
 SELECT a + b AS x, a + b AS y, count(a + b) AS z FROM t GROUP BY 1, 2
 ----
