@@ -137,14 +137,13 @@ lp::ExprApi makeMetadataAggregate(
 
   const size_t numExpectedArgs =
       kind == lp::SpecialAggregateKind::kMetadataRowCount ? 0 : 1;
-  AXIOM_PRESTO_SEMANTIC_CHECK(
-      args.size() == numExpectedArgs,
+  AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+      args.size(),
+      numExpectedArgs,
       call->location(),
       funcName,
-      "Metadata aggregate has wrong number of arguments: {} expects {}, got {}",
-      funcName,
-      numExpectedArgs,
-      args.size());
+      "Wrong number of arguments for {}",
+      funcName);
 
   std::vector<core::ExprPtr> inputs;
   inputs.reserve(args.size());
@@ -169,7 +168,7 @@ lp::ExprApi makeMetadataAggregate(
     case lp::SpecialAggregateKind::kMetadataNonNullCount:
       return make(lp::Call("count", args));
     case lp::SpecialAggregateKind::kMetadataNullCount:
-      return make(lp::Call("count_if", lp::Call("is_null", args)));
+      return make(lp::Call("count_if", args[0].isNull()));
   }
 }
 
@@ -1383,12 +1382,12 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto args = translateArgs(call->arguments(), argOptions);
 
       if (lowerFuncName == "nullif") {
-        AXIOM_PRESTO_SEMANTIC_CHECK(
-            args.size() == 2,
+        AXIOM_PRESTO_SEMANTIC_CHECK_EQ(
+            args.size(),
+            2,
             node->location(),
             lowerFuncName,
-            "NULLIF requires exactly 2 arguments, got {}",
-            args.size());
+            "NULLIF requires exactly 2 arguments");
         return lp::Call("nullif", args[0], args[1]);
       }
 
@@ -1464,16 +1463,12 @@ lp::ExprApi ExpressionPlanner::toExpr(
           toExpr(subscript->index(), options));
     }
 
-    case NodeType::kIsNullPredicate: {
-      auto* isNull = node->as<IsNullPredicate>();
-      return lp::Call("is_null", toExpr(isNull->value(), options));
-    }
+    case NodeType::kIsNullPredicate:
+      return toExpr(node->as<IsNullPredicate>()->value(), options).isNull();
 
-    case NodeType::kIsNotNullPredicate: {
-      auto* isNull = node->as<IsNotNullPredicate>();
-      return lp::Call(
-          "not", lp::Call("is_null", toExpr(isNull->value(), options)));
-    }
+    case NodeType::kIsNotNullPredicate:
+      return toExpr(node->as<IsNotNullPredicate>()->value(), options)
+          .isNotNull();
 
     case NodeType::kCurrentTime: {
       auto* currentTime = node->as<CurrentTime>();
@@ -1988,7 +1983,7 @@ lp::ExprApi checkFrameOffset(const lp::ExprApi& offset) {
       "if",
       lp::Call(
           "or",
-          lp::Call("is_null", offset),
+          offset.isNull(),
           lp::Call("lt", offset, lp::Call("minus", offset, offset))),
       lp::Call(
           "fail",

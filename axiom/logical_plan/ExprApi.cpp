@@ -92,6 +92,14 @@ ExprApi ExprApi::operator!=(const velox::Variant& value) const {
   return NEq(expr_, Lit(value).expr());
 }
 
+ExprApi ExprApi::isNull() const {
+  return Call("is_null", *this);
+}
+
+ExprApi ExprApi::isNotNull() const {
+  return Call("not", isNull());
+}
+
 ExprApi Col(std::string_view name) {
   return ExprApi{
       std::make_shared<const velox::core::FieldAccessExpr>(
@@ -137,6 +145,11 @@ ExprApi Lit(const velox::Variant& val) {
 ExprApi Lit(const velox::Variant& val, velox::TypePtr type) {
   return ExprApi{std::make_shared<const velox::core::ConstantExpr>(
       std::move(type), val, kNoAlias)};
+}
+
+ExprApi NullLit(velox::TypePtr type) {
+  auto value = velox::Variant::null(type->kind());
+  return Lit(std::move(value), std::move(type));
 }
 
 ExprApi Call(std::string name, const std::vector<ExprApi>& args) {

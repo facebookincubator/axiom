@@ -89,8 +89,8 @@ lp::PlanBuilder namedRows(
     const lp::PlanBuilder& query) {
   const auto columns = query.findOrAssignOutputNames();
   std::vector<lp::ExprApi> projections{
-      columns[0].toCol().as(std::string(kKey)),
-      columns[1].toCol().as(std::string(kEmbedding)),
+      columns[0].toCol().as(kKey),
+      columns[1].toCol().as(kEmbedding),
   };
   for (size_t i = 0; i < partitions.size(); ++i) {
     projections.push_back(columns[i + 2].toCol().as(partitions[i]));
@@ -106,7 +106,7 @@ lp::PlanBuilder namedRows(
 lp::ExprApi isValid(const VectorIndex& index) {
   const auto embedding = lp::Col(kEmbedding);
   const auto element = lp::Col("x");
-  return lp::Call("not", lp::Call("is_null", lp::Col(kKey))) &&
+  return lp::Col(kKey).isNotNull() &&
       lp::Call("cardinality", embedding) ==
       lp::Lit(index.properties.dimension) &&
       lp::Call(
@@ -114,7 +114,7 @@ lp::ExprApi isValid(const VectorIndex& index) {
              embedding,
              lp::Lambda(
                  {"x"},
-                 lp::Call("is_null", element) ||
+                 element.isNull() ||
                      lp::Call("not", lp::Call("is_finite", element)))) &&
       lp::Call("l2_norm", embedding) > lp::Lit(0.0);
 }
@@ -143,7 +143,7 @@ lp::PlanBuilder selectedPartitions(
   std::optional<lp::ExprApi> notNull;
   for (size_t i = 0; i < partitions.size(); ++i) {
     const auto value = lp::Col(partitions[i]);
-    const auto isNull = lp::Call("is_null", value);
+    const auto isNull = value.isNull();
     checked.push_back(
         failIf(
             isNull && valid,
@@ -155,7 +155,7 @@ lp::PlanBuilder selectedPartitions(
             types[i + 2],
             value)
             .as(partitions[i]));
-    const auto condition = lp::Call("not", isNull);
+    const auto condition = value.isNotNull();
     notNull = notNull.has_value() ? *notNull && condition : condition;
   }
   return namedRows(partitions, query)
@@ -211,7 +211,7 @@ lp::LogicalPlanNodePtr planTrain(
                    .as("codec")})
           .project(
               ColumnExprs::concat(
-                  ColumnExprs::renamed(partitions, "t_"), {lp::Col("codec")}));
+                  ColumnExprs::renamed(partitions, "t_"), lp::Col("codec")));
 
   return lp::PlanBuilder(selected)
       .join(codecs, *ColumnExprs::equal(partitions, "t_"), lp::JoinType::kLeft)
@@ -224,7 +224,7 @@ lp::LogicalPlanNodePtr planTrain(
           ColumnExprs::concat(
               ColumnExprs::concat(
                   {lp::Col("codec")}, ColumnExprs::of(partitions)),
-              {codecId}))
+              codecId))
       .build();
 }
 
@@ -267,7 +267,7 @@ lp::LogicalPlanNodePtr planBuild(
   // not, e.g. one a concurrent write added to the query's input. Such a row
   // has no codec and fails the refresh.
   const auto clusterId = failIf(
-      lp::Call("is_null", lp::Col("cluster_id")),
+      lp::Col("cluster_id").isNull(),
       partitionMessage("No codec for partition: ", partitions),
       BIGINT(),
       lp::Col("cluster_id"));
@@ -308,7 +308,7 @@ lp::LogicalPlanNodePtr planBuild(
                      .over(
                          lp::WindowSpec().partitionBy(
                              ColumnExprs::concat(
-                                 partitionKeys, {lp::Col("cluster_id")})))
+                                 partitionKeys, lp::Col("cluster_id"))))
                      .as("cluster_row")})
           .with({((lp::Col("cluster_row") - lp::Lit(int64_t{1})) /
                   lp::Lit(kRowsPerLocalIndex))

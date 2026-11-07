@@ -44,6 +44,11 @@ class ColumnExprs {
       std::vector<facebook::axiom::logical_plan::ExprApi> exprs,
       const std::vector<facebook::axiom::logical_plan::ExprApi>& more);
 
+  /// Returns 'exprs' followed by 'expr'.
+  static std::vector<facebook::axiom::logical_plan::ExprApi> concat(
+      std::vector<facebook::axiom::logical_plan::ExprApi> exprs,
+      const facebook::axiom::logical_plan::ExprApi& expr);
+
   /// Returns the conjunction of each column of 'names' = the column named
   /// 'prefix' + its name, or nullopt when 'names' is empty.
   static std::optional<facebook::axiom::logical_plan::ExprApi> equal(

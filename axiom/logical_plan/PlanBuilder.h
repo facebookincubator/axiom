@@ -755,7 +755,7 @@ class PlanBuilder {
 
   /// Assigns a relation alias, enabling qualified column references like
   /// "alias.column" in subsequent operations.
-  PlanBuilder& as(const std::string& alias);
+  PlanBuilder& as(std::string_view alias);
 
   /// Drops the relation aliases of this builder's own columns, so
   /// "alias.column" no longer resolves against them. An enclosing query's

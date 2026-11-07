@@ -1037,14 +1037,13 @@ TEST_F(PlanBuilderTest, fixedPoint) {
   EXPECT_NO_THROW(converging(
       PlanBuilder(context)
           .values(ROW({}), std::vector<Variant>{Variant::row({})})
-          .project({Call(
-              "is_null",
-              Subquery(PlanBuilder(context)
-                           .fixedPointState("t", anchor)
-                           .filter("n > 10")
-                           .limit(1)
-                           .project({"n"})
-                           .planNode()))}),
+          .project({Subquery(PlanBuilder(context)
+                                 .fixedPointState("t", anchor)
+                                 .filter("n > 10")
+                                 .limit(1)
+                                 .project({"n"})
+                                 .planNode())
+                        .isNull()}),
       10,
       {}));
 
