@@ -26,6 +26,16 @@ GRAPH g AS (
       LABEL WorksIn))
 -- end_define
 
+-- define managers
+GRAPH h AS (
+  VERTEX TABLES (employee KEY (id) LABEL Employee PROPERTIES (name))
+  EDGE TABLES (
+    employee AS reports_to KEY (id)
+      SOURCE KEY (id) REFERENCES employee (id)
+      DESTINATION KEY (manager) REFERENCES employee (id)
+      LABEL ReportsTo))
+-- end_define
+
 -- Who knows whom, and since when.
 -- duckdb:
 --   VALUES
@@ -460,3 +470,17 @@ SELECT * FROM GRAPH_TABLE (g
   MATCH ANY (a IS Person) -[IS LivesIn]-> (x IS City),
     ANY ACYCLIC (a) -[IS Knows]-> (b IS Person) -[IS Knows]-> (c IS Person)
   COLUMNS (a.name AS a, x.name AS x, b.name AS b, c.name AS c))
+----
+-- Who reports to whom through a manager in between. Each ReportsTo edge is
+-- its employee's row, and the manager between the hops is the second hop's.
+-- duckdb:
+--   VALUES
+--     ('Cid', 'Bob', 'Ann'),
+--     ('Dee', 'Bob', 'Ann'),
+--     ('Eve', 'Fay', 'Eve'),
+--     ('Fay', 'Eve', 'Fay')
+WITH ${managers}
+SELECT * FROM GRAPH_TABLE (h
+  MATCH (a IS Employee) -[IS ReportsTo]-> (m IS Employee)
+    -[IS ReportsTo]-> (b IS Employee)
+  COLUMNS (a.name AS a, m.name AS m, b.name AS b))
