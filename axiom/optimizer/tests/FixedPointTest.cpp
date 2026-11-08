@@ -1527,7 +1527,8 @@ TEST_F(FixedPointTest, kMeans) {
   // the points it scanned and sums them per cluster; the sums are shuffled on
   // the cluster, and the new means are broadcast to every worker. Worker 0
   // decides when to stop and emits the result. Each step runs with all of a
-  // worker's drivers, so its aggregations split around local exchanges.
+  // worker's drivers. The per-cluster sums split around local exchanges. The
+  // array_agg of the centroids runs in a single step after a local gather.
   AXIOM_ASSERT_DISTRIBUTED_PLAN(
       planVelox(logicalPlan).plan,
       matchFixedPoint(
@@ -1541,9 +1542,8 @@ TEST_F(FixedPointTest, kMeans) {
                       .nestedLoopJoin(
                           centroids()
                               .project()
-                              .partialAggregation()
                               .localGather()
-                              .finalAggregation())
+                              .singleAggregation())
                       .project()
                       .partialAggregation()
                       .shuffle()

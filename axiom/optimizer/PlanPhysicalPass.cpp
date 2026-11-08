@@ -2586,7 +2586,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Distributes 'node' over 'input', its physically planned input.
   NodeCP distributeAggregate(const Aggregation* node, NodeCP input) {
-    if (isSplittableAggregate(node)) {
+    if (isSplittableAggregate(node) && shouldSplitAggregate(node)) {
       // Remote two-stage: the input must shuffle across workers to co-locate
       // its groups, so the partial reduces rows before that remote exchange.
       bool needsRemoteExchange{false};
@@ -2697,6 +2697,25 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return true;
   }
 
+  // Returns whether to split 'node' into partial and final steps around the
+  // exchange. Without aggregates, the partial step deduplicates the grouping
+  // keys. When 'node' has aggregates and none of their partial aggregations
+  // reduces its input (see FunctionMetadata::partialAggregationReduces), the
+  // partial step adds CPU time and increases memory usage without shrinking the
+  // exchange.
+  bool shouldSplitAggregate(const Aggregation* node) const {
+    if (node->aggregates().empty()) {
+      return true;
+    }
+    for (const auto* aggregate : node->aggregates()) {
+      const auto* metadata = aggregate->metadata();
+      if (metadata == nullptr || metadata->partialAggregationReduces) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Returns 'input' with every scan under it read one bucket-group at a time,
   // when that makes the result meet 'alignment' on 'keys'; null otherwise. The
   // subtree is rebuilt only when the answer is yes.
@@ -2735,11 +2754,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // keys followed by one intermediate accumulator per aggregate; the exchange
   // partitions those partials on the grouping keys (gather when there are none
   // — the global case); the final combines them into the result.
-  //
-  // Every eligible aggregate two-stages, reducing or not. A non-reducing
-  // aggregate (e.g. array_agg) gains nothing and pays an extra hash pass; not
-  // splitting it needs a reducing/non-reducing classification that does not yet
-  // exist, so that pessimization is deferred.
   NodeCP rewriteAggregateSplit(
       const Aggregation* node,
       NodeCP input,

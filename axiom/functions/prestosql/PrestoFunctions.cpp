@@ -39,14 +39,17 @@ using DrawnFrom = FunctionMetadata::DrawnFrom;
 void registerDrawnFrom(
     optimizer::FunctionRegistry& registry,
     const auto& fullName) {
-  // Registers a function whose every overload draws the same way.
-  const auto add = [&](std::string_view name,
-                       std::same_as<DrawnFrom> auto... drawnFrom) {
+  // Returns metadata for a function whose every overload draws the same way.
+  const auto makeMetadata = [](std::same_as<DrawnFrom> auto... drawnFrom) {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->drawnFrom = [=](auto) {
       return std::vector<DrawnFrom>{drawnFrom...};
     };
-    registry.registerFunction(fullName(name), std::move(metadata));
+    return metadata;
+  };
+  const auto add = [&](std::string_view name,
+                       std::same_as<DrawnFrom> auto... drawnFrom) {
+    registry.registerFunction(fullName(name), makeMetadata(drawnFrom...));
   };
 
   for (std::string_view name :
@@ -61,9 +64,11 @@ void registerDrawnFrom(
   add("map_values", DrawnFrom::resultElement().drawnFromMapValue(0));
 
   // Aggregates draw from their arguments across the group's rows.
-  for (std::string_view name : {"array_agg", "set_agg"}) {
-    add(name, DrawnFrom::resultElement().drawnFromValue(0));
-  }
+  auto arrayAggMetadata =
+      makeMetadata(DrawnFrom::resultElement().drawnFromValue(0));
+  arrayAggMetadata->partialAggregationReduces = false;
+  registry.registerFunction(fullName("array_agg"), std::move(arrayAggMetadata));
+  add("set_agg", DrawnFrom::resultElement().drawnFromValue(0));
   add("map_agg",
       DrawnFrom::resultMapKey().drawnFromValue(0),
       DrawnFrom::resultMapValue().drawnFromValue(1));
@@ -176,6 +181,13 @@ void PrestoFunctions::registerAll(
       });
 
   registerDrawnFrom(registry, fullName);
+
+  for (std::string_view name :
+       {"multimap_agg", "vector_index_build", "vector_index_train"}) {
+    auto metadata = std::make_unique<FunctionMetadata>();
+    metadata->partialAggregationReduces = false;
+    registry.registerFunction(fullName(name), std::move(metadata));
+  }
 
   registry.registerReversibleFunction(fullName("eq"));
   registry.registerReversibleFunction(fullName("lt"), fullName("gt"));

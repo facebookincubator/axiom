@@ -348,6 +348,39 @@ TEST_P(AggregationTest, orderBy) {
   AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, matcher);
 }
 
+// array_agg keeps every input row, so on its own it runs in a single step.
+// Next to sum, it splits into partial and final steps.
+TEST_P(AggregationTest, nonReducingAggregates) {
+  testConnector_->addTable("t", ROW({"k", "v"}, BIGINT()));
+
+  auto logicalPlan = parseSelect("SELECT k, array_agg(v) FROM t GROUP BY k");
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .localPartition({"k"})
+          .singleAggregation({"k"}, {"array_agg(v)"})
+          .build());
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .distributedSingleAggregation({"k"}, {"array_agg(v)"})
+          .shuffle()
+          .build());
+
+  logicalPlan = parseSelect("SELECT k, array_agg(v), sum(v) FROM t GROUP BY k");
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan, /*numDrivers=*/4),
+      matchScan("t")
+          .localAggregation({"k"}, {"array_agg(v)", "sum(v)"})
+          .build());
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planVelox(logicalPlan).plan,
+      matchScan("t")
+          .distributedAggregation({"k"}, {"array_agg(v)", "sum(v)"})
+          .shuffle()
+          .build());
+}
+
 // Verifies plan construction succeeds when partial-aggregation
 // `maxCardinality` greatly exceeds `inputBeforePartial`. Guards the
 // `expectedNumDistincts` invariant `result <= min(numRows, numDistinct)`.
