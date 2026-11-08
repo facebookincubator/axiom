@@ -182,6 +182,12 @@ struct FunctionMetadata {
   /// Static fixed cost for processing one row.
   float cost{kDefaultCallCost};
 
+  /// True if the aggregate's intermediate result for a group has a bounded
+  /// size, as sum's and count's do. False if it grows with the group's rows,
+  /// as array_agg's does, keeping every input row. A partial aggregation of
+  /// such an aggregate shrinks nothing however few groups there are.
+  bool partialAggregationReduces{true};
+
   /// Translates a set of paths into path, expression pairs if the complex type
   /// returning function is decomposable into per-path subexpressions. Suppose
   /// the function applies array sort to all arrays in a map. suppose it is used
