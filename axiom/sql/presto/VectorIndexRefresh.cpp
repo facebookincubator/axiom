@@ -207,7 +207,10 @@ lp::LogicalPlanNodePtr planTrain(
                    lp::Col(kEmbedding),
                    lp::Col(kKey),
                    lp::Lit(index.properties.numClusters),
-                   lp::Lit(metric))
+                   lp::Lit(metric),
+                   lp::Lit(
+                       Variant::map(std::map<Variant, Variant>{}),
+                       MAP(VARCHAR(), VARCHAR())))
                    .as("codec")})
           .project(
               ColumnExprs::concat(
