@@ -2253,7 +2253,8 @@ class RowNumberMatcher : public PlanMatcherImpl<RowNumberNode> {
 };
 
 // Matches a TopNRowNumberNode and verifies partition keys, sorting keys and
-// their orders, limit, and whether it outputs its ranking column.
+// their orders, limit, whether it outputs its ranking column, and whether it is
+// partial.
 class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
  public:
   TopNRowNumberMatcher(
@@ -2261,12 +2262,14 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
       std::vector<std::string> partitionKeys,
       std::vector<std::string> sortingKeys,
       int32_t limit,
-      bool rankColumn)
+      bool rankColumn,
+      bool partial)
       : PlanMatcherImpl<TopNRowNumberNode>({matcher}),
         partitionKeys_{std::move(partitionKeys)},
         sortingKeys_{std::move(sortingKeys)},
         limit_{limit},
-        rankColumn_{rankColumn} {}
+        rankColumn_{rankColumn},
+        partial_{partial} {}
 
   MatchResult matchDetails(
       const TopNRowNumberNode& plan,
@@ -2289,6 +2292,9 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
         << "Ranking column mismatch";
     AXIOM_TEST_RETURN_IF_FAILURE
 
+    EXPECT_EQ(plan.isPartial(), partial_) << "Partial mismatch";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
     return MatchResult::success(symbols);
   }
 
@@ -2298,6 +2304,7 @@ class TopNRowNumberMatcher : public PlanMatcherImpl<TopNRowNumberNode> {
   const int32_t limit_;
   // Whether the node outputs its ranking column.
   const bool rankColumn_;
+  const bool partial_;
 };
 
 // Matches a TableWriteNode and verifies the names the connector receives the
@@ -3328,7 +3335,12 @@ PlanMatcherBuilder& PlanMatcherBuilder::topNRowNumber(
     bool rankColumn) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
-      matcher_, partitionKeys, sortingKeys, limit, rankColumn);
+      matcher_,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      rankColumn,
+      /*partial=*/false);
   return *this;
 }
 
@@ -3338,7 +3350,12 @@ PlanMatcherBuilder& PlanMatcherBuilder::partialTopNRowNumber(
     int32_t limit) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<TopNRowNumberMatcher>(
-      matcher_, partitionKeys, sortingKeys, limit, /*rankColumn=*/false);
+      matcher_,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      /*rankColumn=*/false,
+      /*partial=*/true);
   return *this;
 }
 

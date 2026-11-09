@@ -1035,8 +1035,8 @@ class PlanMatcherBuilder {
   /// Matches any TopNRowNumber node.
   PlanMatcherBuilder& topNRowNumber();
 
-  /// Matches a TopNRowNumber node with the specified partition keys, sorting
-  /// keys, and limit, and whether it outputs its ranking column.
+  /// Matches a final TopNRowNumber node with the specified partition keys,
+  /// sorting keys, and limit, and whether it outputs its ranking column.
   /// @param partitionKeys Expected partition key column names.
   /// @param sortingKeys List of sort keys (e.g., {"a ASC", "b DESC"}). Parsed
   /// by the DuckDB SQL parser: an omitted direction defaults to `ASC` and an

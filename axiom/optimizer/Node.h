@@ -2251,7 +2251,8 @@ using RowNumberCP = const RowNumber*;
 /// rank / dense_rank). Produced by fusing
 /// a `Filter(rankColumn <op> n)` over a single-ranking-function `Window`. The
 /// rank column is emitted only when `rankColumn` is set; otherwise the output
-/// is just the input columns.
+/// is just the input columns. A partial step, see `Key::partial`, may run
+/// below the final one to cut the rows it receives.
 class TopNRowNumber : public Node {
  public:
   using RankFunction = velox::core::TopNRowNumberNode::RankFunction;
@@ -2269,13 +2270,18 @@ class TopNRowNumber : public Node {
     ExprVector orderKeys;
     /// Sort direction per order key; positional with `orderKeys`.
     OrderTypeVector orderTypes;
-    /// Per-partition row cap; > 0.
+    /// Per-partition row cap; > 0. A partial step may produce more rows.
     int32_t limit;
     /// Column carrying the ranking-function result in the output, or null to
     /// omit it (the output is then just the input columns).
     ColumnCP rankColumn;
     /// Output columns: `input`'s columns, plus `rankColumn` when set.
     ColumnVector outputColumns;
+    /// True for the step each driver runs on its own rows before a later step
+    /// sees all rows of a partition. It may pass rows through and leave the
+    /// limit to that later step, so it has no `rankColumn`. Any other step
+    /// keeps exactly the top `limit` rows of each partition.
+    bool partial{false};
   };
 
   /// Transparent hasher for interning `TopNRowNumber`s by identity.
@@ -2324,6 +2330,10 @@ class TopNRowNumber : public Node {
     return rankColumn_;
   }
 
+  bool partial() const {
+    return partial_;
+  }
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }
@@ -2343,6 +2353,7 @@ class TopNRowNumber : public Node {
   const OrderTypeVector orderTypes_;
   const int32_t limit_;
   const ColumnCP rankColumn_;
+  const bool partial_;
 };
 
 using TopNRowNumberCP = const TopNRowNumber*;

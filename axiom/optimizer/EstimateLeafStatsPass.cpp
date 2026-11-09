@@ -399,7 +399,8 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
               node->orderTypes(),
               node->limit(),
               node->rankColumn(),
-              node->outputColumns()},
+              node->outputColumns(),
+              node->partial()},
           std::move(input));
     });
   }

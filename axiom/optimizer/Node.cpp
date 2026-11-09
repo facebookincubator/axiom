@@ -3509,9 +3509,13 @@ TopNRowNumber::TopNRowNumber(Key key)
       orderKeys_(std::move(key.orderKeys)),
       orderTypes_(std::move(key.orderTypes)),
       limit_(key.limit),
-      rankColumn_(key.rankColumn) {
+      rankColumn_(key.rankColumn),
+      partial_(key.partial) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!orderKeys_.empty(), "TopNRowNumber must have order keys");
+  VELOX_CHECK(
+      !partial_ || rankColumn_ == nullptr,
+      "A partial TopNRowNumber must not have a rank column");
   checkColumns(partitionKeys_, "TopNRowNumber partition key");
   checkColumns(orderKeys_, "TopNRowNumber order key");
   checkDistinctKeys(partitionKeys_, orderKeys_, "TopNRowNumber");
@@ -3534,7 +3538,8 @@ size_t TopNRowNumber::KeyHash::operator()(const TopNRowNumber* node) const {
       node->orderTypes(),
       node->limit(),
       node->rankColumn(),
-      node->outputColumns());
+      node->outputColumns(),
+      node->partial());
 }
 
 size_t TopNRowNumber::KeyHash::operator()(const Key& key) const {
@@ -3546,7 +3551,8 @@ size_t TopNRowNumber::KeyHash::operator()(const Key& key) const {
       key.orderTypes,
       key.limit,
       key.rankColumn,
-      key.outputColumns);
+      key.outputColumns,
+      key.partial);
 }
 
 bool TopNRowNumber::KeyEq::operator()(
@@ -3559,7 +3565,8 @@ bool TopNRowNumber::KeyEq::operator()(
       left->orderTypes() == right->orderTypes() &&
       left->limit() == right->limit() &&
       left->rankColumn() == right->rankColumn() &&
-      left->outputColumns() == right->outputColumns();
+      left->outputColumns() == right->outputColumns() &&
+      left->partial() == right->partial();
 }
 
 bool TopNRowNumber::KeyEq::operator()(const Key& key, const TopNRowNumber* node)
@@ -3570,7 +3577,8 @@ bool TopNRowNumber::KeyEq::operator()(const Key& key, const TopNRowNumber* node)
       key.orderKeys == node->orderKeys() &&
       key.orderTypes == node->orderTypes() && key.limit == node->limit() &&
       key.rankColumn == node->rankColumn() &&
-      key.outputColumns == node->outputColumns();
+      key.outputColumns == node->outputColumns() &&
+      key.partial == node->partial();
 }
 
 bool TopNRowNumber::KeyEq::operator()(const TopNRowNumber* node, const Key& key)

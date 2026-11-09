@@ -352,7 +352,11 @@ class Printer : public NodeVisitor {
   void visit(const TopNRowNumber& node, NodeVisitorContext& context)
       const override {
     auto& ctx = static_cast<Context&>(context);
-    header(ctx, node, fmt::format("[limit {}]", node.limit()));
+    header(
+        ctx,
+        node,
+        fmt::format(
+            "[limit {}{}]", node.limit(), node.partial() ? ", partial" : ""));
     const auto pad = spaces(ctx.indent + 2);
     if (!node.partitionKeys().empty()) {
       ctx.out << pad << "partitionKeys: " << formatExprs(node.partitionKeys())
