@@ -1416,18 +1416,18 @@ void expectEquiKeys(
 class VectorSearchJoinMatcher : public PlanMatcherImpl<VectorSearchJoinNode> {
  public:
   VectorSearchJoinMatcher(
-      const std::shared_ptr<PlanMatcher>& probe,
-      const std::shared_ptr<PlanMatcher>& build,
+      const std::shared_ptr<PlanMatcher>& left,
+      const std::shared_ptr<PlanMatcher>& right,
       JoinType joinType,
       std::vector<std::string> keys,
-      std::string probeEmbedding,
-      std::string buildIndex,
+      std::string embedding,
+      std::string index,
       int64_t k)
-      : PlanMatcherImpl<VectorSearchJoinNode>({probe, build}),
+      : PlanMatcherImpl<VectorSearchJoinNode>({left, right}),
         joinType_{joinType},
         keys_{std::move(keys)},
-        probeEmbedding_{std::move(probeEmbedding)},
-        buildIndex_{std::move(buildIndex)},
+        embedding_{std::move(embedding)},
+        index_{std::move(index)},
         k_{k} {}
 
   MatchResult matchDetails(
@@ -1442,9 +1442,8 @@ class VectorSearchJoinMatcher : public PlanMatcherImpl<VectorSearchJoinNode> {
     AXIOM_TEST_RETURN_IF_FAILURE
 
     expectEquiKeys(plan.leftKeys(), plan.rightKeys(), keys_, symbols);
-    EXPECT_EQ(
-        plan.probeEmbedding()->name(), resolveSymbol(probeEmbedding_, symbols));
-    EXPECT_EQ(plan.buildIndex()->name(), resolveSymbol(buildIndex_, symbols));
+    EXPECT_EQ(plan.embedding()->name(), resolveSymbol(embedding_, symbols));
+    EXPECT_EQ(plan.index()->name(), resolveSymbol(index_, symbols));
     AXIOM_TEST_RETURN_IF_FAILURE
 
     return MatchResult::success(symbols);
@@ -1453,8 +1452,8 @@ class VectorSearchJoinMatcher : public PlanMatcherImpl<VectorSearchJoinNode> {
  private:
   const JoinType joinType_;
   const std::vector<std::string> keys_;
-  const std::string probeEmbedding_;
-  const std::string buildIndex_;
+  const std::string embedding_;
+  const std::string index_;
   const int64_t k_;
 };
 
@@ -2918,21 +2917,15 @@ PlanMatcherBuilder& PlanMatcherBuilder::indexLookupJoin(
 }
 
 PlanMatcherBuilder& PlanMatcherBuilder::vectorSearchJoin(
-    PlanMatcherBuilder buildMatcher,
+    PlanMatcherBuilder rightMatcher,
     JoinType joinType,
     const std::vector<std::string>& keys,
-    const std::string& probeEmbedding,
-    const std::string& buildIndex,
+    const std::string& embedding,
+    const std::string& index,
     int64_t k) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<VectorSearchJoinMatcher>(
-      matcher_,
-      buildMatcher.build(),
-      joinType,
-      keys,
-      probeEmbedding,
-      buildIndex,
-      k);
+      matcher_, rightMatcher.build(), joinType, keys, embedding, index, k);
   return *this;
 }
 
