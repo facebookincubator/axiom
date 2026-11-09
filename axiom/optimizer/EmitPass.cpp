@@ -1678,6 +1678,7 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
       search.joinType(),
       toFieldAccessList(search.probeKeys(), "VectorSearch probeKey"),
       toFieldAccessList(search.buildKeys(), "VectorSearch buildKey"),
+      velox::core::VectorSearchJoinNode::IndexSide::kBuild,
       toFieldAccess(search.probeEmbedding()),
       toFieldAccess(search.buildIndex()),
       // TODO: Pass the format of the index the search reads.
