@@ -20,6 +20,8 @@
 #include <grpcpp/grpcpp.h> // @manual=//grpc_fb/cpp:grpc
 #include <exception>
 #include <string>
+#include <tuple>
+#include <type_traits>
 
 namespace axiom::collagen {
 
@@ -181,7 +183,7 @@ class CollagenException : public std::exception {
         "Line: {}\n"
         "Function: {}",
         errorDescription,
-        statusCode_,
+        fmt::underlying(statusCode_),
         errorExpression,
         sourceFile,
         sourceLine,
@@ -210,9 +212,28 @@ inline std::string errorMessage(const std::string& str) {
   return str;
 }
 
+namespace detail {
+// fmt 12 does not format enums implicitly. Pass them as their underlying
+// integer, which is what fmt 9 printed.
+template <typename T>
+decltype(auto) toFormatArg(const T& arg) {
+  if constexpr (std::is_enum_v<T> && !fmt::is_formattable<T>::value) {
+    return fmt::underlying(arg);
+  } else {
+    return (arg);
+  }
+}
+} // namespace detail
+
 template <typename... Args>
 std::string errorMessage(fmt::string_view fmt, const Args&... args) {
-  return fmt::vformat(fmt, fmt::make_format_args(args...));
+  std::tuple<decltype(detail::toFormatArg(args))...> formatArgs{
+      detail::toFormatArg(args)...};
+  return std::apply(
+      [&](auto&... formatArg) {
+        return fmt::vformat(fmt, fmt::make_format_args(formatArg...));
+      },
+      formatArgs);
 }
 
 } // namespace axiom::collagen
