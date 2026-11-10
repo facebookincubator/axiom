@@ -398,7 +398,7 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }
 
-optimizer::PlanAndStats QueryTestBase::planVelox(
+optimizer::PlanAndStats QueryTestBase::planVeloxWithPlaceholders(
     const logical_plan::LogicalPlanNodePtr& plan,
     const std::vector<velox::Variant>& placeholderValues) {
   connector::SchemaResolver schemaResolver{

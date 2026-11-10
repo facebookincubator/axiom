@@ -285,7 +285,7 @@ TEST_F(VectorSearchTest, refresh) {
         matchBuild(/*distributed=*/false).build());
 
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
-        planVelox(plans.buildPlan, codecId).plan,
+        planVeloxWithPlaceholders(plans.buildPlan, codecId).plan,
         matchBuild(/*distributed=*/true)
             .localGather()
             .tableWriteMerge()
