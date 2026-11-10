@@ -68,19 +68,8 @@ int main(int argc, char** argv) {
         "--data_path and --etc_dir are mutually exclusive. Use --data_path for "
         "the local Hive shorthand or --etc_dir for catalog .properties files.");
 
-    auto defaultConnector = connectors.registerTpchConnector();
-    folly::F14FastMap<std::string, std::string> defaultSchemas = {
-        {
-            defaultConnector->connectorId(),
-            "tiny",
-        },
-    };
-    std::set<std::string> catalogIds = {defaultConnector->connectorId()};
-
-    connectors.registerTestConnector();
-    catalogIds.insert(facebook::axiom::Connectors::kTestConnectorId);
-    defaultSchemas.emplace(
-        facebook::axiom::Connectors::kTestConnectorId, "default");
+    folly::F14FastMap<std::string, std::string> defaultSchemas;
+    std::set<std::string> catalogIds;
 
     auto registerConnector =
         [&](std::string id,
@@ -118,13 +107,24 @@ int main(int argc, char** argv) {
           catalogProperties.connectorConfig);
     }
 
+    // Register the built-in catalogs after the catalog files, so that a file
+    // named after a built-in catalog replaces it.
+    if (!catalogIds.contains(facebook::axiom::Connectors::kTpchConnectorId)) {
+      registerConnector(
+          facebook::axiom::Connectors::kTpchConnectorId, "tpch", {});
+    }
+    if (!catalogIds.contains(facebook::axiom::Connectors::kTestConnectorId)) {
+      registerConnector(
+          facebook::axiom::Connectors::kTestConnectorId, "test", {});
+    }
+
     std::string connectorId;
     if (!FLAGS_catalog.empty()) {
       connectorId = FLAGS_catalog;
     } else if (!FLAGS_data_path.empty()) {
       connectorId = facebook::axiom::Connectors::kLocalHiveConnectorId;
     } else {
-      connectorId = defaultConnector->connectorId();
+      connectorId = facebook::axiom::Connectors::kTpchConnectorId;
     }
 
     // Not every catalog has a built-in default schema. Leave the schema empty
