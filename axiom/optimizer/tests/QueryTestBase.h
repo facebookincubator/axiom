@@ -159,7 +159,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
   /// order of position, with the default options.
-  optimizer::PlanAndStats planVelox(
+  optimizer::PlanAndStats planVeloxWithPlaceholders(
       const logical_plan::LogicalPlanNodePtr& plan,
       const std::vector<velox::Variant>& placeholderValues);
 
