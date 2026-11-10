@@ -531,7 +531,11 @@ class Printer : public NodeVisitor {
       const auto estimate = ctx.options->estimates(&node);
       ctx.out << spaces(ctx.indent + 2) << "Estimate: ";
       if (!estimate.cardinality.has_value()) {
-        ctx.out << "unknown\n";
+        ctx.out << "unknown";
+        if (estimate.maxCardinality.has_value()) {
+          ctx.out << ", at most " << *estimate.maxCardinality << " rows";
+        }
+        ctx.out << '\n';
         return;
       }
 

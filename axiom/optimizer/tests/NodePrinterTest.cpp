@@ -79,10 +79,15 @@ TEST_F(NodePrinterTest, unknownEstimate) {
         toLines(
             root,
             {.estimates =
-                 [](NodeCP) { return Estimate{.cardinality = std::nullopt}; }}),
+                 [](NodeCP node) {
+                   if (node->is(NodeType::kProject)) {
+                     return Estimate{.maxCardinality = 10};
+                   }
+                   return Estimate{};
+                 }}),
         ElementsAre(
             StartsWith("- Project ->"),
-            Eq("  Estimate: unknown"),
+            Eq("  Estimate: unknown, at most 10 rows"),
             HasSubstr(":= 1"),
             StartsWith("  - Values ->"),
             Eq("    Estimate: unknown"),
