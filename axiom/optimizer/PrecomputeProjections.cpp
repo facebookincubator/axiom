@@ -237,6 +237,17 @@ NodeCP PrecomputeProjections::node() && {
       simplifier_);
 }
 
+PlanSubstitutions PrecomputeProjections::computedColumns() const {
+  PlanSubstitutions computed;
+  for (const auto& [expr, column] : seen_) {
+    if (!expr->isColumn() && !expr->is(PlanType::kLiteralExpr) &&
+        !expr->containsNonDeterministic()) {
+      computed.add(expr, column);
+    }
+  }
+  return computed;
+}
+
 void PrecomputeProjections::addToProject(ExprCP expr, ColumnCP column) {
   const auto it = seen_.find(expr);
   if (it == seen_.end()) {
