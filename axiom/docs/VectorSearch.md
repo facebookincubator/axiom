@@ -187,24 +187,27 @@ index write:
    `co_abortVectorIndexWrite` instead.
 
 Both plans read the selected partitions' valid rows. A row with a NULL
-partition value fails the refresh.
+partition value is skipped, so a search of its partition fails. The selected
+partitions are those with no NULL value, from the connector's partition list.
 
 ### Train
 
 ```
 TableWrite <codec table>, codec_id = ?1
   LeftJoin on partitions
-    Aggregate distinct partitions          -- every selected partition
+    selected partitions
     Aggregate vector_index_train(embedding, key, num_clusters, metric)
               by partitions
-      Filter sample_row <= 256 * num_clusters
-        Window sample_row := row_number() by partitions
-                             ordered by xxhash64(key)
+      Filter xxhash64(key) < cutoff(num_rows)
+        Join on partitions
           valid rows
+          Aggregate num_rows := count(*) by partitions   -- metadata
 ```
 
-- **Sample.** Up to 256 points per cluster from each partition, chosen by a
-  hash of the key, so the sample is the same on every run.
+- **Sample.** About 256 points per cluster from each partition, chosen by a
+  hash of the key, so the sample is the same on every run. The filter passes
+  a share of the partition's rows set from its row count, which includes
+  invalid rows, so a partition with many gets a smaller sample.
 - **Train.** The `vector_index_train` aggregate clusters each partition's
   sample with FAISS's spherical k-means and returns the codec of the
   clusters. It orders the sample by key first, so the codec does not depend
@@ -217,7 +220,7 @@ TableWrite <codec table>, codec_id = ?1
 ```
 TableWrite <index table>, codec_id = ?1
   LeftJoin on partitions
-    Aggregate distinct partitions
+    selected partitions
     Aggregate vector_index_build(embedding, key, ...) by partitions, cluster_id, group_id
       Project group_id := (cluster_row - 1) / 50000
         Window cluster_row := row_number() by partitions, cluster_id

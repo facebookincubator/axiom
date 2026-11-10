@@ -25,6 +25,7 @@ namespace axiom::sql::presto {
 namespace lp = facebook::axiom::logical_plan;
 using facebook::axiom::connector::VectorIndex;
 using facebook::velox::BIGINT;
+using facebook::velox::DOUBLE;
 using facebook::velox::MAP;
 using facebook::velox::TypePtr;
 using facebook::velox::VARCHAR;
@@ -34,11 +35,6 @@ using facebook::velox::common::vectorindex::VectorIndexKindName;
 using facebook::velox::common::vectorindex::VectorIndexMetricName;
 
 namespace {
-
-// The points each partition's codec is trained on, per cluster.
-constexpr int64_t kSamplesPerCluster{256};
-// The most rows a local index holds.
-constexpr int64_t kRowsPerLocalIndex{50'000};
 
 // The plans name the query's columns by these names and partitionNames(), so
 // they never collide with the plans' own columns.
@@ -119,87 +115,95 @@ lp::ExprApi isValid(const VectorIndex& index) {
       lp::Call("l2_norm", embedding) > lp::Lit(0.0);
 }
 
-// Returns the valid rows of 'query' (see namedRows() and isValid()).
+// Returns whether a row has no NULL partition value.
+lp::ExprApi hasPartition(const std::vector<std::string>& partitions) {
+  std::optional<lp::ExprApi> notNull;
+  for (const auto& partition : partitions) {
+    const auto condition = lp::Col(partition).isNotNull();
+    notNull = notNull.has_value() ? *notNull && condition : condition;
+  }
+  return *notNull;
+}
+
+// Returns the valid rows of 'rows', a namedRows() (see isValid()), skipping a
+// row with a NULL partition value.
 lp::PlanBuilder validRows(
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
-    const lp::PlanBuilder& query) {
-  return namedRows(partitions, query).filter(isValid(index));
+    const lp::PlanBuilder& rows) {
+  return lp::PlanBuilder(rows).filter(
+      isValid(index) && hasPartition(partitions));
 }
 
-// Returns the distinct partitions of 'query' with no NULL value, with their
-// columns named 'partitions'. The refresh writes a codec and local indexes for
-// each of them, NULL for one with no valid rows, so the index covers every
-// partition it refreshed. A valid row with a NULL partition value fails the
-// refresh; an invalid one is skipped.
+// Returns the number of rows of each partition of 'query', valid or not, in
+// 'num_rows', with the partition columns named 'prefix' + 'partitions'.
+lp::PlanBuilder partitionSizes(
+    const std::vector<std::string>& partitions,
+    std::string_view prefix,
+    const lp::PlanBuilder& query) {
+  return namedRows(partitions, query)
+      .aggregate(
+          ColumnExprs::of(partitions), {lp::MetadataRowCount().as("num_rows")})
+      .project(
+          ColumnExprs::concat(
+              ColumnExprs::renamed(partitions, prefix), lp::Col("num_rows")));
+}
+
+// Returns the partitions of 'query' with no NULL value, with their columns
+// named 'partitions'. The refresh writes a codec and local indexes for each of
+// them, NULL for one with no valid rows, so the index covers every partition
+// it refreshed. The optimizer answers the list from the connector's metadata.
 lp::PlanBuilder selectedPartitions(
-    const facebook::axiom::SchemaTableName& table,
-    const VectorIndex& index,
     const std::vector<std::string>& partitions,
     const lp::PlanBuilder& query) {
-  const auto types = query.outputTypes();
-  const auto valid = isValid(index);
-  std::vector<lp::ExprApi> checked;
-  std::optional<lp::ExprApi> notNull;
-  for (size_t i = 0; i < partitions.size(); ++i) {
-    const auto value = lp::Col(partitions[i]);
-    const auto isNull = value.isNull();
-    checked.push_back(
-        failIf(
-            isNull && valid,
-            lp::Lit(
-                fmt::format(
-                    "Vector index row has a NULL partition value: {} of {}",
-                    index.name,
-                    table.toString())),
-            types[i + 2],
-            value)
-            .as(partitions[i]));
-    const auto condition = value.isNotNull();
-    notNull = notNull.has_value() ? *notNull && condition : condition;
-  }
   return namedRows(partitions, query)
-      .project(checked)
-      .filter(*notNull)
+      .filter(hasPartition(partitions))
       .aggregate(ColumnExprs::of(partitions), {});
 }
 
-// Returns a stratified sample of 'rows': up to kSamplesPerCluster times the
-// number of clusters points of each partition, chosen by a hash of their keys.
+// Returns a stratified sample of 'rows': about kSamplesPerCluster times the
+// number of clusters points of each partition, chosen by a hash of their keys,
+// so the sample is the same on every run. 'sizes' is partitionSizes(). The
+// partition's row count includes invalid rows, so a partition with many gets a
+// smaller sample.
 lp::PlanBuilder sample(
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
+    const lp::PlanBuilder& sizes,
     const lp::PlanBuilder& rows) {
-  const auto hash =
-      lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey)));
+  // The points each partition's codec is trained on, per cluster.
+  constexpr int64_t kSamplesPerCluster{256};
+  const auto hash = lp::Call(
+      "from_big_endian_64",
+      lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey))));
+  // The hashes are uniform over [-2^63, 2^63). The cutoff passes a share of
+  // numSamples / num_rows of them.
+  const double numSamples = kSamplesPerCluster * index.properties.numClusters;
+  const auto cutoff =
+      lp::Lit(numSamples * 0x1p64) / lp::Cast(DOUBLE(), lp::Col("num_rows")) +
+      lp::Lit(-0x1p63);
   return lp::PlanBuilder(rows)
-      .with({lp::Call("row_number")
-                 .over(
-                     lp::WindowSpec()
-                         .partitionBy(ColumnExprs::of(partitions))
-                         .orderBy({lp::SortKey(hash)}))
-                 .as("sample_row")})
-      .filter(
-          lp::Col("sample_row") <=
-          lp::Lit(kSamplesPerCluster * index.properties.numClusters));
+      .join(sizes, *ColumnExprs::equal(partitions, "n_"), lp::JoinType::kInner)
+      .filter(lp::Cast(DOUBLE(), hash) < cutoff);
 }
 
 // Returns the plan that trains a codec for each partition of 'rows' and writes
 // it to the codec table with the id 'codecId', with a NULL codec for each of
-// 'selected' that has no rows.
+// 'selected' that has no rows. 'sizes' is partitionSizes().
 lp::LogicalPlanNodePtr planTrain(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
     const std::string& metric,
+    const lp::PlanBuilder& sizes,
     const lp::PlanBuilder& rows,
     const lp::PlanBuilder& selected) {
   const auto columnNames =
       VectorIndex::codecTableType(index.partitionColumns)->names();
 
   auto codecs =
-      sample(index, partitions, rows)
+      sample(index, partitions, sizes, rows)
           .aggregate(
               ColumnExprs::of(partitions),
               {lp::Call(
@@ -285,6 +289,8 @@ lp::LogicalPlanNodePtr planBuild(
   const auto columnNames =
       VectorIndex::indexTableType(index.partitionColumns)->names();
 
+  // The most rows a local index holds.
+  constexpr int64_t kRowsPerLocalIndex{50'000};
   auto localIndexes =
       lp::PlanBuilder(rows)
           // Each row's nearest centroid of its partition's codec.
@@ -363,18 +369,29 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const facebook::axiom::SchemaTableName& table,
     const VectorIndex& index,
     const std::string& connectorId,
-    const lp::PlanBuilder& query) {
+    const std::function<lp::PlanBuilder()>& makeQuery) {
   const auto& partitionColumns = index.partitionColumns->names();
   VELOX_CHECK(!partitionColumns.empty());
   const auto codecId = lp::Placeholder(BIGINT(), 1);
   const auto partitions = partitionNames(partitionColumns.size());
-  const auto rows = validRows(index, partitions, query);
-  const auto selected = selectedPartitions(table, index, partitions, query);
+  const auto makeRows = [&]() {
+    return validRows(index, partitions, namedRows(partitions, makeQuery()));
+  };
+  const auto makeSelected = [&]() {
+    return selectedPartitions(partitions, makeQuery());
+  };
   const auto metric =
       std::string(VectorIndexMetricName::toName(index.properties.metric));
   return {
       .trainPlan = planTrain(
-          index, connectorId, partitions, codecId, metric, rows, selected),
+          index,
+          connectorId,
+          partitions,
+          codecId,
+          metric,
+          partitionSizes(partitions, "n_", makeQuery()),
+          makeRows(),
+          makeSelected()),
       .buildPlan = planBuild(
           table,
           index,
@@ -383,8 +400,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
           partitions,
           codecId,
           metric,
-          rows,
-          selected),
+          makeRows(),
+          makeSelected()),
   };
 }
 
