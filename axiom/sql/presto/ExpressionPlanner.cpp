@@ -1170,7 +1170,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
 
       // All WHEN clauses were dropped (all had NULL conditions).
       if (inputs.empty()) {
-        return lp::Lit(Variant::null(TypeKind::UNKNOWN));
+        return lp::NullLit(UNKNOWN());
       }
 
       // Only the ELSE value remains.
@@ -1224,7 +1224,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
     }
 
     case NodeType::kNullLiteral:
-      return lp::Lit(Variant::null(TypeKind::UNKNOWN));
+      return lp::NullLit(UNKNOWN());
 
     case NodeType::kBooleanLiteral:
       return lp::Lit(node->as<BooleanLiteral>()->value());

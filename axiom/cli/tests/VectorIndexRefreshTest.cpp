@@ -203,24 +203,38 @@ TEST_F(VectorIndexRefreshTest, sample) {
 }
 
 // A table partitioned by several columns gets a codec and local indexes for
-// each combination of their values.
+// each combination of their values, and a NULL codec and local index for a
+// combination with no valid rows.
 TEST_F(VectorIndexRefreshTest, partitionColumns) {
   createTable({"ds", "hr"});
   run(fmt::format(
       "INSERT INTO t "
       "SELECT id, embedding, ds, '01' FROM ({0}) "
       "UNION ALL "
-      "SELECT id, embedding, ds, '02' FROM ({0})",
+      "SELECT id, embedding, ds, '02' FROM ({0}) "
+      "UNION ALL "
+      "SELECT BIGINT '1', CAST(NULL AS ARRAY(REAL)), 'a', '03'",
       makePoints("a", 10)));
 
   EXPECT_EQ(fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"), 60);
-  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 2);
-  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 6);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 3);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 7);
+  EXPECT_EQ(
+      fetchSingleInt64(
+          "SELECT count(*) FROM t__i__codecs "
+          "WHERE ds = 'a' AND hr = '03' AND codec IS NULL"),
+      1);
+  EXPECT_EQ(
+      fetchSingleInt64(
+          "SELECT count(*) FROM t__i__index "
+          "WHERE ds = 'a' AND hr = '03' AND cluster_id IS NULL "
+          "AND group_id IS NULL AND local_index IS NULL"),
+      1);
 
   VELOX_ASSERT_THROW(
       run("REFRESH VECTOR INDEX i ON t WHERE hr = '01'"),
       "Partition already exists");
-  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 2);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 3);
 }
 
 // The index holds only valid embeddings: rows with a NULL key, or an embedding
@@ -253,9 +267,13 @@ TEST_F(VectorIndexRefreshTest, invalidRows) {
       makePoints("a", 10),
       invalidRows("a"),
       invalidRows("b")));
+  SqlQueryRunner::RunOptions distributed;
+  distributed.numWorkers = 4;
+  distributed.numDrivers = 4;
   EXPECT_EQ(
       fetchSingleInt64(
-          "REFRESH VECTOR INDEX i ON t WHERE ds IN ('a', 'b') OR ds IS NULL"),
+          "REFRESH VECTOR INDEX i ON t WHERE ds IN ('a', 'b') OR ds IS NULL",
+          distributed),
       30);
   EXPECT_EQ(
       fetchSingleInt64(
@@ -264,7 +282,8 @@ TEST_F(VectorIndexRefreshTest, invalidRows) {
   EXPECT_EQ(
       fetchSingleInt64(
           "SELECT count(*) FROM t__i__index "
-          "WHERE ds = 'b' AND local_index IS NULL"),
+          "WHERE ds = 'b' AND cluster_id IS NULL AND group_id IS NULL "
+          "AND local_index IS NULL"),
       1);
   EXPECT_EQ(
       fetchSingleInt64(

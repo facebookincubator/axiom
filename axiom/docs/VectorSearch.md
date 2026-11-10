@@ -219,14 +219,15 @@ TableWrite <codec table>, codec_id = ?1
 
 ```
 TableWrite <index table>, codec_id = ?1
-  LeftJoin on partitions
-    selected partitions
+  UnionAll
     Aggregate vector_index_build(embedding, key, ...) by partitions, cluster_id, group_id
       Project group_id := (cluster_row - 1) / 50000
         Window cluster_row := row_number() by partitions, cluster_id
           VectorSearch k = 1                       -- nearest cluster
             valid rows
             Filter codec_id = ?1 / Scan "t$i$centroids"
+    Project NULL cluster_id, group_id, local_index
+      Filter codec_id = ?1 AND codec IS NULL / Scan <codec table>
 ```
 
 - **Assign.** A vector search of the centroids table with `k` = 1 gives each
@@ -235,6 +236,10 @@ TableWrite <index table>, codec_id = ?1
   up to 50,000.
 - **Build.** The `vector_index_build` aggregate builds a local index of the
   index's type over each group.
+- A partition the train plan gave a NULL codec gets a row of NULL local
+  index. Each worker writes the local indexes it builds.
+- The scans of the centroids and codec tables read only the refreshed
+  partitions.
 
 The build reads `t` again. A row of a partition the train plan did not see,
 e.g. one a concurrent write added, has no codec and fails the refresh.

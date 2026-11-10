@@ -184,6 +184,15 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseDelete(
   return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
 }
 
+::axiom::sql::presto::RefreshVectorIndexStatement::Plans
+QueryTestBase::parseRefresh(std::string_view sql) {
+  auto statement = parseStatement(sql, defaultConnectorId_, "default");
+
+  VELOX_CHECK(statement->isRefreshVectorIndex());
+  return statement->as<::axiom::sql::presto::RefreshVectorIndexStatement>()
+      ->plans();
+}
+
 namespace {
 // Non-owning: the fixture outlives every session it makes.
 std::shared_ptr<velox::BaseRuntimeStatWriter> borrow(
@@ -387,6 +396,20 @@ optimizer::PlanAndStats QueryTestBase::planVelox(
       connector::ConnectorMetadataRegistry::global()};
   return planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
+}
+
+optimizer::PlanAndStats QueryTestBase::planVelox(
+    const logical_plan::LogicalPlanNodePtr& plan,
+    const std::vector<velox::Variant>& placeholderValues) {
+  connector::SchemaResolver schemaResolver{
+      connector::ConnectorMetadataRegistry::global()};
+  return planVelox(
+      plan,
+      placeholderValues,
+      schemaResolver,
+      {.maxRemotePartitions = 4, .maxLocalPartitions = 4},
+      /*optimizerOptions=*/std::nullopt,
+      /*planFilePathPrefix=*/std::nullopt);
 }
 
 namespace {
