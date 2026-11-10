@@ -1082,7 +1082,7 @@ Translated Translator::translateProject(
       translatedExpr = it->second;
     } else {
       currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
-        translatedExpr = translateExpr(*exprs[idx], input.scope, &target);
+        translatedExpr = translateExpr(*exprs[idx], windowScope, &target);
       });
     }
     // A name binds to its expression, so a chain of projections collapses and
