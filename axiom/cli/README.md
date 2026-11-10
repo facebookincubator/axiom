@@ -28,7 +28,7 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 | `--init` | | Path to a SQL file with semicolon-separated statements to execute on startup before entering interactive mode or running `--query`. |
 | `--catalog` | | Default catalog (connector). If not specified, defaults to `hive` when `--data_path` is set, `tpch` otherwise. Startup fails if the catalog is not registered. |
 | `--schema` | | Default schema. If not specified, defaults to `tiny` for TPC-H and `default` for Hive and Test connectors. Other catalogs, such as `system`, have no default schema: qualify table names as `<schema>.<table>`, or run `use <catalog>.<schema>`. |
-| `--etc_dir` | | Path to a directory of catalog `.properties` files. Mutually exclusive with `--data_path`. External catalogs are not selected automatically; use `--catalog` or fully-qualified names in SQL. |
+| `--etc_dir` | | Path to a directory of catalog `.properties` files. Mutually exclusive with `--data_path`. A `tpch.properties` or `test.properties` file replaces that built-in catalog. Other catalogs are not selected automatically; use `--catalog` or fully-qualified names in SQL. |
 | `--data_path` | | Hive specific: root path for Hive-style partitioned data. Registers local Hive connector. Mutually exclusive with `--etc_dir`. |
 | `--data_format` | `parquet` | Hive specific: data format, `parquet`, `dwrf`, or `text`. |
 | `--num_workers` | `1` | Number of in-process workers. |
@@ -43,7 +43,7 @@ The examples below use `axiom_sql` for brevity. With Buck, replace
 Four connectors are available out of the box. See individual connector READMEs
 for detailed documentation.
 
-**[TPC-H](../connectors/tpch/README.md)** (`tpch.tiny`) — Always registered. Read-only. Provides standard TPC-H tables
+**[TPC-H](../connectors/tpch/README.md)** (`tpch.tiny`) — Registered unless a `tpch.properties` file replaces it. Read-only. Provides standard TPC-H tables
 (`nation`, `region`, `part`, `supplier`, `partsupp`, `customer`, `orders`,
 `lineitem`) generated in memory. Use `--schema` to select the scale factor:
 `tiny` (default), `sf1`, `sf10`, etc. Default catalog when `--data_path` is not set.
@@ -83,14 +83,14 @@ hive_local_file_format=parquet
 $ ./axiom_sql --etc_dir etc/
 ```
 
-When `--etc_dir` is used, catalogs are available by name, but the
-CLI does not auto-select one. Use `--catalog <name>` or a fully qualified
+When `--etc_dir` is used, catalogs are available by name. The default catalog
+stays `tpch`. To use another, pass `--catalog <name>` or use a fully qualified
 catalog.schema name in SQL, for example `USE hive2.default;`.
 
 **[System](../connectors/system/README.md)** (`system`) — Always registered. Read-only. Provides metadata tables
 such as session properties (`system.metadata.session_properties`).
 
-**[Test](../connectors/tests/README.md)** (`test.default`) — Always registered. An in-memory connector that supports
+**[Test](../connectors/tests/README.md)** (`test.default`) — Registered unless a `test.properties` file replaces it. An in-memory connector that supports
 `CREATE TABLE`, `CREATE TABLE AS SELECT`, `INSERT`, and `DROP TABLE`. Tables do
 not persist across CLI launches. Use with `--init` to pre-populate tables on
 startup:
@@ -144,6 +144,7 @@ files from a production Hive table and partition by reading the metastore.
 
 Configuration files (`.properties` files) define catalogs for use with `--etc_dir`.
 Each file name (without `.properties` extension) becomes the catalog name.
+A file named after a built-in catalog, `tpch` or `test`, replaces that catalog.
 
 **Format:**
 - One property per line in `key=value` format
