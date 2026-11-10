@@ -370,7 +370,8 @@ class NodeRewriter {
          node->orderTypes(),
          node->limit(),
          node->rankColumn(),
-         node->outputColumns()});
+         node->outputColumns(),
+         node->partial()});
   }
 
   virtual NodeCP rewriteApply(const Apply* node, TContext& context) {

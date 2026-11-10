@@ -1968,6 +1968,7 @@ velox::core::PlanNodePtr Emitter::emitTopNRowNumber(const TopNRowNumber& node) {
       std::move(sortingOrders),
       rowNumberColumnName,
       node.limit(),
+      node.partial(),
       std::move(input));
 }
 

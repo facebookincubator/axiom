@@ -181,6 +181,20 @@ SELECT rn FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn
 -- Filter on ranking function output (rn <= N).
 SELECT * FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t) WHERE rn <= 1
 ----
+-- A filter on a ranking column that is not in the output keeps exactly N rows,
+-- here 200,000 of 1,000,000.
+-- duckdb: SELECT 200000::BIGINT
+SELECT count(*)
+FROM (
+  SELECT a, row_number() OVER (ORDER BY a) AS rn
+  FROM (
+    SELECT x * 1000 + y AS a
+    FROM unnest(sequence(1, 1000)) AS u(x)
+    CROSS JOIN unnest(sequence(1, 1000)) AS v(y)
+  )
+)
+WHERE rn <= 200000
+----
 -- Filter on ranking function output (rn > N).
 SELECT a, b FROM (SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t) WHERE rn > 1
 ----

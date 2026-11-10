@@ -2914,7 +2914,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
            node->orderTypes(),
            node->limit(),
            /*rankColumn=*/nullptr,
-           input->outputColumns()});
+           input->outputColumns(),
+           /*partial=*/true});
     }
     auto [coLocated, partitionKeys] = ensureCoLocated(input, keys);
     std::tie(coLocated, partitionKeys) =
@@ -2930,7 +2931,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          node->orderTypes(),
          node->limit(),
          node->rankColumn(),
-         outputFollowingInput(node, coLocated)});
+         outputFollowingInput(node, coLocated),
+         node->partial()});
   }
 
   // Distributes a global ORDER BY at both scopes. Multiple drivers sort in

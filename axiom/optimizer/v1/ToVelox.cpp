@@ -1990,6 +1990,7 @@ velox::core::PlanNodePtr ToVelox::makeTopNRowNumber(
       toSortOrders(op.orderTypes),
       op.outputColumn->outputName(),
       op.limit,
+      /*partial=*/false,
       std::move(input));
 }
 
