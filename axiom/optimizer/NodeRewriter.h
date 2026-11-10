@@ -286,9 +286,9 @@ class NodeRewriter {
       const VectorSearch* node,
       TContext& context) {
     VectorSearch::Key key = node->key();
-    key.probe = rewrite(node->probe(), context);
-    key.build = rewrite(node->build(), context);
-    if (key.probe == node->probe() && key.build == node->build()) {
+    key.left = rewrite(node->left(), context);
+    key.right = rewrite(node->right(), context);
+    if (key.left == node->left() && key.right == node->right()) {
       return node;
     }
     return builder_.template make<VectorSearch>(std::move(key));

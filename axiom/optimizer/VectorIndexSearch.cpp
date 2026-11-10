@@ -175,11 +175,11 @@ class Planner {
     // expressions over the columns of 'build', walking down from the search to
     // the scan.
     folly::F14FastMap<ColumnCP, ExprCP> projected;
-    for (ColumnCP column : node->build()->outputColumns()) {
+    for (ColumnCP column : node->right()->outputColumns()) {
       projected.emplace(column, column);
     }
     ExprVector filters;
-    NodeCP build = node->build();
+    NodeCP build = node->right();
     while (build->is(NodeType::kProject) || build->is(NodeType::kFilter)) {
       if (build->is(NodeType::kFilter)) {
         const auto* filter = build->as<Filter>();
@@ -209,7 +209,7 @@ class Planner {
           column->toString());
       return it->second;
     };
-    ExprCP embedding = resolve(node->buildIndex());
+    ExprCP embedding = resolve(node->index());
     VELOX_USER_CHECK(
         embedding->isColumn(),
         "A vector search must search a column of its table: {}",
@@ -237,7 +237,7 @@ class Planner {
         table,
         embedding->as<Column>()->schemaColumn()->name(),
         node->metric(),
-        node->index());
+        node->indexName());
     checkFilters(table, *index, filters);
     return planSearch(node, probe, table, index, filters, resolve);
   }
@@ -374,7 +374,7 @@ class Planner {
       ColumnCP score,
       const std::function<ExprCP(ColumnCP)>& buildColumn) {
     const PlanObjectSet probeColumns =
-        PlanObjectSet::fromObjects(node->probe()->outputColumns());
+        PlanObjectSet::fromObjects(node->left()->outputColumns());
     ExprVector exprs;
     exprs.reserve(node->outputColumns().size());
     for (ColumnCP source : node->sourceColumns()) {
@@ -428,7 +428,7 @@ class Planner {
         node->joinType() == velox::core::JoinType::kInner,
         "A vector search through a vector index supports only an INNER join for now");
     VELOX_USER_CHECK(
-        node->probeKeys().empty(),
+        node->leftKeys().empty(),
         "A vector search through a vector index does not support keys yet");
     // The default of the num_probes hint (see logical_plan::VectorSearchNode).
     const int64_t numProbes =
@@ -464,11 +464,11 @@ class Planner {
     assignOutputs.push_back(clusterId);
     assignOutputs.push_back(clusterScore);
     NodeCP assigned = builder_.make<VectorSearch>({
-        .probe = queries,
-        .build = codecs.node,
+        .left = queries,
+        .right = codecs.node,
         .joinType = velox::core::JoinType::kInner,
-        .probeEmbedding = node->probeEmbedding(),
-        .buildIndex = codec,
+        .embedding = node->embedding(),
+        .index = codec,
         .metric = index->properties.metric,
         .k = numProbes,
         .id = clusterId,
@@ -494,13 +494,13 @@ class Planner {
     searchOutputs.push_back(matchId);
     searchOutputs.push_back(score);
     NodeCP searched = builder_.make<VectorSearch>({
-        .probe = assigned,
-        .build = localIndexes.node,
+        .left = assigned,
+        .right = localIndexes.node,
         .joinType = velox::core::JoinType::kInner,
-        .probeKeys = std::move(probeKeys),
-        .buildKeys = std::move(buildKeys),
-        .probeEmbedding = node->probeEmbedding(),
-        .buildIndex = localIndexes.columns.at(localIndexName),
+        .leftKeys = std::move(probeKeys),
+        .rightKeys = std::move(buildKeys),
+        .embedding = node->embedding(),
+        .index = localIndexes.columns.at(localIndexName),
         .metric = index->properties.metric,
         .k = node->k(),
         .searchOptions = node->searchOptions(),
@@ -559,7 +559,7 @@ class Planner {
     // The build side's columns and keys over the codecs, except the cluster,
     // which is the entry the search finds.
     const PlanObjectSet probeColumns =
-        PlanObjectSet::fromObjects(node->probe()->outputColumns());
+        PlanObjectSet::fromObjects(node->left()->outputColumns());
     ExprVector buildExprs{codec};
     ColumnVector buildColumns{codec};
     ColumnVector buildOutputColumns;
@@ -582,7 +582,7 @@ class Planner {
       outputs.emplace(source, output);
     }
     ExprVector buildKeys;
-    for (ExprCP key : node->buildKeys()) {
+    for (ExprCP key : node->rightKeys()) {
       ExprCP resolved = key->isColumn() ? resolve(key->as<Column>()) : key;
       VELOX_USER_CHECK(
           resolved != indexClusterId,
@@ -611,7 +611,7 @@ class Planner {
     // build side has at most one codec per key.
     const bool oneCodec =
         Join::emittedOnceSides(
-            node->joinType(), probe, build, node->probeKeys(), buildKeys)
+            node->joinType(), probe, build, node->leftKeys(), buildKeys)
             .left;
     ColumnCP queryId = nullptr;
     NodeCP queries = probe;
@@ -632,13 +632,13 @@ class Planner {
     outputColumns.push_back(score);
     sourceColumns.push_back(score);
     NodeCP searched = builder_.make<VectorSearch>({
-        .probe = queries,
-        .build = build,
+        .left = queries,
+        .right = build,
         .joinType = node->joinType(),
-        .probeKeys = node->probeKeys(),
-        .buildKeys = std::move(buildKeys),
-        .probeEmbedding = node->probeEmbedding(),
-        .buildIndex = codec,
+        .leftKeys = node->leftKeys(),
+        .rightKeys = std::move(buildKeys),
+        .embedding = node->embedding(),
+        .index = codec,
         .metric = index.properties.metric,
         .k = node->k(),
         .id = clusterId,

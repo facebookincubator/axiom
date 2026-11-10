@@ -302,14 +302,17 @@ whose partitions have no local indexes yet.
 ### Velox
 
 Both searches run as Velox's `VectorSearchJoinNode`. Like a hash join, it
-loads its build side once and probes it with every row:
+holds its build side in memory and streams its probe side. Either side can
+have the indexes, and the optimizer holds the one with fewer estimated bytes:
 
-- The build side decodes each codec or local index once and maps the
-  equality keys to it.
-- The probe groups a batch's rows by the index they match and searches each
-  index once for all of them.
-- The packed bytes stay on the build side and are not copied into output
-  rows.
+- With the indexes held, the build side decodes each codec or local index
+  once and maps the equality keys to it. The probe groups a batch's rows by
+  the index they match and searches each index once for all of them.
+- With the queries held, each index streams past once: it is decoded,
+  searched for every query that matches it, and dropped. Memory is bounded by
+  the queries. The local-index search runs this way when the local indexes
+  outweigh the queries' assignments to clusters.
+- The packed bytes are not copied into output rows.
 
 ### User errors
 
@@ -448,14 +451,8 @@ also prunes files by cluster.
 
 ## Follow-ups
 
-- **Stream the local indexes.** The local-index search loads the local
-  indexes of the selected partitions on its build side and holds them in
-  memory for the whole join, so memory grows with the index. Swapping the
-  sides bounds memory by the queries: the query and cluster rows become the
-  build side, and each local index streams past once, searched for every
-  query that probes its cluster.
-- **Read only the probed clusters.** The search then reads every local index
-  of the selected partitions, however few clusters the queries probe.
+- **Read only the probed clusters.** The search reads every local index of
+  the selected partitions, however few clusters the queries probe.
   Bucketing or sorting the index table by `cluster_id`, and passing the
   probed clusters to the index scan as a dynamic filter, lets the scan skip
   the rest.

@@ -283,19 +283,22 @@ class Printer : public NodeVisitor {
         fmt::format(
             "[{}]", velox::core::JoinTypeName::toName(node.joinType())));
     const auto pad = spaces(ctx.indent + 2);
-    if (!node.probeKeys().empty()) {
-      ctx.out << pad << "probeKeys: " << formatExprs(node.probeKeys()) << '\n';
-      ctx.out << pad << "buildKeys: " << formatExprs(node.buildKeys()) << '\n';
+    if (!node.leftKeys().empty()) {
+      ctx.out << pad << "leftKeys: " << formatExprs(node.leftKeys()) << '\n';
+      ctx.out << pad << "rightKeys: " << formatExprs(node.rightKeys()) << '\n';
     }
-    ctx.out << pad << "nearest: " << node.buildIndex()->name() << " to "
-            << node.probeEmbedding()->name() << ", k = " << node.k() << ", "
+    ctx.out << pad << "nearest: " << node.index()->name() << " to "
+            << node.embedding()->name() << ", k = " << node.k() << ", "
             << velox::common::vectorindex::VectorIndexMetricName::toName(
                    node.metric());
     if (node.numProbes().has_value()) {
       ctx.out << ", num_probes = " << node.numProbes().value();
     }
-    if (node.index().has_value()) {
-      ctx.out << ", index = " << node.index().value();
+    if (node.indexName().has_value()) {
+      ctx.out << ", index = " << node.indexName().value();
+    }
+    if (node.indexSide() == VectorSearch::IndexSide::kProbe) {
+      ctx.out << ", indexes on the left";
     }
     std::vector<std::string> generated;
     if (node.id() != nullptr) {

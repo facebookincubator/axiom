@@ -135,14 +135,20 @@ class VectorSearchTest : public test::QueryTestBase {
   // keeps the 2 nearest of its matches, which are then repartitioned on the
   // query before the 2 nearest of all are kept. Names the output 'name',
   // 'query_id', 'id' and 'score'.
+  //
+  // The search of the local indexes holds the smaller input in memory and
+  // streams the other. The local indexes of one day are smaller than the
+  // assignments, which stream past them. The local indexes of every day are
+  // larger and stream, each searched with the assignments it matches.
   core::PlanMatcherBuilder matchSearch(
       const std::optional<std::string>& queryFilter,
       const std::optional<std::string>& ds,
       int64_t numProbes,
       std::string_view index = "pi",
       bool distributed = false) {
-    auto matcher = matchScan("queries");
-    matcher.aliases({"name", "embedding"})
+    const bool streamIndexes = !ds.has_value();
+    auto assigned = matchScan("queries");
+    assigned.aliases({"name", "embedding"})
         .filterIf(queryFilter.has_value(), queryFilter.value_or(""))
         .assignUniqueId("query_id")
         .vectorSearchJoin(
@@ -158,30 +164,33 @@ class VectorSearchTest : public test::QueryTestBase {
             numProbes)
         .aliases(
             {"name", "embedding", "query_id", "codec_id", "ds", "cluster_id"})
-        .shuffleIf(distributed, {"ds", "codec_id", "cluster_id"})
-        .vectorSearchJoin(
-            matchScan(fmt::format("products__{}__index", index))
-                .aliases(
-                    {"index_codec_id",
-                     "index_cluster_id",
-                     "local_index",
-                     "index_ds"})
-                .filterIf(
-                    ds.has_value(),
-                    fmt::format("index_ds = '{}'", ds.value_or("")))
-                .shuffleIf(
-                    distributed,
-                    {"index_ds", "index_codec_id", "index_cluster_id"}),
-            core::JoinType::kInner,
-            {
-                "ds = index_ds",
-                "codec_id = index_codec_id",
-                "cluster_id = index_cluster_id",
-            },
-            "embedding",
-            "local_index",
-            2)
-        .aliases({"name", "query_id", "id", "score"});
+        .shuffleIf(
+            distributed && !streamIndexes, {"ds", "codec_id", "cluster_id"})
+        .broadcastIf(distributed && streamIndexes);
+    auto localIndexes =
+        matchScan(fmt::format("products__{}__index", index))
+            .aliases(
+                {"index_codec_id",
+                 "index_cluster_id",
+                 "local_index",
+                 "index_ds"})
+            .filterIf(
+                ds.has_value(), fmt::format("index_ds = '{}'", ds.value_or("")))
+            .shuffleIf(
+                distributed && !streamIndexes,
+                {"index_ds", "index_codec_id", "index_cluster_id"});
+    // The streamed input is the left side of the join, as is its key.
+    std::vector<std::string> keys;
+    for (const auto* column : {"ds", "codec_id", "cluster_id"}) {
+      keys.push_back(
+          streamIndexes ? fmt::format("index_{0} = {0}", column)
+                        : fmt::format("{0} = index_{0}", column));
+    }
+    auto& streamed = streamIndexes ? localIndexes : assigned;
+    auto& held = streamIndexes ? assigned : localIndexes;
+    auto matcher = streamed.vectorSearchJoin(
+        held, core::JoinType::kInner, keys, "embedding", "local_index", 2);
+    matcher.aliases({"name", "query_id", "id", "score"});
     if (distributed) {
       matcher.partialTopNRowNumber({"query_id"}, {"score DESC"}, 2)
           .shuffle({"query_id"})
@@ -228,31 +237,37 @@ TEST_F(VectorSearchTest, search) {
 }
 
 // The codecs go to every worker, where the queries are assigned to clusters.
-// The assignments and the local indexes meet repartitioned on the day, the
-// codec and the cluster. Each query's nearest products are kept per worker,
-// then across workers.
+// The assignments and the local indexes of one day meet repartitioned on the
+// day, the codec and the cluster. The local indexes of every day are larger,
+// and the assignments go to every worker to meet them where they are read.
+// Each query's nearest products are kept per worker, then across workers.
 TEST_F(VectorSearchTest, placement) {
-  const auto plan = parseSelect(searchQuery(
-      "name, id",
-      "SELECT * FROM products WHERE ds = '2026-01-01'",
-      {{"num_probes", "3"}}));
-  AXIOM_ASSERT_PLAN(
-      toSingleNodePlan(plan),
-      matchSearch(
-          /*queryFilter=*/std::nullopt, "2026-01-01", 3)
-          .project({"name", "id"})
-          .build());
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(
-      planVelox(plan).plan,
-      matchSearch(
-          /*queryFilter=*/std::nullopt,
-          "2026-01-01",
-          3,
-          "pi",
-          /*distributed=*/true)
-          .project({"name", "id"})
-          .gather()
-          .build());
+  for (const auto& ds :
+       std::vector<std::optional<std::string>>{"2026-01-01", std::nullopt}) {
+    SCOPED_TRACE(ds.value_or("every day"));
+    const auto plan = parseSelect(searchQuery(
+        "name, id",
+        ds.has_value()
+            ? fmt::format("SELECT * FROM products WHERE ds = '{}'", *ds)
+            : "SELECT * FROM products",
+        {{"num_probes", "3"}}));
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(plan),
+        matchSearch(/*queryFilter=*/std::nullopt, ds, 3)
+            .project({"name", "id"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        planVelox(plan).plan,
+        matchSearch(
+            /*queryFilter=*/std::nullopt,
+            ds,
+            3,
+            "pi",
+            /*distributed=*/true)
+            .project({"name", "id"})
+            .gather()
+            .build());
+  }
 }
 
 // A search of an index's centroids is one search of the codecs, whose primary
