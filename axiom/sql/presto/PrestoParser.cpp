@@ -263,11 +263,13 @@ class RelationPlanner : public AstVisitor {
     builder_->tableDelete(connectorId, table.schema, table.table);
   }
 
-  // Plans the rows 'node' refreshes 'index' with: the key, the embedding and
-  // the partition columns of the rows of its table that its condition selects.
-  void planVectorIndexRows(
+  // Returns the plan of the rows 'node' refreshes 'index' with: the key, the
+  // embedding and the partition columns of the rows of its table that its
+  // condition selects. Each call plans them again, with new names.
+  lp::PlanBuilder planVectorIndexRows(
       const RefreshVectorIndex& node,
       const facebook::axiom::connector::VectorIndex& index) {
+    builder_ = newBuilder();
     processTable(node.location(), *node.tableName());
     addFilter(node.where());
     if (node.where() != nullptr) {
@@ -299,6 +301,7 @@ class RelationPlanner : public AstVisitor {
         ColumnExprs::concat(
             {lp::Col(index.keyColumn), lp::Col(index.embeddingColumn)},
             ColumnExprs::of(index.partitionColumns->names())));
+    return *builder_;
   }
 
   const ViewMap& views() const {
@@ -3000,7 +3003,9 @@ SqlStatementPtr parseRefreshVectorIndex(
       indexName);
 
   RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
-  planner.planVectorIndexRows(refresh, *index);
+  auto plans = VectorIndexRefresh::plan(tableName, *index, connectorId, [&]() {
+    return planner.planVectorIndexRows(refresh, *index);
+  });
 
   // The plans read the table, and the codec table to find each row's cluster.
   auto inputTables = planner.inputTables();
@@ -3008,8 +3013,7 @@ SqlStatementPtr parseRefreshVectorIndex(
   return std::make_shared<RefreshVectorIndexStatement>(
       connectorId,
       index,
-      VectorIndexRefresh::plan(
-          tableName, *index, connectorId, planner.builder()),
+      std::move(plans),
       planner.views(),
       // The refresh writes the index, which belongs to the table, so writing
       // the index takes permission to write the table.
