@@ -318,8 +318,8 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
   NodeCP rewriteVectorSearch(
       const VectorSearch* node,
       SimplifiedNodeContext& context) override {
-    NodeSimplifier::SimplifiedNode probe = rewriteChild(node->probe());
-    NodeSimplifier::SimplifiedNode build = rewriteChild(node->build());
+    NodeSimplifier::SimplifiedNode probe = rewriteChild(node->left());
+    NodeSimplifier::SimplifiedNode build = rewriteChild(node->right());
     return setResult(
         node,
         simplifier_.make(node->key(), std::move(probe), std::move(build)),

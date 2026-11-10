@@ -419,10 +419,10 @@ class Collector : public NodeVisitor {
 
   void visit(const VectorSearch& node, NodeVisitorContext& context)
       const override {
-    addAll(context, node.probeKeys());
-    addAll(context, node.buildKeys());
-    add(context, node.probeEmbedding());
-    add(context, node.buildIndex());
+    addAll(context, node.leftKeys());
+    addAll(context, node.rightKeys());
+    add(context, node.embedding());
+    add(context, node.index());
   }
 
   void visit(const Window& node, NodeVisitorContext& context) const override {

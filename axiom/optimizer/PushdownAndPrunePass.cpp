@@ -1879,9 +1879,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       const ExprVector& pending,
       bool toBuild) {
     const PlanObjectSet probeColumns =
-        PlanObjectSet::fromObjects(node.probe()->outputColumns());
+        PlanObjectSet::fromObjects(node.left()->outputColumns());
     const PlanObjectSet buildColumns =
-        PlanObjectSet::fromObjects(node.build()->outputColumns());
+        PlanObjectSet::fromObjects(node.right()->outputColumns());
     SearchPending split;
     for (ExprCP conjunct : pending) {
       if (conjunct->containsNonDeterministic()) {
@@ -1926,24 +1926,24 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // splitSearchPending).
   NodeCP rewriteVectorSearch(const VectorSearch* node, PushdownContext& context)
       override {
-    if (node->searchesEmbeddings()) {
+    if (!node->searchesIndexes()) {
       // A deterministic filter on the queries' columns applies to the queries
       // before the search.
       auto split =
           splitSearchPending(*node, context.pending, /*toBuild=*/false);
       context.pending = std::move(split.above);
       NodeCP probe = split.probe.empty()
-          ? node->probe()
-          : builder().make<Filter>({node->probe(), std::move(split.probe)});
+          ? node->left()
+          : builder().make<Filter>({node->left(), std::move(split.probe)});
 
       // The build side, a table under filters and projections, is
       // pushed down and pruned as any input is, then expanded into searches of
       // the index's storage tables. A filter above the search stays above:
       // filtering the candidates is not filtering the k nearest.
       const ColumnVector buildRead = searchReadColumns(
-          node->build(),
-          node->buildKeys(),
-          node->buildIndex(),
+          node->right(),
+          node->rightKeys(),
+          node->index(),
           node->sourceColumns());
       const std::function<void(NodeCP)> recordSearched = [&](NodeCP input) {
         if (input->is(NodeType::kScan)) {
@@ -1953,11 +1953,11 @@ class Pushdown : public NodeRewriter<PushdownContext> {
           recordSearched(child);
         }
       };
-      recordSearched(node->build());
+      recordSearched(node->right());
       PushdownContext buildContext = makeChildContext({}, context);
       buildContext.required = PlanObjectSet::fromObjects(buildRead);
       buildContext.requiredAbove = buildContext.required;
-      NodeCP build = rewrite(node->build(), buildContext);
+      NodeCP build = rewrite(node->right(), buildContext);
       NodeSimplifier::SimplifiedNode search = nodeSimplifier_.make(
           node->key(),
           {probe, {}, {}},
@@ -2003,12 +2003,9 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // Each input supplies what the search reads from it and the outputs it
     // sources.
     ColumnVector probeRead = searchReadColumns(
-        node->probe(),
-        node->probeKeys(),
-        node->probeEmbedding(),
-        sourceColumns);
+        node->left(), node->leftKeys(), node->embedding(), sourceColumns);
     ColumnVector buildRead = searchReadColumns(
-        node->build(), node->buildKeys(), node->buildIndex(), sourceColumns);
+        node->right(), node->rightKeys(), node->index(), sourceColumns);
 
     auto rewriteSide =
         [&](NodeCP input, ExprVector pending, const ColumnVector& read) {
@@ -2021,13 +2018,13 @@ class Pushdown : public NodeRewriter<PushdownContext> {
               rewritten, std::move(child.outputSubstitutions), read};
         };
     NodeSimplifier::SimplifiedNode probe =
-        rewriteSide(node->probe(), std::move(split.probe), probeRead);
+        rewriteSide(node->left(), std::move(split.probe), probeRead);
     NodeSimplifier::SimplifiedNode build =
-        rewriteSide(node->build(), std::move(split.build), buildRead);
+        rewriteSide(node->right(), std::move(split.build), buildRead);
 
     VectorSearch::Key key = node->key();
-    key.probe = probe.node;
-    key.build = build.node;
+    key.left = probe.node;
+    key.right = build.node;
     key.outputColumns = std::move(outputColumns);
     key.sourceColumns = std::move(sourceColumns);
     NodeSimplifier::SimplifiedNode simplified = nodeSimplifier_.make(

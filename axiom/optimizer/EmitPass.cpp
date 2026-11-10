@@ -1653,10 +1653,9 @@ velox::core::PlanNodePtr Emitter::emitIndexLookupJoin(
 
 velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
   VELOX_CHECK(
-      !search.searchesEmbeddings(),
-      "Pushdown and pruning plans a search of embeddings");
-  velox::core::PlanNodePtr probe = emit(search.probe());
-  velox::core::PlanNodePtr build = emit(search.build());
+      search.searchesIndexes(), "Pushdown and pruning plans a search of rows");
+  velox::core::PlanNodePtr left = emit(search.left());
+  velox::core::PlanNodePtr right = emit(search.right());
 
   std::optional<std::string> idName;
   std::optional<std::string> scoreName;
@@ -1676,11 +1675,11 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
   auto result = std::make_shared<velox::core::VectorSearchJoinNode>(
       nextId(),
       search.joinType(),
-      toFieldAccessList(search.probeKeys(), "VectorSearch probeKey"),
-      toFieldAccessList(search.buildKeys(), "VectorSearch buildKey"),
-      velox::core::VectorSearchJoinNode::IndexSide::kBuild,
-      toFieldAccess(search.probeEmbedding()),
-      toFieldAccess(search.buildIndex()),
+      toFieldAccessList(search.leftKeys(), "VectorSearch leftKey"),
+      toFieldAccessList(search.rightKeys(), "VectorSearch rightKey"),
+      search.indexSide(),
+      toFieldAccess(search.embedding()),
+      toFieldAccess(search.index()),
       // TODO: Pass the format of the index the search reads.
       std::string(velox::common::vectorindex::FaissLocalVectorIndex::kFormat),
       search.metric(),
@@ -1688,8 +1687,8 @@ velox::core::PlanNodePtr Emitter::emitVectorSearch(const VectorSearch& search) {
       std::move(searchOptions),
       std::move(idName),
       std::move(scoreName),
-      std::move(probe),
-      std::move(build),
+      std::move(left),
+      std::move(right),
       ExprEmitter::toRowType(search.sourceColumns()));
 
   // A null-extended output has a fresh identity under its source's name.

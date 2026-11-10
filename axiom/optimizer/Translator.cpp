@@ -2980,18 +2980,19 @@ Translated Translator::translateVectorSearch(
   const auto index = search.index();
 
   NodeCP node = builder_.make<VectorSearch>({
-      .probe = probe.node,
-      .build = build.node,
+      .left = probe.node,
+      .right = build.node,
       .joinType = joinType,
-      .probeKeys = std::move(probeKeys),
-      .buildKeys = std::move(buildKeys),
-      .probeEmbedding = probeEmbedding,
-      .buildIndex = buildEmbedding,
+      .leftKeys = std::move(probeKeys),
+      .rightKeys = std::move(buildKeys),
+      .embedding = probeEmbedding,
+      .index = buildEmbedding,
       .metric = search.metric(),
       .k = search.k(),
       .numProbes = search.numProbes(),
-      .index = index.has_value() ? std::optional<Name>(toName(index.value()))
-                                 : std::nullopt,
+      .indexName = index.has_value()
+          ? std::optional<Name>(toName(index.value()))
+          : std::nullopt,
       .searchOptions = std::move(searchOptions),
       .id = nullptr,
       .score = score,

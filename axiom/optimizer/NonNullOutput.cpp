@@ -84,18 +84,18 @@ const PlanObjectSet& NonNullOutput::get(NodeCP node) {
     const auto* search = node->as<VectorSearch>();
     const auto preserved = Join::preservedSides(search->joinType());
     if (preserved.left) {
-      propagate(get(search->probe()), search->outputColumns(), result);
+      propagate(get(search->left()), search->outputColumns(), result);
     }
     if (preserved.right) {
-      propagate(get(search->build()), search->outputColumns(), result);
+      propagate(get(search->right()), search->outputColumns(), result);
     }
     // An inner search outputs only matched rows: their keys, embedding and
     // index are non-null, and each has an entry with an id and a score.
     if (search->joinType() == velox::core::JoinType::kInner) {
       PlanObjectSet matched;
-      addMatchedKeyColumns(search->probeKeys(), matched);
-      addMatchedKeyColumns(search->buildKeys(), matched);
-      matched.add(search->probeEmbedding());
+      addMatchedKeyColumns(search->leftKeys(), matched);
+      addMatchedKeyColumns(search->rightKeys(), matched);
+      matched.add(search->embedding());
       if (search->id() != nullptr) {
         matched.add(search->id());
       }

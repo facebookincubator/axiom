@@ -1866,13 +1866,18 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return join;
     }
 
-    const auto leftSize = estimatedSize(join.left);
-    const auto rightSize = estimatedSize(join.right);
-    if (leftSize.has_value() && rightSize.has_value() &&
-        *leftSize < *rightSize) {
+    if (isEstimatedSmaller(join.left, join.right)) {
       join.swapInputs();
     }
     return join;
+  }
+
+  // Returns true if 'node' is estimated to output fewer bytes than 'other'.
+  // False when either estimate is unavailable.
+  bool isEstimatedSmaller(NodeCP node, NodeCP other) {
+    const auto size = estimatedSize(node);
+    const auto otherSize = estimatedSize(other);
+    return size.has_value() && otherSize.has_value() && *size < *otherSize;
   }
 
   // Returns whether 'node' fits the per-worker broadcast limit.
@@ -2956,24 +2961,32 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return gatherMerge(sorted, node->orderKeys(), node->orderTypes());
   }
 
-  // A vector search places its inputs as a join of its type does.
+  // A vector search places its inputs as a join of its type does. An inner
+  // search of vector indexes streams the larger input and holds the smaller.
   NodeCP rewriteVectorSearch(const VectorSearch* node, NoContext& context)
       override {
     VectorSearch::Key key = node->key();
-    key.probe = rewrite(node->probe(), context);
-    key.build = rewrite(node->build(), context);
+    VELOX_CHECK(key.indexSide == VectorSearch::IndexSide::kBuild);
+    key.left = rewrite(node->left(), context);
+    key.right = rewrite(node->right(), context);
+    if (key.joinType == velox::core::JoinType::kInner &&
+        node->searchesIndexes() && isEstimatedSmaller(key.left, key.right)) {
+      std::swap(key.left, key.right);
+      std::swap(key.leftKeys, key.rightKeys);
+      key.indexSide = VectorSearch::IndexSide::kProbe;
+    }
     placeJoinInputs(
         key.joinType,
         /*nullAware=*/false,
-        key.probe,
-        key.build,
-        key.probeKeys,
-        key.buildKeys);
+        key.left,
+        key.right,
+        key.leftKeys,
+        key.rightKeys);
     // Velox reads the keys as columns.
-    std::tie(key.probe, key.probeKeys) = PrecomputeProjections::materializeKeys(
-        key.probe, key.probeKeys, builder(), simplifier_);
-    std::tie(key.build, key.buildKeys) = PrecomputeProjections::materializeKeys(
-        key.build, key.buildKeys, builder(), simplifier_);
+    std::tie(key.left, key.leftKeys) = PrecomputeProjections::materializeKeys(
+        key.left, key.leftKeys, builder(), simplifier_);
+    std::tie(key.right, key.rightKeys) = PrecomputeProjections::materializeKeys(
+        key.right, key.rightKeys, builder(), simplifier_);
     return builder().make<VectorSearch>(std::move(key));
   }
 

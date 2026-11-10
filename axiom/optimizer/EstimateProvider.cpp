@@ -527,28 +527,28 @@ Estimate EstimateProvider::compute(NodeCP node) {
     }
 
     case NodeType::kVectorSearch: {
-      // Each matching pair of a probe row and a build row gives up to 'k'
-      // rows, and a left search keeps every probe row.
+      // Each matching pair of a left row and a right row gives up to 'k'
+      // rows, and a left search keeps every left row.
       const auto* search = node->as<VectorSearch>();
-      const auto& probe = estimate(search->probe());
-      const auto& build = estimate(search->build());
+      const auto& left = estimate(search->left());
+      const auto& right = estimate(search->right());
       Estimate result;
-      mergeConstraints(probe.constraints, result.constraints);
-      mergeConstraints(build.constraints, result.constraints);
+      mergeConstraints(left.constraints, result.constraints);
+      mergeConstraints(right.constraints, result.constraints);
       const std::optional<float> matched = JoinFanout::estimateJoinCardinality(
-          probe.cardinality,
-          build.cardinality,
-          search->probeKeys(),
-          search->buildKeys(),
+          left.cardinality,
+          right.cardinality,
+          search->leftKeys(),
+          search->rightKeys(),
           result.constraints);
       result.cardinality = mul(matched, static_cast<float>(search->k()));
       if (search->joinType() == velox::core::JoinType::kLeft) {
-        result.cardinality = maxOf(probe.cardinality, result.cardinality);
+        result.cardinality = maxOf(left.cardinality, result.cardinality);
       }
       JoinConstraints::refineInnerKeys(
           search->joinType(),
-          search->probeKeys(),
-          search->buildKeys(),
+          search->leftKeys(),
+          search->rightKeys(),
           result.constraints);
       return result;
     }

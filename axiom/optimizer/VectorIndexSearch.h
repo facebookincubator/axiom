@@ -55,9 +55,9 @@ namespace facebook::axiom::optimizer {
 /// the partitions the filters select, which returns each match's cluster.
 class VectorIndexSearch {
  public:
-  /// Returns the plan of 'search', a search of embeddings, over the storage
-  /// tables of an index. Its build side is a scan of a table, optionally
-  /// filtered, under projections. 'probe' produces the probe's rows. The plan
+  /// Returns the plan of 'search', a search of rows, over the storage tables
+  /// of an index. Its right side is a scan of a table, optionally filtered,
+  /// under projections. 'probe' produces the left side's rows. The plan
   /// serves filters on the table's partition columns: it reads only the
   /// partitions they select. Throws a user error:
   ///   - Without an index on the searched column with the search's metric, or
