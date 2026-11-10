@@ -3459,6 +3459,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
           {input,
            write.table(),
            write.kind(),
+           write.columnNames(),
            write.columnExprs(),
            write.rowIdColumns(),
            write.deleteTarget(),
@@ -3491,6 +3492,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         {input,
          write.table(),
          write.kind(),
+         write.columnNames(),
          std::move(columnExprs),
          write.rowIdColumns(),
          write.deleteTarget(),
@@ -3500,16 +3502,17 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // A CREATE or INSERT into a bucketed/partitioned layout needs each partition
   // on one worker, else workers race to create the same bucket file.
   // Repartition unless the input is already compatibly bucketed or runs on one
-  // worker.
+  // worker. ANALYZE writes no rows, so it reads its input as it comes.
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
     NodeCP newInput = rewrite(node->input(), context);
     if (node->kind() == connector::WriteKind::kDelete) {
       return rewriteDelete(*node, newInput);
     }
-
-    newInput =
-        applyWriterRequirements(newInput, resolveInsertRequirements(*node));
+    if (node->kind() != connector::WriteKind::kAnalyze) {
+      newInput =
+          applyWriterRequirements(newInput, resolveInsertRequirements(*node));
+    }
     if (newInput == node->input()) {
       return node;
     }
@@ -3517,6 +3520,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         {newInput,
          node->table(),
          node->kind(),
+         node->columnNames(),
          node->columnExprs(),
          node->rowIdColumns(),
          node->deleteTarget(),

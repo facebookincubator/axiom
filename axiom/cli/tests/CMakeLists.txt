@@ -14,6 +14,7 @@
 
 add_executable(
   axiom_cli_test
+  AnalyzeTest.cpp
   CatalogPropertiesTest.cpp
   DeleteTest.cpp
   ExplainIoTest.cpp

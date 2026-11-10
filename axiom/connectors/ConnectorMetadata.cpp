@@ -47,6 +47,9 @@ void applyFilterEstimates(
   folly::F14FastMap<std::string, size_t> indexByName;
   for (size_t i = 0; i < stats.columnStats.size(); ++i) {
     const auto& columnStats = stats.columnStats[i];
+    if (columnStats.isUnknown) {
+      continue;
+    }
     auto typeIt = typeByName.find(columnStats.name);
     VELOX_CHECK(
         typeIt != typeByName.end(),
@@ -55,6 +58,9 @@ void applyFilterEstimates(
     columnStatsByName.emplace(
         columnStats.name, TypedColumnStatistics{typeIt->second, columnStats});
     indexByName[columnStats.name] = i;
+  }
+  if (columnStatsByName.empty()) {
+    return;
   }
 
   double selectivity = 1.0;
@@ -95,6 +101,7 @@ const auto& writeKindNames() {
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},
+      {WriteKind::kAnalyze, "ANALYZE"},
   };
   return kNames;
 }

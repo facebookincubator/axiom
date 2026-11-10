@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <tuple>
+#include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 
@@ -275,6 +276,27 @@ TEST_P(FilteredTableStatsTest, partitionFilter) {
       estimatedCardinality("SELECT a FROM t WHERE k IN (1, 2)"),
       16,
       kCardinalityTolerance);
+}
+
+// Projecting a column with unknown stats must preserve the filter column's NDV.
+TEST_P(FilteredTableStatsTest, unknownProjectedColumn) {
+  runCtas(
+      "CREATE TABLE u WITH (partitioned_by = ARRAY['pk']) AS "
+      "SELECT n_nationkey AS x, n_name AS s, n_nationkey % 3 AS pk "
+      "FROM nation");
+  SCOPE_EXIT {
+    hiveMetadata().dropTableIfExists("u");
+  };
+  // Partition pk=0 has nine distinct x values and no measured stats for s.
+  connector::hive::PersistedStats::replace(
+      localTablePath("u") + "/pk=0",
+      9,
+      {{.name = "x", .numDistinct = 9, .numValues = 9},
+       {.name = "pk", .numDistinct = 1, .numValues = 9}},
+      {"x", "s", "pk"});
+  hiveMetadata().reloadTableFromPath({kDefaultSchema, "u"});
+
+  EXPECT_EQ(estimatedCardinality("SELECT s FROM u WHERE pk = 0 AND x = 3"), 1);
 }
 
 // A partition filter that matches no partitions eliminates scans while

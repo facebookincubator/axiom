@@ -585,8 +585,10 @@ TEST_F(SqlQueryRunnerTest, queryKind) {
   const std::vector<std::pair<std::string_view, QueryKind>> statements = {
       {"SELECT a FROM t", QueryKind::kRead},
       {"INSERT INTO t SELECT a FROM t", QueryKind::kWrite},
+      {"ANALYZE t", QueryKind::kWrite},
       {"EXPLAIN ANALYZE SELECT a FROM t", QueryKind::kRead},
       {"EXPLAIN ANALYZE INSERT INTO t SELECT a FROM t", QueryKind::kWrite},
+      {"EXPLAIN ANALYZE ANALYZE t", QueryKind::kWrite},
   };
   for (const auto& [sql, kind] : statements) {
     SCOPED_TRACE(sql);
