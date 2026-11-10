@@ -723,6 +723,63 @@ TEST_P(WindowTest, aggregationAboveWindow) {
   }
 }
 
+// A computed key that a window partitions or orders on stays one column above
+// it: an aggregation grouping on the key reads the column, so the rows the
+// window partitioned need no second shuffle.
+TEST_P(WindowTest, reusedKey) {
+  testConnector_->addTable("t", ROW({"x", "y"}, BIGINT()));
+
+  {
+    const auto query =
+        "SELECT k, max(rn) AS m "
+        "FROM ("
+        "  SELECT k, row_number() OVER (PARTITION BY k) AS rn "
+        "  FROM (SELECT x % 2 AS k FROM t)"
+        ") "
+        "GROUP BY k";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .project({"mod(x, 2) as k"})
+                       .rowNumber({"k"})
+                       .singleAggregation({"k"}, {"max(rn) as m"})
+                       .project({"k", "m"})
+                       .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+
+    auto distributedMatcher = matchScan("t")
+                                  .project({"mod(x, 2) as k"})
+                                  .shuffle({"k"})
+                                  .localPartition({"k"})
+                                  .rowNumber({"k"})
+                                  .singleAggregation({"k"}, {"max(rn) as m"})
+                                  .project({"k", "m"})
+                                  .gather()
+                                  .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        toDistributedPlan(query), distributedMatcher);
+  }
+
+  {
+    const auto query =
+        "SELECT k, max(r) AS m "
+        "FROM ("
+        "  SELECT k, rank() OVER (ORDER BY k) AS r "
+        "  FROM (SELECT x % 2 AS k FROM t)"
+        ") "
+        "GROUP BY k";
+    SCOPED_TRACE(query);
+
+    auto matcher = matchScan("t")
+                       .project({"mod(x, 2) as k"})
+                       .window({"rank() OVER (ORDER BY k) as r"})
+                       .singleAggregation({"k"}, {"max(r) as m"})
+                       .project({"k", "m"})
+                       .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+  }
+}
+
 // Dependent window functions must be split into separate Window nodes.
 // When a window function's input expression references another window
 // function's output, they cannot share a Window node — the referenced

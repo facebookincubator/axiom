@@ -49,6 +49,22 @@ ORDER BY b
 -- row_number with partition and order.
 SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn FROM t
 ----
+-- row_number partitioned by a computed column, then grouped by it.
+SELECT k, max(rn) AS m
+FROM (
+  SELECT k, row_number() OVER (PARTITION BY k) AS rn
+  FROM (SELECT a % 2 AS k FROM t)
+)
+GROUP BY k
+----
+-- rank ordered by a computed column, then grouped by it.
+SELECT k, max(r) AS m
+FROM (
+  SELECT k, rank() OVER (ORDER BY k) AS r
+  FROM (SELECT a % 2 AS k FROM t)
+)
+GROUP BY k
+----
 -- row_number over an input with no rows.
 -- count 0
 SELECT a, row_number() OVER (PARTITION BY a) AS rn

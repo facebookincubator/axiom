@@ -275,30 +275,17 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     return input;
   }
   key.input = input.node;
-  const ExprVector originalOrderKeys = key.orderKeys;
   simplifyOrderKeys(
       input.substitutions, /*partitionKeys=*/{}, key.orderKeys, key.orderTypes);
   NodeCP output = input.node;
   if (!key.orderKeys.empty()) {
     PrecomputeProjections precompute{input.node, builder_, simplifier_};
-    PlanSubstitutions orderSubstitutions;
     for (ExprCP& orderKey : key.orderKeys) {
-      ExprCP expression = orderKey;
-      orderKey = precompute.toColumn(expression);
-      if (expression != orderKey) {
-        orderSubstitutions.add(expression, orderKey);
-        for (ExprCP original : originalOrderKeys) {
-          ExprCP rewritten =
-              simplifier_.simplify(input.substitutions.apply(original, exprs_));
-          if (rewritten == expression && original != expression) {
-            orderSubstitutions.add(original, orderKey);
-          }
-        }
-      }
+      orderKey = precompute.toColumn(orderKey);
     }
+    input.substitutions.merge(precompute.computedColumns());
     key.input = std::move(precompute).node();
     output = builder_.make<Sort>(std::move(key));
-    input.substitutions.merge(orderSubstitutions);
   }
   input.substitutions =
       visibleSubstitutions(std::move(input.substitutions), output);
@@ -646,6 +633,7 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
         orderKeyRepeatsPartitionKey ? Column::create("__p", orderKey->value())
                                     : nullptr);
   }
+  input.substitutions.merge(precompute.computedColumns());
   VELOX_CHECK_GE(key.outputColumns.size(), key.functions.size());
   ColumnVector functionOutputs(
       key.outputColumns.end() - key.functions.size(), key.outputColumns.end());

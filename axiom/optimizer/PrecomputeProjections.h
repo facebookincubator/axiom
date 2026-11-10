@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/Builder.h"
 #include "axiom/optimizer/Node.h"
+#include "axiom/optimizer/PlanSubstitutions.h"
 
 namespace facebook::axiom::optimizer {
 
@@ -97,6 +98,12 @@ class PrecomputeProjections {
   // adds the lifted columns alongside all input columns; without it the
   // project outputs only the columns passed to `toColumn`.
   NodeCP node() &&;
+
+  // Returns a substitution from each deterministic expression read from a
+  // column -- one projected here or one the input already computes -- to that
+  // column, so a consumer above reads the column instead of computing the
+  // expression again.
+  PlanSubstitutions computedColumns() const;
 
  private:
   void addToProject(ExprCP expr, ColumnCP column);
