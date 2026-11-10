@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,21 +37,23 @@ class VectorIndexRefresh {
   using Plans = RefreshVectorIndexStatement::Plans;
 
   /// Returns the plans that build 'index' of 'table', of the connector
-  /// 'connectorId', from the rows of 'query'. 'query' has, by position, the
-  /// index's key, its embedding, then its partition columns.
+  /// 'connectorId', from the rows of the query 'makeQuery' returns. The query
+  /// has, by position, the index's key, its embedding, then its partition
+  /// columns. The plans read the query several times, and a logical plan is a
+  /// tree, so each call of 'makeQuery' must plan it again, with new names.
   ///
   /// The index holds only valid rows. A row is skipped when its key is NULL, or
   /// its embedding is NULL, of another length than the index's dimension, has
-  /// a NULL or non-finite element, or has a zero norm. A valid row with a NULL
-  /// partition value fails the refresh, as does, for now, a partition the
-  /// index covers.
+  /// a NULL or non-finite element, has a zero norm, or has a NULL partition
+  /// value. A partition the index covers fails the refresh, for now.
   ///
   /// For now, the index has at least one partition column.
   static Plans plan(
       const facebook::axiom::SchemaTableName& table,
       const facebook::axiom::connector::VectorIndex& index,
       const std::string& connectorId,
-      const facebook::axiom::logical_plan::PlanBuilder& query);
+      const std::function<facebook::axiom::logical_plan::PlanBuilder()>&
+          makeQuery);
 };
 
 } // namespace axiom::sql::presto

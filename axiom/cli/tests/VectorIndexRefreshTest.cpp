@@ -79,16 +79,20 @@ class VectorIndexRefreshTest : public SqlQueryRunnerTestBase {
         text.substr(buildStart), testing::HasSubstr("vector_index_build"));
   }
 
-  // Returns the query that produces 30 points in partition 'ds': three groups
-  // of 10 unit vectors around 0, 120 and 240 degrees.
-  static std::string makePoints(std::string_view ds) {
+  // Returns the query that produces 3 * 'groupSize' points in partition 'ds':
+  // three groups of unit vectors within 10 degrees of 0, 120 and 240 degrees.
+  static std::string makePoints(std::string_view ds, int64_t groupSize) {
+    const auto angle =
+        fmt::format("n / {0} * 120 + n % {0} * 10e0 / {0}", groupSize);
     return fmt::format(
         "SELECT n AS id, "
-        "   ARRAY[CAST(cos(radians(n / 10 * 120 + n % 10)) AS REAL), "
-        "   CAST(sin(radians(n / 10 * 120 + n % 10)) AS REAL)] AS embedding, "
-        "   '{}' AS ds "
-        "FROM unnest(sequence(0, 29)) AS v(n)",
-        ds);
+        "   ARRAY[CAST(cos(radians({0})) AS REAL), "
+        "   CAST(sin(radians({0})) AS REAL)] AS embedding, "
+        "   '{1}' AS ds "
+        "FROM unnest(sequence(0, {2})) AS v(n)",
+        angle,
+        ds,
+        3 * groupSize - 1);
   }
 
   std::shared_ptr<exec::test::TempDirectoryPath> dataPath_;
@@ -101,7 +105,9 @@ class VectorIndexRefreshTest : public SqlQueryRunnerTestBase {
 TEST_F(VectorIndexRefreshTest, refresh) {
   createTable();
   run(fmt::format(
-      "INSERT INTO t {} UNION ALL {}", makePoints("a"), makePoints("b")));
+      "INSERT INTO t {} UNION ALL {}",
+      makePoints("a", 10),
+      makePoints("b", 10)));
 
   // The refresh reports the embeddings it wrote, and its completion info has
   // both of its plans.
@@ -129,7 +135,7 @@ TEST_F(VectorIndexRefreshTest, refresh) {
 
   // A refresh deletes the other codecs of the partitions it writes, and leaves
   // the rest of a partition's directory alone.
-  run(fmt::format("INSERT INTO t {}", makePoints("c")));
+  run(fmt::format("INSERT INTO t {}", makePoints("c", 10)));
   run("INSERT INTO t__i__codecs "
       "SELECT codec, 'c', BIGINT '1' FROM t__i__codecs WHERE ds = 'a'");
   const auto otherFile =
@@ -154,7 +160,7 @@ TEST_F(VectorIndexRefreshTest, refresh) {
 // (TYPE IO) is not supported.
 TEST_F(VectorIndexRefreshTest, explain) {
   createTable();
-  run(fmt::format("INSERT INTO t {}", makePoints("a")));
+  run(fmt::format("INSERT INTO t {}", makePoints("a", 10)));
 
   for (const auto* explain : {"EXPLAIN", "EXPLAIN (TYPE OPTIMIZED)"}) {
     SCOPED_TRACE(explain);
@@ -181,6 +187,21 @@ TEST_F(VectorIndexRefreshTest, explain) {
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 3);
 }
 
+// A partition with more rows than its codec trains on is sampled: its codec
+// still has all of its clusters, and every row is indexed.
+TEST_F(VectorIndexRefreshTest, sample) {
+  createTable();
+  run(fmt::format("INSERT INTO t {}", makePoints("a", 1'000)));
+
+  EXPECT_EQ(
+      fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"), 3'000);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT vector_count(codec) FROM t__i__codecs"), 3);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT vector_count(local_index) FROM t__i__index"),
+      3'000);
+}
+
 // A table partitioned by several columns gets a codec and local indexes for
 // each combination of their values.
 TEST_F(VectorIndexRefreshTest, partitionColumns) {
@@ -190,7 +211,7 @@ TEST_F(VectorIndexRefreshTest, partitionColumns) {
       "SELECT id, embedding, ds, '01' FROM ({0}) "
       "UNION ALL "
       "SELECT id, embedding, ds, '02' FROM ({0})",
-      makePoints("a")));
+      makePoints("a", 10)));
 
   EXPECT_EQ(fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"), 60);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 2);
@@ -204,8 +225,7 @@ TEST_F(VectorIndexRefreshTest, partitionColumns) {
 
 // The index holds only valid embeddings: rows with a NULL key, or an embedding
 // that is NULL, of another dimension, with a NULL or non-finite element, or all
-// zeros, are skipped. A valid row with a NULL partition value fails the
-// refresh.
+// zeros, are skipped, as are rows with a NULL partition value.
 TEST_F(VectorIndexRefreshTest, invalidRows) {
   createTable();
 
@@ -230,7 +250,7 @@ TEST_F(VectorIndexRefreshTest, invalidRows) {
   run(fmt::format(
       "INSERT INTO t {} UNION ALL {} UNION ALL {} UNION ALL "
       "SELECT BIGINT '1', CAST(NULL AS ARRAY(REAL)), CAST(NULL AS VARCHAR)",
-      makePoints("a"),
+      makePoints("a", 10),
       invalidRows("a"),
       invalidRows("b")));
   EXPECT_EQ(
@@ -257,9 +277,8 @@ TEST_F(VectorIndexRefreshTest, invalidRows) {
   run("DELETE FROM t WHERE ds IS NULL");
   run("INSERT INTO t SELECT BIGINT '1', ARRAY[REAL '1', REAL '0'], "
       "CAST(NULL AS VARCHAR)");
-  VELOX_ASSERT_THROW(
-      run("REFRESH VECTOR INDEX i ON t WHERE ds IS NULL"),
-      "Vector index row has a NULL partition value: i of \"default\".\"t\"");
+  EXPECT_EQ(
+      fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE ds IS NULL"), 0);
 }
 
 } // namespace
