@@ -202,6 +202,99 @@ class VectorSearchTest : public test::QueryTestBase {
   }
 };
 
+// A refresh's build assigns each valid row of a day to the nearest cluster of
+// the day's codec and builds the local indexes of each cluster, where they are
+// built: the workers write them, each over every driver. A partition the train
+// gave a NULL codec adds a row of NULL local index. The build reads only the
+// refreshed partitions of the codec table.
+TEST_F(VectorSearchTest, refresh) {
+  const auto matchBuild = [&](bool distributed) {
+    // The nearest cluster 'cluster', as 'alias', failing a row with none.
+    const auto assigned = [](std::string_view cluster, std::string_view alias) {
+      return fmt::format(
+          "if({0} IS NULL, "
+          "    CAST(fail('No codec for partition: 2026-01-01') AS BIGINT), "
+          "    {0}) AS {1}",
+          cluster,
+          alias);
+    };
+    return matchScan("products")
+        .aliases({"id", "embedding", "ds"})
+        .filter(
+            "\"and\"("
+            "    id IS NOT NULL, "
+            "    cardinality(embedding) = 2, "
+            "    none_match(embedding, "
+            "        x -> x IS NULL OR NOT is_finite(CAST(x AS DOUBLE))), "
+            "    l2_norm(embedding) > 0.0, "
+            "    ds = '2026-01-01')")
+        .project({"id", "embedding"})
+        .vectorSearchJoin(
+            matchScan("products__pi__codecs")
+                .aliases({"codec", "codec_id", "codec_ds"})
+                .filter("codec_id = 1 AND codec_ds = '2026-01-01'")
+                .project({"codec"})
+                .broadcastIf(distributed),
+            core::JoinType::kLeft,
+            {},
+            "embedding",
+            "codec",
+            1)
+        .aliases({"id", "embedding", "nearest"})
+        .project({"id", "embedding", assigned("nearest", "cluster")})
+        .shuffleIf(distributed, {"cluster"})
+        .localPartitionIf(distributed, {"cluster"})
+        .rowNumber({"cluster"})
+        .aliases({"id", "embedding", "cluster", "cluster_row"})
+        .project(
+            {"cluster",
+             "(cluster_row - 1) / 50000 AS group_id",
+             "embedding",
+             "id"})
+        .singleAggregation(
+            {"cluster", "group_id"},
+            {"vector_index_build("
+             "    embedding, id, 'flat', 'cosine', "
+             "    CAST(map() AS MAP(VARCHAR, VARCHAR))) AS local_index"})
+        .project({"cluster", "group_id", "local_index"})
+        .localPartition(
+            {matchScan("products__pi__codecs")
+                 .aliases({"empty_codec", "empty_ds", "empty_codec_id"})
+                 .filter(
+                     "\"and\"("
+                     "    empty_codec_id = 1, "
+                     "    empty_codec IS NULL, "
+                     "    empty_ds = '2026-01-01')")
+                 .project({"NULL AS empty_cluster", "NULL AS empty_index"})
+                 .project({"empty_cluster", "empty_cluster", "empty_index"})})
+        .aliases({"cluster", "group_id", "local_index"})
+        .project({"1", "cluster", "group_id", "local_index", "'2026-01-01'"})
+        .tableWrite(
+            {"codec_id", "cluster_id", "group_id", "local_index", "ds"});
+  };
+
+  const std::vector<Variant> codecId{Variant(int64_t{1})};
+  for (const auto* condition :
+       {"ds = '2026-01-01'", "products.ds = '2026-01-01'"}) {
+    SCOPED_TRACE(condition);
+    const auto plans = parseRefresh(
+        fmt::format("REFRESH VECTOR INDEX pi ON products WHERE {}", condition));
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(plans.buildPlan, codecId),
+        matchBuild(/*distributed=*/false).build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(plans.buildPlan, codecId).plan,
+        matchBuild(/*distributed=*/true)
+            .localGather()
+            .tableWriteMerge()
+            .gather()
+            .tableWriteMerge()
+            .build());
+  }
+}
+
 // A search through an index assigns each query to clusters of each day's
 // codec, searches their local indexes, and keeps the nearest products of each
 // query. A filter on the day reads only that day of both storage tables.

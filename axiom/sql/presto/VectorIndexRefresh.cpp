@@ -68,7 +68,7 @@ lp::ExprApi failIf(
 lp::ExprApi partitionMessage(
     std::string_view prefix,
     const std::vector<std::string>& partitions) {
-  std::vector<lp::ExprApi> parts{lp::Lit(std::string(prefix))};
+  std::vector<lp::ExprApi> parts{lp::Lit(prefix)};
   for (const auto& partition : partitions) {
     if (parts.size() > 1) {
       parts.push_back(lp::Lit(", "));
@@ -195,13 +195,9 @@ lp::LogicalPlanNodePtr planTrain(
     const std::string& connectorId,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
-    const std::string& metric,
     const lp::PlanBuilder& sizes,
     const lp::PlanBuilder& rows,
     const lp::PlanBuilder& selected) {
-  const auto columnNames =
-      VectorIndex::codecTableType(index.partitionColumns)->names();
-
   auto codecs =
       sample(index, partitions, sizes, rows)
           .aggregate(
@@ -211,7 +207,8 @@ lp::LogicalPlanNodePtr planTrain(
                    lp::Col(kEmbedding),
                    lp::Col(kKey),
                    lp::Lit(index.properties.numClusters),
-                   lp::Lit(metric),
+                   lp::Lit(
+                       VectorIndexMetricName::toName(index.properties.metric)),
                    lp::Lit(
                        Variant::map(std::map<Variant, Variant>{}),
                        MAP(VARCHAR(), VARCHAR())))
@@ -227,7 +224,7 @@ lp::LogicalPlanNodePtr planTrain(
           index.codecTable.schema,
           index.codecTable.table,
           lp::WriteKind::kInsert,
-          columnNames,
+          VectorIndex::codecTableType(index.partitionColumns)->names(),
           ColumnExprs::concat(
               ColumnExprs::concat(
                   {lp::Col("codec")}, ColumnExprs::of(partitions)),
@@ -237,8 +234,8 @@ lp::LogicalPlanNodePtr planTrain(
 
 // Returns the plan that assigns each row of 'rows' to the nearest cluster of
 // its partition's codec 'codecId', builds the local indexes of each cluster and
-// writes them to the index table, with a row of NULL local index for each of
-// 'selected' that has no rows.
+// writes them to the index table, with a row of NULL local index for each
+// partition the train plan gave a NULL codec (see VectorIndex).
 lp::LogicalPlanNodePtr planBuild(
     const facebook::axiom::SchemaTableName& table,
     const VectorIndex& index,
@@ -246,29 +243,39 @@ lp::LogicalPlanNodePtr planBuild(
     const std::vector<std::string>& partitionColumns,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
-    const std::string& metric,
     const lp::PlanBuilder& rows,
-    const lp::PlanBuilder& selected) {
-  const auto indexType =
-      std::string(VectorIndexKindName::toName(index.properties.indexKind));
+    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition) {
   const std::string codecIdColumn{VectorIndex::kCodecId};
 
-  // The centroids of this refresh's codecs, with their partition columns named
-  // "c_" + the partition's name in 'rows'.
-  std::vector<lp::ExprApi> centroidColumns;
-  for (size_t i = 0; i < partitions.size(); ++i) {
-    centroidColumns.push_back(
-        lp::Col(partitionColumns[i]).as("c_" + partitions[i]));
-  }
-  const auto condition = ColumnExprs::equal(partitions, "c_");
-  centroidColumns.push_back(lp::Col(VectorIndex::kClusterId));
-  centroidColumns.push_back(lp::Col(VectorIndex::kCentroid));
-  const auto centroidsName = VectorIndex::centroidsTableName(table, index.name);
+  // The rows of the storage table 'name' in the refreshed partitions.
+  const auto scanPartitions =
+      [&](const facebook::axiom::SchemaTableName& name) {
+        return addCondition(
+            rows.newPlan().tableScan(connectorId, name.schema, name.table));
+      };
+
+  // The partition columns of a storage table, each named 'prefix' + the
+  // partition's name in 'rows'.
+  const auto partitionsAs = [&](std::string_view prefix) {
+    std::vector<lp::ExprApi> columns;
+    columns.reserve(partitions.size());
+    for (size_t i = 0; i < partitions.size(); ++i) {
+      columns.push_back(
+          lp::Col(partitionColumns[i])
+              .as(fmt::format("{}{}", prefix, partitions[i])));
+    }
+    return columns;
+  };
+
+  // The centroids of this refresh's codecs.
   auto centroids =
-      rows.newPlan()
-          .tableScan(connectorId, centroidsName.schema, centroidsName.table)
+      scanPartitions(VectorIndex::centroidsTableName(table, index.name))
           .filter(lp::Col(codecIdColumn) == codecId)
-          .project(centroidColumns);
+          .project(
+              ColumnExprs::concat(
+                  partitionsAs("c_"),
+                  {lp::Col(VectorIndex::kClusterId),
+                   lp::Col(VectorIndex::kCentroid)}));
 
   // The build reads the query again, so it can see a partition the train did
   // not, e.g. one a concurrent write added to the query's input. Such a row
@@ -296,7 +303,7 @@ lp::LogicalPlanNodePtr planBuild(
           // Each row's nearest centroid of its partition's codec.
           .vectorSearch(
               centroids,
-              condition,
+              ColumnExprs::equal(partitions, "c_"),
               lp::JoinType::kLeft,
               {
                   .probeEmbedding = std::string(kEmbedding),
@@ -325,26 +332,44 @@ lp::LogicalPlanNodePtr planBuild(
           .aggregate(
               ColumnExprs::concat(
                   partitionKeys, {lp::Col("cluster_id"), lp::Col("group_id")}),
-              {lp::Call(
-                   "vector_index_build",
-                   lp::Col(kEmbedding),
-                   lp::Col(kKey),
-                   lp::Lit(indexType),
-                   lp::Lit(metric),
-                   lp::Lit(Variant::map(options), MAP(VARCHAR(), VARCHAR())))
-                   .as("local_index")})
+              {
+                  lp::Call(
+                      "vector_index_build",
+                      lp::Col(kEmbedding),
+                      lp::Col(kKey),
+                      lp::Lit(
+                          VectorIndexKindName::toName(
+                              index.properties.indexKind)),
+                      lp::Lit(
+                          VectorIndexMetricName::toName(
+                              index.properties.metric)),
+                      lp::Lit(Variant::map(options), MAP(VARCHAR(), VARCHAR())))
+                      .as("local_index"),
+              })
           .project(
               ColumnExprs::concat(
-                  ColumnExprs::renamed(partitions, "b_"),
-                  {lp::Col("cluster_id"),
-                   lp::Col("group_id"),
-                   lp::Col("local_index")}));
+                  partitionKeys,
+                  {
+                      lp::Col("cluster_id"),
+                      lp::Col("group_id"),
+                      lp::Col("local_index"),
+                  }));
 
-  return lp::PlanBuilder(selected)
-      .join(
-          localIndexes,
-          *ColumnExprs::equal(partitions, "b_"),
-          lp::JoinType::kLeft)
+  // The partitions with no valid rows: those the train plan wrote a NULL codec
+  // for.
+  auto emptyPartitions =
+      scanPartitions(index.codecTable)
+          .filter(
+              lp::Col(codecIdColumn) == codecId &&
+              lp::Col(VectorIndex::kCodec).isNull())
+          .project(
+              ColumnExprs::concat(
+                  partitionsAs(""),
+                  {lp::NullLit(BIGINT()).as("cluster_id"),
+                   lp::NullLit(BIGINT()).as("group_id"),
+                   lp::NullLit(VECTOR_INDEX()).as("local_index")}));
+
+  return localIndexes.unionAll(emptyPartitions)
       .tableWrite(
           connectorId,
           index.indexTable.schema,
@@ -369,7 +394,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const facebook::axiom::SchemaTableName& table,
     const VectorIndex& index,
     const std::string& connectorId,
-    const std::function<lp::PlanBuilder()>& makeQuery) {
+    const std::function<lp::PlanBuilder()>& makeQuery,
+    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition) {
   const auto& partitionColumns = index.partitionColumns->names();
   VELOX_CHECK(!partitionColumns.empty());
   const auto codecId = lp::Placeholder(BIGINT(), 1);
@@ -377,21 +403,15 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
   const auto makeRows = [&]() {
     return validRows(index, partitions, namedRows(partitions, makeQuery()));
   };
-  const auto makeSelected = [&]() {
-    return selectedPartitions(partitions, makeQuery());
-  };
-  const auto metric =
-      std::string(VectorIndexMetricName::toName(index.properties.metric));
   return {
       .trainPlan = planTrain(
           index,
           connectorId,
           partitions,
           codecId,
-          metric,
           partitionSizes(partitions, "n_", makeQuery()),
           makeRows(),
-          makeSelected()),
+          selectedPartitions(partitions, makeQuery())),
       .buildPlan = planBuild(
           table,
           index,
@@ -399,9 +419,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
           partitionColumns,
           partitions,
           codecId,
-          metric,
           makeRows(),
-          makeSelected()),
+          addCondition),
   };
 }
 

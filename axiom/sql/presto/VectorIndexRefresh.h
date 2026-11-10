@@ -29,7 +29,8 @@ namespace axiom::sql::presto {
 ///
 /// Example:
 ///
-///   auto plans = VectorIndexRefresh::plan(table, index, connectorId, query);
+///   auto plans = VectorIndexRefresh::plan(
+///       table, index, connectorId, makeQuery, addCondition);
 ///   // Inside the index write, run plans.trainPlan, then plans.buildPlan,
 ///   // each with the write's codec id as the value of ?1.
 class VectorIndexRefresh {
@@ -42,6 +43,10 @@ class VectorIndexRefresh {
   /// columns. The plans read the query several times, and a logical plan is a
   /// tree, so each call of 'makeQuery' must plan it again, with new names.
   ///
+  /// 'addCondition' adds the query's condition on the partition columns to a
+  /// scan of a storage table of the index, which has the same partition
+  /// columns, so the plans read only the refreshed partitions of the index.
+  ///
   /// The index holds only valid rows. A row is skipped when its key is NULL, or
   /// its embedding is NULL, of another length than the index's dimension, has
   /// a NULL or non-finite element, has a zero norm, or has a NULL partition
@@ -53,7 +58,10 @@ class VectorIndexRefresh {
       const facebook::axiom::connector::VectorIndex& index,
       const std::string& connectorId,
       const std::function<facebook::axiom::logical_plan::PlanBuilder()>&
-          makeQuery);
+          makeQuery,
+      const std::function<facebook::axiom::logical_plan::PlanBuilder(
+          facebook::axiom::logical_plan::PlanBuilder storageScan)>&
+          addCondition);
 };
 
 } // namespace axiom::sql::presto

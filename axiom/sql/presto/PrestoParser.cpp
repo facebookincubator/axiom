@@ -304,6 +304,19 @@ class RelationPlanner : public AstVisitor {
     return *builder_;
   }
 
+  // Returns 'storageScan', a scan of a storage table of an index of the table
+  // 'node' refreshes, which has the table's partition columns, filtered by the
+  // condition of 'node'. The table's name qualifies the columns, as it does in
+  // the condition.
+  lp::PlanBuilder addVectorIndexCondition(
+      const RefreshVectorIndex& node,
+      lp::PlanBuilder storageScan) {
+    builder_ = std::make_shared<lp::PlanBuilder>(std::move(storageScan));
+    builder_->as(canonicalizeName(node.tableName()->suffix()));
+    addFilter(node.where());
+    return *builder_;
+  }
+
   const ViewMap& views() const {
     return views_;
   }
@@ -3003,9 +3016,14 @@ SqlStatementPtr parseRefreshVectorIndex(
       indexName);
 
   RelationPlanner planner(session, defaultConnectorId, defaultSchema, parseSql);
-  auto plans = VectorIndexRefresh::plan(tableName, *index, connectorId, [&]() {
-    return planner.planVectorIndexRows(refresh, *index);
-  });
+  auto plans = VectorIndexRefresh::plan(
+      tableName,
+      *index,
+      connectorId,
+      [&]() { return planner.planVectorIndexRows(refresh, *index); },
+      [&](lp::PlanBuilder storageScan) {
+        return planner.addVectorIndexCondition(refresh, std::move(storageScan));
+      });
 
   // The plans read the table, and the codec table to find each row's cluster.
   auto inputTables = planner.inputTables();

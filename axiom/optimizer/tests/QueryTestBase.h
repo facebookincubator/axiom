@@ -26,6 +26,7 @@
 #include "axiom/optimizer/v1/RelationOp.h"
 #include "axiom/optimizer/v1/VeloxHistory.h"
 #include "axiom/runner/LocalRunner.h"
+#include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -128,6 +129,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// Parses a DELETE using 'defaultConnectorId_' to resolve its table name.
   logical_plan::LogicalPlanNodePtr parseDelete(std::string_view sql);
 
+  /// Parses a REFRESH VECTOR INDEX using 'defaultConnectorId_' to resolve its
+  /// table name, and returns its plans.
+  ::axiom::sql::presto::RefreshVectorIndexStatement::Plans parseRefresh(
+      std::string_view sql);
+
   /// @param planFilePathPrefix If specified, writes the query graph, optimized
   /// and executable plans to files with specified path prefix.
   optimizer::PlanAndStats planVelox(
@@ -150,6 +156,12 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
+
+  /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
+  /// order of position, with the default options.
+  optimizer::PlanAndStats planVelox(
+      const logical_plan::LogicalPlanNodePtr& plan,
+      const std::vector<velox::Variant>& placeholderValues);
 
   /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
   /// order of position. Only the v2 optimizer binds placeholders.
