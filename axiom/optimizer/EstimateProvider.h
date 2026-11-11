@@ -25,18 +25,19 @@
 
 namespace facebook::axiom::optimizer {
 
-/// Cardinality and per-column constraints of an IR subtree whose shape is
-/// fixed (a join-cluster leaf or barrier subtree, not a set reordered by
-/// DPhyp). `cardinality` is the estimated row count.
-/// `constraints` holds the refined per-column `Value` (ndv, min/max,
-/// null/true fraction) keyed by `expr->id()`, so a downstream join's fanout
-/// uses post-filter NDV rather than base-table NDV. Columns absent from
-/// `constraints` fall back to `Column::value()`.
+/// Row count and per-column constraints of an IR subtree whose shape is fixed
+/// (a join-cluster leaf or barrier subtree, not a set reordered by DPhyp).
 struct Estimate {
   /// Estimated row count; nullopt when unknown, at least 1 when known. A
   /// missing input statistic propagates rather than being replaced by a
   /// concrete fallback.
   std::optional<float> cardinality;
+
+  /// `cardinality` when known. Otherwise the most rows the subtree can produce
+  /// given what is known of its inputs, or nullopt when nothing bounds it: an
+  /// aggregation emits at most its input rows, whatever its keys' NDVs. At
+  /// least 1 when known.
+  std::optional<float> maxCardinality;
 
   /// Refined per-column `Value` (ndv, min/max, null/true fraction) keyed by
   /// `expr->id()`. Columns absent here fall back to `Column::value()`.
@@ -57,6 +58,11 @@ struct Estimate {
 /// memo stays valid while the statistics of the nodes it read do not change,
 /// including a loop's state: a read of the state estimated before
 /// `estimateLoopState` stays unknown.
+///
+/// Estimates describe the relation a node computes, not how placement splits
+/// it. A step that exists only once placed and runs on each driver -- a
+/// partial aggregation, Limit, TopN or TopNRowNumber -- is estimated as the
+/// node it was split from, though together its drivers may emit more rows.
 ///
 /// Usage: `const Estimate& e = estimateProvider.estimate(node);`
 class EstimateProvider {
@@ -90,7 +96,9 @@ class EstimateProvider {
   const Estimate& estimateLoopState(const FixedPoint& loop, NodeCP anchor);
 
  private:
-  // Computes the estimate for `node` from its inputs' estimates.
+  // Computes the estimate for `node` from its inputs' estimates. The
+  // `maxCardinality` it derives matters only when `cardinality` is unknown:
+  // `estimate` replaces it with a known `cardinality`.
   Estimate compute(NodeCP node);
 
   // Returns the state of the loop whose first state column is 'key', from

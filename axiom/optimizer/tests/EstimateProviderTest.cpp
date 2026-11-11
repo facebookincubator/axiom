@@ -139,6 +139,19 @@ class EstimateProviderTest : public optimizer::test::QueryTestBase {
       const MultiFragmentPlan::Options& options,
       std::optional<float> cardinality,
       const std::function<void(NodeCP root, const Estimate& estimate)>& check) {
+    forEachPlacement(plan, options, [&](NodeCP root, const Estimate& estimate) {
+      EXPECT_EQ(estimate.cardinality, cardinality);
+      check(root, estimate);
+    });
+  }
+
+  // Calls 'check' with the root of 'plan' and its estimate, planned to just
+  // before and just after physical planning on the workers and drivers of
+  // 'options'.
+  void forEachPlacement(
+      const logical_plan::LogicalPlanNode& plan,
+      const MultiFragmentPlan::Options& options,
+      const std::function<void(NodeCP root, const Estimate& estimate)>& check) {
     for (const auto pass :
          {Optimizer::Pass::kLowerRepeat, Optimizer::Pass::kPlanPhysical}) {
       SCOPED_TRACE(
@@ -149,12 +162,43 @@ class EstimateProviderTest : public optimizer::test::QueryTestBase {
           pass,
           [&](NodeCP root) {
             EstimateProvider estimateProvider;
-            const Estimate& estimate = estimateProvider.estimate(root);
-            EXPECT_EQ(estimate.cardinality, cardinality);
-            check(root, estimate);
+            check(root, estimateProvider.estimate(root));
           },
           options);
     }
+  }
+
+  // Returns the cardinality and max cardinality estimated for the root of the
+  // plan 'sql' parses to, which are the same before and after placement on 4
+  // workers with 4 drivers each.
+  std::pair<std::optional<float>, std::optional<float>> estimateRows(
+      std::string_view sql) {
+    SCOPED_TRACE(sql);
+    std::vector<std::pair<std::optional<float>, std::optional<float>>> rows;
+    forEachPlacement(
+        *parseSelect(sql),
+        {.maxRemotePartitions = 4, .maxLocalPartitions = 4},
+        [&](NodeCP /*root*/, const Estimate& estimate) {
+          rows.emplace_back(estimate.cardinality, estimate.maxCardinality);
+        });
+    VELOX_CHECK_EQ(rows.size(), 2);
+    EXPECT_EQ(rows[0], rows[1]);
+    return rows[0];
+  }
+
+  // Returns the estimate of the first node of 'type' in the plan 'sql' parses
+  // to, after 'pass'.
+  Estimate
+  estimateNode(std::string_view sql, Optimizer::Pass pass, NodeType type) {
+    SCOPED_TRACE(sql);
+    Estimate result;
+    verifyOptimization(*parseSelect(sql), pass, [&](NodeCP root) {
+      NodeCP node = findNode(root, type);
+      VELOX_CHECK_NOT_NULL(node, "No node: {}", NodeTypeName::toName(type));
+      EstimateProvider estimateProvider;
+      result = estimateProvider.estimate(node);
+    });
+    return result;
   }
 
   // Returns the estimated statistics of the output column of 'root'
@@ -404,6 +448,15 @@ TEST_F(EstimateProviderTest, aggregate) {
       });
 }
 
+// A GroupId emits each input row once per grouping set.
+TEST_F(EstimateProviderTest, groupId) {
+  const Estimate estimate = estimateNode(
+      "SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS ((a), (b))",
+      Optimizer::Pass::kPlanPhysical,
+      NodeType::kGroupId);
+  EXPECT_EQ(estimate.cardinality, 20'000);
+}
+
 // With several drivers, an aggregation splits into a partial step and a final
 // one. The final step's results have the statistics the aggregation has before
 // the split: max(a) is one of the filtered values of 'a', and so are the keys
@@ -577,9 +630,173 @@ TEST_F(EstimateProviderTest, join) {
       });
 }
 
+// The max cardinality is the estimate when known. Otherwise it bounds the rows
+// a missing NDV leaves unestimated: 'u' has 1'000 rows and no column
+// statistics, and neither has 'e' of 't'.
+TEST_F(EstimateProviderTest, maxCardinality) {
+  {
+    auto [cardinality, maxCardinality] = estimateRows("SELECT a FROM t");
+    EXPECT_EQ(cardinality, 10'000);
+    EXPECT_EQ(maxCardinality, 10'000);
+  }
+
+  // An aggregation emits at most one row per input row.
+  {
+    auto [cardinality, maxCardinality] =
+        estimateRows("SELECT c, count(*) FROM u GROUP BY 1");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 1'000);
+  }
+
+  // Each grouping set emits its own groups.
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT c, d, count(*) FROM u GROUP BY GROUPING SETS ((c), (d))");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 2'000);
+  }
+
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT c FROM (SELECT c, count(*) FROM u GROUP BY 1) LIMIT 10");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10);
+  }
+
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT c FROM (SELECT c, count(*) FROM u GROUP BY 1) "
+        "UNION ALL "
+        "SELECT a FROM t");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 11'000);
+  }
+
+  // A row_number ranking with no partitions keeps at most 'limit' rows.
+  {
+    const auto sql =
+        "SELECT * FROM ("
+        "  SELECT c, row_number() OVER (ORDER BY d) AS rn "
+        "  FROM (SELECT c, d FROM u GROUP BY 1, 2)"
+        ") WHERE rn <= 5";
+    auto [cardinality, maxCardinality] = estimateRows(sql);
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 5);
+  }
+
+  // Every pair of rows may match.
+  {
+    auto [cardinality, maxCardinality] =
+        estimateRows("SELECT t.a, u.d FROM t JOIN u ON t.a = u.c");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10'000'000);
+  }
+
+  // The right side has one row per key, so each row of 't' appears once.
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT t.a, v.n "
+        "FROM t JOIN (SELECT c, count(*) AS n FROM u GROUP BY 1) v "
+        "ON t.a = v.c");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10'000);
+  }
+
+  // A full join also emits the rows that match nothing.
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT t.a, v.c "
+        "FROM t FULL JOIN (SELECT c FROM u GROUP BY 1 LIMIT 1) v ON t.a = v.c");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10'001);
+  }
+
+  // A counting join emits each row of 't' at most once.
+  {
+    auto [cardinality, maxCardinality] =
+        estimateRows("SELECT a FROM t INTERSECT ALL SELECT c FROM u");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10'000);
+  }
+
+  // An unnest may emit any number of rows per input row.
+  {
+    auto [cardinality, maxCardinality] = estimateRows(
+        "SELECT x "
+        "FROM (SELECT c, d FROM u GROUP BY 1, 2) "
+        "CROSS JOIN UNNEST(ARRAY[c, d]) AS r(x)");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, std::nullopt);
+  }
+
+  // A semi join emits only rows of 't'.
+  {
+    auto [cardinality, maxCardinality] =
+        estimateRows("SELECT a FROM t WHERE a IN (SELECT c FROM u)");
+    EXPECT_EQ(cardinality, std::nullopt);
+    EXPECT_EQ(maxCardinality, 10'000);
+  }
+}
+
+// A scalar subquery has at most one row: a second fails the query.
+TEST_F(EstimateProviderTest, enforceSingleRow) {
+  auto [cardinality, maxCardinality] =
+      estimateRows("SELECT (SELECT c FROM u WHERE d = 5) AS x");
+  EXPECT_EQ(cardinality, 1);
+  EXPECT_EQ(maxCardinality, 1);
+}
+
+// A search of rows keeps the 'k' nearest items for each query: 2 for each of
+// the 10 queries, out of the 10'000 pairs it matches.
+TEST_F(EstimateProviderTest, vectorSearch) {
+  testConnector_
+      ->addTable(
+          "queries",
+          velox::ROW(
+              {"name", "embedding"},
+              {velox::VARCHAR(), velox::ARRAY(velox::REAL())}))
+      ->setStats(10, {});
+  testConnector_
+      ->addTable(
+          "items",
+          velox::ROW(
+              {"id", "embedding"},
+              {velox::BIGINT(), velox::ARRAY(velox::REAL())}))
+      ->setStats(1'000, {});
+  const auto index = testConnector_->addVectorIndex(
+      "items",
+      {.name = "items_index",
+       .column = "embedding",
+       .key = {"id"},
+       .properties = {
+           {"distance_metric", velox::Variant("cosine")},
+           {"index_type", velox::Variant("flat")},
+           {"num_clusters", velox::Variant(int64_t{4})},
+           {"dimension", velox::Variant(int64_t{2})},
+       }});
+  testConnector_->findTable(index->indexTable)->setStats(1'000, {});
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("queries");
+    testConnector_->dropTableIfExists("items");
+  };
+
+  // A later pass lowers the search into searches of the index.
+  const Estimate estimate = estimateNode(
+      "SELECT name, id "
+      "FROM TABLE(vector_search("
+      "   queries => TABLE(SELECT name, embedding FROM queries), "
+      "   corpus => TABLE(items), embeddings => DESCRIPTOR(embedding), "
+      "   metric => 'cosine', k => 2, score => DESCRIPTOR(score)))",
+      Optimizer::Pass::kTranslate,
+      NodeType::kVectorSearch);
+  EXPECT_EQ(estimate.cardinality, 20);
+}
+
 TEST_F(EstimateProviderTest, limit) {
-  for (std::string_view sql :
-       {"SELECT a FROM t LIMIT 10", "SELECT a FROM t ORDER BY a LIMIT 10"}) {
+  for (std::string_view sql : {
+           "SELECT a FROM t LIMIT 10",
+           "SELECT a FROM t ORDER BY a LIMIT 10",
+       }) {
     verifyEstimate(sql, 10, [&](NodeCP root, const Estimate& estimate) {
       ASSERT_EQ(1, root->outputColumns().size());
 

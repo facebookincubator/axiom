@@ -68,6 +68,7 @@ Estimate remap(
   VELOX_CHECK_EQ(from.size(), to.size());
   Estimate result;
   result.cardinality = estimate.cardinality;
+  result.maxCardinality = estimate.maxCardinality;
   for (size_t i = 0; i < from.size(); ++i) {
     result.constraints.insert_or_assign(
         to[i]->id(), value(estimate.constraints, from[i]));
@@ -172,20 +173,14 @@ Value groupingKeyValue(const Value& key, std::optional<float> numGroups) {
   return result;
 }
 
-// The row count of an outer join that emits each row of its kept side once:
-// the other side is unique on its join keys, so the count holds whatever the
-// key NDVs. Nullopt for any other join.
+// The row count of a left or right join that emits each row of its kept side
+// once, whatever the key NDVs. Nullopt for any other join.
 std::optional<float> keptRowsOfOuterJoin(
-    const Join& join,
+    velox::core::JoinType joinType,
+    const Join::Sides& emittedOnce,
     std::optional<float> leftCardinality,
     std::optional<float> rightCardinality) {
-  const Join::Sides emittedOnce = Join::emittedOnceSides(
-      join.joinType(),
-      join.left(),
-      join.right(),
-      join.leftKeys(),
-      join.rightKeys());
-  switch (join.joinType()) {
+  switch (joinType) {
     case velox::core::JoinType::kLeft:
       return emittedOnce.left ? leftCardinality : std::nullopt;
     case velox::core::JoinType::kRight:
@@ -193,6 +188,45 @@ std::optional<float> keptRowsOfOuterJoin(
     default:
       return std::nullopt;
   }
+}
+
+// The smaller of two row bounds. An unknown bound limits nothing.
+std::optional<float> tighterBound(
+    std::optional<float> lhs,
+    std::optional<float> rhs) {
+  if (!lhs.has_value()) {
+    return rhs;
+  }
+  if (!rhs.has_value()) {
+    return lhs;
+  }
+  return std::min(*lhs, *rhs);
+}
+
+// The most rows a join of 'joinType' can emit given the bounds of its inputs.
+// An input whose rows each appear at most once in the output (see
+// `Join::emittedOnceSides`) bounds it, since every output row carries one of
+// them, and a counting join emits only left rows, each at most once. Otherwise
+// every pair of rows may match, and a full join also emits each row that
+// matches nothing: at most max(left * right, left + right) rows.
+std::optional<float> maxRowsOfJoin(
+    velox::core::JoinType joinType,
+    const Join::Sides& emittedOnce,
+    std::optional<float> leftMax,
+    std::optional<float> rightMax) {
+  if (velox::core::isCountingJoin(joinType)) {
+    return leftMax;
+  }
+  if (emittedOnce.left || emittedOnce.right) {
+    return tighterBound(
+        emittedOnce.left ? leftMax : std::nullopt,
+        emittedOnce.right ? rightMax : std::nullopt);
+  }
+  const std::optional<float> pairs = mul(leftMax, rightMax);
+  if (joinType == velox::core::JoinType::kFull) {
+    return maxOf(pairs, add(leftMax, rightMax));
+  }
+  return pairs;
 }
 
 } // namespace
@@ -206,19 +240,22 @@ const Estimate& EstimateProvider::estimate(NodeCP node) {
     return it->second;
   }
   Estimate result = compute(node);
+  if (result.cardinality.has_value()) {
+    result.maxCardinality = result.cardinality;
+  }
   capNdvAtCardinality(node->outputColumns(), result);
 
-  // A known cardinality estimate is finite, since estimate arithmetic
-  // saturates (see EstimateMath.h), and at least 1.
-  if (result.cardinality.has_value()) {
+  // A known max cardinality, which a known cardinality equals, is finite,
+  // since estimate arithmetic saturates (see EstimateMath.h), and at least 1.
+  if (result.maxCardinality.has_value()) {
     VELOX_CHECK(
-        std::isfinite(*result.cardinality),
-        "Cardinality estimate is not finite. Node: {}",
+        std::isfinite(*result.maxCardinality),
+        "Max cardinality is not finite. Node: {}",
         node->nodeTypeName());
     VELOX_CHECK_GE(
-        *result.cardinality,
+        *result.maxCardinality,
         1.0f,
-        "Cardinality estimate must be at least 1. Node: {}",
+        "Max cardinality must be at least 1. Node: {}",
         node->nodeTypeName());
   }
   return byNode_.emplace(node, std::move(result)).first->second;
@@ -306,8 +343,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
     case NodeType::kFilter: {
       const auto* filter = node->as<Filter>();
       const auto& input = estimate(filter->input());
-      Estimate result;
-      result.constraints = input.constraints;
+      Estimate result = input;
       const auto sel = conjunctsSelectivity(
           result.constraints,
           toSpan(filter->predicates()),
@@ -345,6 +381,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
         result.cardinality = maxOf(
             1.0f,
             estimateNumGroups(groupingKeys, expressions, input.cardinality));
+        result.maxCardinality = input.maxCardinality;
       }
       // An aggregate emits one row per group, so each output column has at most
       // `cardinality` distinct values. Output columns are the grouping keys,
@@ -367,25 +404,14 @@ Estimate EstimateProvider::compute(NodeCP node) {
       return result;
     }
 
-    case NodeType::kLimit: {
-      const auto* limit = node->as<Limit>();
-      const auto& input = estimate(limit->input());
-      Estimate result;
-      result.constraints = input.constraints;
-      const float limitCount =
-          std::max(1.0f, static_cast<float>(limit->count()));
-      result.cardinality = minOf(input.cardinality, limitCount);
-      return result;
-    }
-
+    case NodeType::kLimit:
     case NodeType::kTopN: {
-      const auto* topN = node->as<TopN>();
-      const auto& input = estimate(topN->input());
-      Estimate result;
-      result.constraints = input.constraints;
-      const float limitCount =
-          std::max(1.0f, static_cast<float>(topN->count()));
-      result.cardinality = minOf(input.cardinality, limitCount);
+      const auto count = node->is(NodeType::kLimit) ? node->as<Limit>()->count()
+                                                    : node->as<TopN>()->count();
+      const float limitCount = std::max(1.0f, static_cast<float>(count));
+      Estimate result = estimate(node->inputs()[0]);
+      result.cardinality = minOf(result.cardinality, limitCount);
+      result.maxCardinality = tighterBound(result.maxCardinality, limitCount);
       return result;
     }
 
@@ -430,7 +456,9 @@ Estimate EstimateProvider::compute(NodeCP node) {
       if (join->joinType() == velox::core::JoinType::kLeft &&
           join->index()->distribution.numKeysUnique() >=
               join->lookupKeys().size()) {
-        result.cardinality = estimate(join->probe()).cardinality;
+        const auto& probe = estimate(join->probe());
+        result.cardinality = probe.cardinality;
+        result.maxCardinality = probe.maxCardinality;
       }
       return result;
     }
@@ -442,15 +470,20 @@ Estimate EstimateProvider::compute(NodeCP node) {
       // Sum of children. Unknown propagates: an unknown child cardinality
       // makes the union cardinality unknown.
       std::optional<float> total{0.0f};
+      result.maxCardinality = 0.0f;
       std::vector<std::optional<float>> cardinalities;
       for (NodeCP input : inputs) {
-        cardinalities.push_back(estimate(input).cardinality);
-        total = add(total, cardinalities.back());
+        const Estimate& inputEstimate = estimate(input);
+        cardinalities.push_back(inputEstimate.cardinality);
+        total = add(total, inputEstimate.cardinality);
+        result.maxCardinality =
+            add(result.maxCardinality, inputEstimate.maxCardinality);
       }
       result.cardinality = maxOf(1.0f, total);
       const auto& outputColumns = unionAll->outputColumns();
       for (size_t i = 0; i < outputColumns.size(); ++i) {
         std::vector<const Value*> inputValues;
+        inputValues.reserve(inputs.size());
         for (size_t j = 0; j < inputs.size(); ++j) {
           inputValues.push_back(&value(
               estimate(inputs[j]).constraints, unionAll->legColumns()[j][i]));
@@ -481,8 +514,14 @@ Estimate EstimateProvider::compute(NodeCP node) {
       mergeConstraints(left.constraints, result.constraints);
       mergeConstraints(right.constraints, result.constraints);
 
-      result.cardinality =
-          keptRowsOfOuterJoin(*join, left.cardinality, right.cardinality);
+      const Join::Sides emittedOnce = Join::emittedOnceSides(
+          join->joinType(),
+          join->left(),
+          join->right(),
+          join->leftKeys(),
+          join->rightKeys());
+      result.cardinality = keptRowsOfOuterJoin(
+          join->joinType(), emittedOnce, left.cardinality, right.cardinality);
       if (!result.cardinality.has_value()) {
         // Matched-row count is unknown when any join-key NDV is unknown; that
         // propagates through to the output cardinality.
@@ -503,6 +542,11 @@ Estimate EstimateProvider::compute(NodeCP node) {
                 join->filter(),
                 result.constraints));
       }
+      result.maxCardinality = maxRowsOfJoin(
+          join->joinType(),
+          emittedOnce,
+          left.maxCardinality,
+          right.maxCardinality);
       JoinConstraints::refineInnerKeys(
           join->joinType(),
           join->leftKeys(),
@@ -527,8 +571,10 @@ Estimate EstimateProvider::compute(NodeCP node) {
     }
 
     case NodeType::kVectorSearch: {
-      // Each matching pair of a left row and a right row gives up to 'k'
-      // rows, and a left search keeps every left row.
+      // A search of indexes finds up to 'k' rows for each pair of a query row
+      // and a matching index. A search of rows finds up to 'k' rows for each
+      // query row, among the rows it matches; its query side is `left`. A left
+      // search keeps every left row.
       const auto* search = node->as<VectorSearch>();
       const auto& left = estimate(search->left());
       const auto& right = estimate(search->right());
@@ -541,7 +587,17 @@ Estimate EstimateProvider::compute(NodeCP node) {
           search->leftKeys(),
           search->rightKeys(),
           result.constraints);
-      result.cardinality = mul(matched, static_cast<float>(search->k()));
+      const float k = static_cast<float>(search->k());
+      const std::optional<float> maxPairs =
+          mul(left.maxCardinality, right.maxCardinality);
+      if (search->searchesIndexes()) {
+        result.cardinality = mul(matched, k);
+        result.maxCardinality = mul(maxPairs, k);
+      } else {
+        result.cardinality = minOf(matched, mul(left.cardinality, k));
+        result.maxCardinality =
+            tighterBound(maxPairs, mul(left.maxCardinality, k));
+      }
       if (search->joinType() == velox::core::JoinType::kLeft) {
         result.cardinality = maxOf(left.cardinality, result.cardinality);
       }
@@ -582,11 +638,13 @@ Estimate EstimateProvider::compute(NodeCP node) {
       }
 
       const auto& input = estimate(node->inputs()[0]);
-      Estimate result;
-      result.constraints = input.constraints;
-      result.cardinality = input.cardinality;
+      Estimate result = input;
       if (!limit.has_value() || !capsPartition) {
         return result;
+      }
+      if (partitionKeys.empty()) {
+        result.maxCardinality = tighterBound(
+            input.maxCardinality, static_cast<float>(limit.value()));
       }
 
       const std::optional<float> numPartitions = estimateNumGroups(
@@ -635,11 +693,11 @@ Estimate EstimateProvider::compute(NodeCP node) {
       return remap(*state, read->stateColumns(), read->outputColumns());
     }
 
+    // Emits at most one row; a second row fails the query.
     case NodeType::kEnforceSingleRow: {
-      const auto& input = estimate(node->inputs()[0]);
       Estimate result;
-      result.cardinality = input.cardinality;
-      result.constraints = input.constraints;
+      result.cardinality = 1;
+      result.constraints = estimate(node->inputs()[0]).constraints;
       return result;
     }
 
@@ -647,9 +705,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
       // Each output takes the estimate of its expression over the input's.
       const auto* project = node->as<Project>();
       const auto& input = estimate(node->inputs()[0]);
-      Estimate result;
-      result.cardinality = input.cardinality;
-      result.constraints = input.constraints;
+      Estimate result = input;
       ConstraintMap expressions = input.constraints;
       ExprEstimator estimator{expressions};
       for (size_t i = 0; i < project->exprs().size(); ++i) {
@@ -667,19 +723,26 @@ Estimate EstimateProvider::compute(NodeCP node) {
     case NodeType::kMarkDistinct:
     case NodeType::kAssignUniqueId:
     case NodeType::kEnforceDistinct:
-    case NodeType::kGroupId:
-    case NodeType::kExchange:
-    case NodeType::kApply: {
+    case NodeType::kExchange: {
       const auto inputs = node->inputs();
       if (inputs.empty()) {
         return Estimate{};
       }
-      const auto& input = estimate(inputs[0]);
-      Estimate result;
-      result.cardinality = input.cardinality;
-      result.constraints = input.constraints;
+      return estimate(inputs[0]);
+    }
+
+    case NodeType::kGroupId: {
+      // Emits each input row once per grouping set.
+      const auto numSets =
+          static_cast<float>(node->as<GroupId>()->groupingSets().size());
+      Estimate result = estimate(node->inputs()[0]);
+      result.cardinality = mul(result.cardinality, numSets);
+      result.maxCardinality = mul(result.maxCardinality, numSets);
       return result;
     }
+
+    case NodeType::kApply:
+      VELOX_UNREACHABLE("Decorrelation removes every Apply before estimation");
   }
   VELOX_UNREACHABLE("EstimateProvider::compute: unhandled NodeType");
 }
