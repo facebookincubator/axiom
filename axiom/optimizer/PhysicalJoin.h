@@ -35,12 +35,19 @@ class PhysicalJoin {
   /// Returns a `Join` reading each key as a column: an expression key is
   /// computed by a `Project` on the side that produces it, and 'key.filter' is
   /// rewritten to read that column rather than evaluate the same expression
-  /// per pair. Each side's projection outputs only what the join reads, so an
-  /// input column kept solely to feed a key stops below it. In a loop's step,
-  /// marks the build loop-invariant when it can be (see
-  /// `Join::Key::buildIsLoopInvariant`).
-  static NodeCP
-  makeJoin(Join::Key key, Builder& builder, ExprSimplifier& simplifier);
+  /// per pair. 'filterInputs' are the inputs whose projection also computes
+  /// the parts of 'key.filter' that read only them (see `JoinInputRewriter`),
+  /// so each part is evaluated once per row of its input rather than once per
+  /// pair the join matches. Each side's projection goes below the side's
+  /// exchange, if it has one, and outputs only what the exchange and the join
+  /// read, so an input column kept solely to feed a key or a moved part stops
+  /// below them. In a loop's step, marks the build loop-invariant when it can
+  /// be (see `Join::Key::buildIsLoopInvariant`).
+  static NodeCP makeJoin(
+      Join::Key key,
+      Join::Sides filterInputs,
+      Builder& builder,
+      ExprSimplifier& simplifier);
 
   /// Returns an `Unnest` reading each unnested value as a column, computed by
   /// a `Project` below it. That projection outputs only the replicated columns

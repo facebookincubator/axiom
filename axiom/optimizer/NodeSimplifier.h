@@ -223,14 +223,6 @@ class NodeSimplifier {
   // Simplifies a join; defined in JoinSimplifier.cpp.
   class JoinSimplifier;
 
-  // Precomputes each side-local part of a keyless join filter on the input
-  // that supplies it.
-  void precomputeCrossJoinFilter(
-      NodeCP& left,
-      NodeCP& right,
-      ExprVector& filter,
-      const ColumnVector& sourceColumns);
-
   // Applies input substitutions and simplifies each expression.
   ExprVector simplifyExpressions(
       const PlanSubstitutions& substitutions,

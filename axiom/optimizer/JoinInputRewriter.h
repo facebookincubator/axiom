@@ -24,9 +24,10 @@ namespace facebook::axiom::optimizer {
 /// Moves the parts of expressions over a join that read a single input into
 /// that input, where each is evaluated once per row of the input.
 ///
-/// A cross join evaluates its filter once for every pair of input rows, while a
-/// part of the filter reading only one side has the same value for every pair
-/// built from a given row of that side:
+/// A join evaluates its filter once for every pair of input rows it matches,
+/// while a part of the filter reading only one side has the same value for
+/// every pair built from a given row of that side. Join planning decides which
+/// inputs take their parts. A cross join matches every pair, so both do:
 ///
 ///   SELECT ... FROM big, small WHERE big.threshold < length(small.name)
 ///
@@ -67,11 +68,6 @@ namespace facebook::axiom::optimizer {
 /// the branches of `if`, `switch` and `coalesce` and at anything inside a `try`
 /// -- though each of these still moves as a unit when one input supplies all
 /// of its columns.
-///
-/// TODO: Extend the filter's move to equi joins. Their filter is evaluated only
-/// on the pairs that matched on the keys, and there can be fewer of those than
-/// either input has rows, so the move pays only when the estimated number of
-/// pairs reaching the filter exceeds the rows on the side the expression reads.
 class JoinInputRewriter {
  public:
   /// An input that computes the parts of the expressions that read only its
