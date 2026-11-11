@@ -1011,7 +1011,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // substituted into, and the projection producing them may not survive.
     access_.addAll(pushable);
 
-    PlanObjectSet outputsKept = context.required;
+    PlanObjectSet outputsKept = context.requiredAbove;
     outputsKept.unionColumns(blocked);
     ExprVector survivingExprs;
     ColumnVector survivingOutputs;
@@ -1133,7 +1133,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       }
     }
 
-    PlanObjectSet outputsKept = context.required;
+    PlanObjectSet outputsKept = context.requiredAbove;
     outputsKept.unionColumns(blocked);
     AggregateCallVector survivingAggregates;
     ColumnVector survivingOutputs(groupingKeyOutputs);
@@ -2431,7 +2431,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // the columns read by conjuncts that stay above. The marker keeps the rows
     // of an empty unnested value rather than carrying a value of its own, so
     // dropping it would drop those rows; keep it whether or not it is read.
-    PlanObjectSet outputsKept = context.required;
+    PlanObjectSet outputsKept = context.requiredAbove;
     outputsKept.unionColumns(blocked);
     if (node->isOuter()) {
       outputsKept.add(node->markerColumn());
@@ -2656,7 +2656,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
     blockNondeterministic(pushable, blocked);
 
-    PlanObjectSet outputsKept = context.required;
+    PlanObjectSet outputsKept = context.requiredAbove;
     outputsKept.unionColumns(blocked);
 
     PushdownContext childContext;
@@ -2865,7 +2865,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       PushdownContext& context) override {
     const PlanObjectSet idColumn = PlanObjectSet::single(node->idColumn());
     auto [pushable, blocked] = partition(context.pending, idColumn);
-    PlanObjectSet outputsKept = context.required;
+    PlanObjectSet outputsKept = context.requiredAbove;
     outputsKept.unionColumns(blocked);
 
     PushdownContext childContext =

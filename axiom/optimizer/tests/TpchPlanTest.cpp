@@ -654,6 +654,7 @@ TEST_F(TpchPlanTest, q17) {
   // aggregating lineitem once per l_partkey and joining the result back to the
   // outer, so each part's average is computed once rather than once per outer
   // row (Gap 1 in TpchV1V2PlanComparison.md), with no AssignUniqueId.
+  // The join outputs only what the aggregation above reads.
   auto matcher =
       matchScan("lineitem")
           .hashJoinInner(
@@ -664,8 +665,8 @@ TEST_F(TpchPlanTest, q17) {
                           .filter(
                               "p_brand = 'Brand#23' and p_container = 'MED BOX'")
                           .project({"p_partkey"})),
-              {.filter = "l_quantity < avg * 0.2"})
-          .project()
+              {.filter = "l_quantity < avg * 0.2",
+               .outputColumnNames = {{"l_extendedprice"}}})
           .aggregation()
           .project()
           .build();
@@ -746,12 +747,11 @@ TEST_F(TpchPlanTest, q20) {
               "l_shipdate >= date '1994-01-01' and l_shipdate < date '1995-01-01'")
           .project({"l_partkey", "l_suppkey", "l_quantity"})
           .aggregation()
-          .hashJoinRight(matchScan("partsupp")
-                             .hashJoinLeftSemiProject(
-                                 matchScan("part")
-                                     .filter("like(p_name, 'forest%')")
-                                     .project({"p_partkey"}))
-                             .filter("mark1"))
+          .hashJoinRight(
+              matchScan("partsupp")
+                  .hashJoinLeftSemiFilter(matchScan("part")
+                                              .filter("like(p_name, 'forest%')")
+                                              .project({"p_partkey"})))
           .filter("cast(ps_availqty as double) > sum * 0.5")
           .project()
           .hashJoinRightSemiFilter(
