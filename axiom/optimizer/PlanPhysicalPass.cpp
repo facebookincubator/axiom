@@ -2727,14 +2727,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          .globalGroupingSets = node->globalGroupingSets()});
   }
 
-  // True when 'node' is a DISTINCT: an aggregate with grouping keys only.
+  // True when 'node' is a DISTINCT aggregate.
   static bool isDistinct(NodeCP node) {
-    if (!node->is(NodeType::kAggregate)) {
-      return false;
-    }
-    const auto* aggregate = node->as<Aggregation>();
-    return aggregate->aggregates().empty() &&
-        !aggregate->groupingKeys().empty();
+    return node->is(NodeType::kAggregate) &&
+        node->as<Aggregation>()->isDistinctOnly();
   }
 
   // True when 'node' can two-stage into partial + final, independent of whether

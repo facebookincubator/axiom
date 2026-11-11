@@ -129,6 +129,9 @@ Pruning and simplification work:
   unique IDs, and unused outputs from other nodes.
 - Replaces constant-false filters and joins with the appropriate empty or
   preserved-side plan.
+- Removes a DISTINCT aggregate whose input is already unique on a subset of its
+  grouping keys, and drops a DISTINCT aggregate below another DISTINCT whose
+  grouping keys are deterministic functions of the inner grouping keys.
 - Specializes eligible ranking windows to `RowNumber` or `TopNRowNumber` and
   consumes compatible rank bounds.
 - Replaces an `Unnest` with a non-empty-input test when duplicate rows and

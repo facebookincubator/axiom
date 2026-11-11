@@ -325,6 +325,43 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   return input;
 }
 
+namespace {
+
+// Returns the input of the distinct-only aggregation 'input', with
+// 'groupingKeys' rewritten over that input. Grouping the returned input on the
+// rewritten keys produces the same distinct combinations as grouping 'input' on
+// 'groupingKeys'. Returns nullptr and leaves 'groupingKeys' unchanged when
+// 'input' is not such an aggregation or a key is non-deterministic. A key above
+// the inner aggregation runs once per inner group, and a key over the inner
+// aggregation's input runs once per row.
+NodeCP
+distinctInput(NodeCP input, ExprVector& groupingKeys, ExprFactory& exprs) {
+  if (!input->is(NodeType::kAggregate)) {
+    return nullptr;
+  }
+  const auto* aggregation = input->as<Aggregation>();
+  if (aggregation->step() != AggregateStep::kSingle ||
+      !aggregation->isDistinctOnly() ||
+      !aggregation->globalGroupingSets().empty()) {
+    return nullptr;
+  }
+  if (std::ranges::any_of(groupingKeys, [](ExprCP key) {
+        return key->containsNonDeterministic();
+      })) {
+    return nullptr;
+  }
+
+  const ColumnVector groupingOutputs(
+      aggregation->outputColumns().begin(),
+      aggregation->outputColumns().begin() +
+          aggregation->groupingKeys().size());
+  groupingKeys = exprs.substitute(
+      groupingKeys, groupingOutputs, aggregation->groupingKeys());
+  return aggregation->input();
+}
+
+} // namespace
+
 NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     Aggregation::Key key,
     SimplifiedNode input) {
@@ -341,6 +378,30 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   }
 
   VELOX_CHECK_EQ(key.step, AggregateStep::kSingle);
+  if (Aggregation::isDistinctOnly(key.groupingKeys, key.aggregates) &&
+      key.globalGroupingSets.empty()) {
+    ExprVector groupingKeys =
+        simplifyExpressions(input.substitutions, key.groupingKeys);
+    if (input.node->uniqueOn(groupingKeys)) {
+      // Every grouping-key combination occurs once, so each input row is its
+      // own group.
+      return make(
+          Project::Key{
+              input.node,
+              std::move(key.groupingKeys),
+              std::move(key.outputColumns)},
+          std::move(input));
+    }
+    if (NodeCP below = distinctInput(input.node, groupingKeys, exprs_)) {
+      return make(
+          Aggregation::Key{
+              .input = below,
+              .groupingKeys = std::move(groupingKeys),
+              .outputColumns = std::move(key.outputColumns)},
+          SimplifiedNode{below, {}});
+    }
+  }
+
   key.input = input.node;
   key.groupingKeys = simplifyExpressions(input.substitutions, key.groupingKeys);
   key.aggregates = input.substitutions.apply(key.aggregates, exprs_, builder_);

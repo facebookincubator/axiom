@@ -219,6 +219,12 @@ class Node : public PlanObject {
   /// global ones after.
   bool atMostOneRow() const;
 
+  /// True when this node has at most one row for each value of 'keys': some
+  /// unique key is a subset of the keys that are columns. Keys that are not
+  /// columns only refine the values, so they are ignored. Requires a non-empty
+  /// 'keys'.
+  bool uniqueOn(const ExprVector& keys) const;
+
   /// Inputs in dependency order; empty for leaves. Returns a view into
   /// node-owned storage; callers must not retain it past the node's
   /// lifetime.
@@ -893,6 +899,18 @@ class Aggregation : public Node {
 
   const QGVector<int32_t>& globalGroupingSets() const {
     return globalGroupingSets_;
+  }
+
+  /// True if an aggregate with these grouping keys and aggregate functions is
+  /// a DISTINCT: it has grouping keys and no aggregate functions, so it only
+  /// removes duplicate grouping-key combinations.
+  static bool isDistinctOnly(
+      const ExprVector& groupingKeys,
+      const AggregateCallVector& aggregates);
+
+  /// True if this aggregate is a DISTINCT. See the static overload.
+  bool isDistinctOnly() const {
+    return isDistinctOnly(groupingKeys_, aggregates_);
   }
 
   std::span<const NodeCP> inputs() const override {
