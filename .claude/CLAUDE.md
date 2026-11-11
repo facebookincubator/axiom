@@ -541,6 +541,14 @@ Producing the globally best plan for every query is not a requirement.
   must account consistently for the work each candidate requires.
 - Choose the best candidate considered under those models. Investigate a poor
   plan for missing information, model errors, bugs, or unexplored alternatives.
+- Produce sensible plans for as many queries as possible, not a plan for every
+  query at any cost. When the only plan available does far more work than the
+  query's operation normally needs, fail at planning with a user error that
+  names what is missing. The point is not to push work onto users. It is to
+  spare them a surprise bill and the time spent debugging a query that runs far
+  slower than they expected. For example, a vector search with no usable index
+  would compare every query with every row. A user who knows the cost and
+  accepts it can still write that plan explicitly.
 
 Build general capabilities:
 

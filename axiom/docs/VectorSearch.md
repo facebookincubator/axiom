@@ -60,6 +60,9 @@ flowchart TD
   linkStyle default stroke:#270f36
 ```
 
+The connector names the two storage tables. The names above are Local
+Hive's.
+
 | Table | One row per | Columns |
 |---|---|---|
 | Codec table | partition and codec | `codec`, partition columns, `codec_id` |
@@ -81,7 +84,7 @@ seven centroids into one value:
 
 ![A codec packs a partition's centroids into one value](images/vector_index_codec.svg)
 
-The engine reserves a third name, `"t$<index>$centroids"`, for a table of
+The engine reserves one name, `"t$<index>$centroids"`, for a virtual table of
 `(partition columns, codec_id, cluster_id, centroid)` with a row per cluster.
 Nothing stores or writes it. A vector search of it is planned as a search of
 the codec table, which lets a logical plan assign rows to clusters. It has the
@@ -121,11 +124,11 @@ The index does not follow its table's data. Only REFRESH builds it.
 
 | Engine | Connector |
 |---|---|
-| Defines the storage tables' types and names | Creates, stores and drops the storage tables |
+| Defines the storage tables' types and reserves the centroids table's name | Names, creates, stores and drops the storage tables |
 | Validates index definitions | Records the link between `t` and its indexes |
 | Plans REFRESH: training, assignment, building | Commits index writes and generates codec ids |
 | Plans the search and picks the index | Checks coverage from a handle's filters |
-| Rejects schema changes that drop or rename the embedding or key column | Removes a partition from the index when a write changes its rows |
+| | Removes a partition from the index when a write changes its rows |
 
 This reverses the usual roles. For a table or a lookup index, the connector
 describes what it has and the optimizer adapts. For a vector index, the
@@ -160,7 +163,8 @@ WITH (distance_metric = 'cosine', index_type = 'ivf_flat',
 
 - The key defaults to the table's primary key and must be one BIGINT column.
 - The properties choose the metric, the local index type, the number of
-  clusters per partition and the embeddings' length. Any other property is a
+  clusters per partition and the embeddings' length. `index_options`, a map,
+  sets options of each local index, such as `ivf.nlist`. Any other property is a
   table property of both storage tables, which the connector defines, e.g.
   Local Hive's `format` and `compression_kind`.
 - The engine validates the definition, then the connector creates the storage
@@ -196,7 +200,7 @@ partitions are those with no NULL value, from the connector's partition list.
 TableWrite <codec table>, codec_id = ?1
   LeftJoin on partitions
     selected partitions
-    Aggregate vector_index_train(embedding, key, num_clusters, metric)
+    Aggregate vector_index_train(embedding, key, num_clusters, metric, options)
               by partitions
       Filter xxhash64(key) < cutoff(num_rows)
         Join on partitions
@@ -235,7 +239,7 @@ TableWrite <index table>, codec_id = ?1
 - **Group.** Rows are numbered within each cluster and split into groups of
   up to 50,000.
 - **Build.** The `vector_index_build` aggregate builds a local index of the
-  index's type over each group.
+  index's type over each group, with the index's `index_options`.
 - A partition the train plan gave a NULL codec gets a row of NULL local
   index. Each worker writes the local indexes it builds.
 - The scans of the centroids and codec tables read only the refreshed
@@ -244,8 +248,9 @@ TableWrite <index table>, codec_id = ?1
 The build reads `t` again. A row of a partition the train plan did not see,
 e.g. one a concurrent write added, has no codec and fails the refresh.
 
-REFRESH does not read the index's existing partitions. A selected partition
-that is already covered fails the refresh.
+REFRESH does not read the index's existing partitions or check their
+coverage. A refresh of a covered partition fails only when the connector
+rejects an insert into an existing partition, as Local Hive does.
 
 ### Index writes
 
@@ -282,7 +287,8 @@ Filter rank <= k
   filters and calls `TableLayout::co_checkVectorIndexCoverage`, which fails
   if a selected partition is not covered.
 - **Assign.** The first search matches each query with its partitions' codecs
-  and returns its `num_probes` nearest clusters in each.
+  and returns its `num_probes` nearest clusters in each. Without the hint,
+  `num_probes` is a tenth of `num_clusters`, rounded up.
 - **Search.** The second search matches each (query, partition, codec,
   cluster) with that cluster's local indexes and returns up to `k` rows from
   each, with scores.
@@ -311,7 +317,8 @@ whose partitions have no local indexes yet.
 
 Both searches run as Velox's `VectorSearchJoinNode`. Like a hash join, it
 holds its build side in memory and streams its probe side. Either side can
-have the indexes, and the optimizer holds the one with fewer estimated bytes:
+have the indexes. For an INNER search, the optimizer holds the side with fewer
+estimated bytes. Other searches hold the indexes:
 
 - With the indexes held, the build side decodes each codec or local index
   once and maps the equality keys to it. The probe groups a batch's rows by
@@ -326,13 +333,39 @@ have the indexes, and the optimizer holds the one with fewer estimated bytes:
 
 The search fails at planning:
 
+- for a search of anything other than a column of a table, optionally
+  filtered;
 - without an index on the searched column with the search's metric, or with
   several and no `index` hint;
+- for an `index` hint that names no index of the table, or an index on
+  another column or with another metric;
 - for a condition on a column other than a partition column, which would need
-  a filtered search inside a local index;
-- for a join other than INNER, for join keys, or for reading a column of `t`
-  other than the key and the partition columns;
-- for a search of a centroids table with a metric other than the index's.
+  a filtered search inside a local index, or for a non-deterministic
+  condition;
+- for a search through an index with a join other than INNER, with join keys,
+  or reading a column of `t` other than the key and the partition columns;
+- for a search of a centroids table with a metric other than the index's, or
+  with a key on `cluster_id`.
+
+A search the index cannot serve can be written as an exact search, which
+compares each query with every row. It reads the whole table and costs far
+more than a search through the index, so `vector_search` never falls back to
+it:
+
+```sql
+SELECT *
+FROM (
+    SELECT
+        q.id AS query_id,
+        p.id,
+        row_number() OVER (
+            PARTITION BY q.id
+            ORDER BY cosine_similarity(q.embedding, p.embedding) DESC) AS rank
+    FROM queries q
+    CROSS JOIN products p
+    WHERE p.ds = '2026-11-01')
+WHERE rank <= 10
+```
 
 ## Implementing a connector
 
@@ -352,9 +385,9 @@ The API is in `axiom/connectors/ConnectorMetadata.h`.
 - **Add an index.** `co_addVectorIndex` validates the definition (an
   ARRAY(REAL) embedding column, a BIGINT key column) and calls
   `co_doAddVectorIndex`. The connector creates the storage tables with
-  `VectorIndex::codecTableType` and `indexTableType` and records the link. By
-  default the tables live in `t`'s schema as `<t>__<i>__codecs` and
-  `<t>__<i>__index`. `co_doCreateTable` receives the indexes a CREATE TABLE
+  `VectorIndex::codecTableType` and `indexTableType`, names them and records
+  the link. Local Hive names them `<t>__<i>__codecs` and `<t>__<i>__index` in
+  `t`'s schema. `co_doCreateTable` receives the indexes a CREATE TABLE
   declares, as `ResolvedVectorIndex`.
 - **Drop an index.** `dropVectorIndex` calls `doDropVectorIndex`, which
   removes the link and the tables. Dropping `t` drops its indexes.
@@ -441,8 +474,8 @@ join:
 - The per-query merge that the search plans today keeps the `k` best overall.
 
 The connector advertises the index in the table's layout, as it advertises
-lookup keys. The optimizer chooses between the index stored apart, the index
-in each file, and an exact search. With a cluster-aligned layout, the lookup
+lookup keys. The optimizer chooses between the index stored apart and the
+index in each file. With a cluster-aligned layout, the lookup
 also prunes files by cluster.
 
 ## Not supported yet
@@ -464,9 +497,19 @@ also prunes files by cluster.
   Bucketing or sorting the index table by `cluster_id`, and passing the
   probed clusters to the index scan as a dynamic filter, lets the scan skip
   the rest.
-- **Rebuild a covered partition.** Once connectors support INSERT OVERWRITE,
-  REFRESH can write a new codec and overwrite the partition's local indexes in
-  one swap. Finish already drops the old codec.
+- **Rebuild a covered partition.** Add INSERT OVERWRITE to the engine and the
+  connectors, and have REFRESH use it: write a new codec and overwrite the
+  partition's local indexes in one swap. Finish already drops the old codec.
+  Until then, whether a refresh of a covered partition fails is up to the
+  connector.
+- **Hold the queries in a LEFT search.** Velox can hold either side of a LEFT
+  search, preserving the queries as a RIGHT search with the indexes on the
+  probe side. The optimizer swaps sides only for INNER searches, so a LEFT
+  search always holds the indexes. REFRESH's search of the centroids is LEFT,
+  and holding its few codecs is right there.
+- **Protect the indexed columns from schema changes.** Once the engine
+  supports DROP COLUMN and RENAME COLUMN, it rejects them for an index's
+  embedding and key columns.
 - **One listing per query.** The coverage check lists partitions at planning,
   and split generation lists the index's partitions again. Once connectors
   keep per-query state, split generation can reuse the listing.
