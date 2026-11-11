@@ -41,8 +41,10 @@ Registry& registryFor(const QueryCtx& queryCtx) {
 
 // static
 Registry& ConnectorMetadataRegistry::global() {
-  static Registry kMetadataRegistry;
-  return kMetadataRegistry;
+  // Leaked: entries own memory pools that must not be released after the
+  // Velox MemoryManager is destroyed during static destruction.
+  static auto* kMetadataRegistry = new Registry();
+  return *kMetadataRegistry;
 }
 
 // static
