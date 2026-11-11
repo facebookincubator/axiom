@@ -316,6 +316,10 @@ SELECT 1 INTERSECT SELECT a FROM t
 -- duckdb: VALUES (100)
 SELECT 100 EXCEPT SELECT a FROM t
 ----
+-- An EXCEPT whose other leg is one constant removes that value and keeps the
+-- NULL row.
+SELECT nullif(a, 2) FROM t EXCEPT SELECT CAST(1 AS BIGINT)
+----
 -- A UNION whose inputs all give each output the same constant returns one row
 -- when an input has rows and none otherwise.
 -- count 0

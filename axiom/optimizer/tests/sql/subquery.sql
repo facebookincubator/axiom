@@ -156,6 +156,84 @@ WHERE EXISTS (
   WHERE left_u.a = outer_u.a
 )
 ----
+-- An EXISTS over one row holds where its condition is true. For t.a = 2 the
+-- condition is NULL, and the row is dropped.
+SELECT t.a, t.b, u.a
+FROM t, u
+WHERE EXISTS (SELECT 1 WHERE nullif(t.a, 2) = u.a)
+----
+-- NOT EXISTS over one row keeps the rows whose condition is NULL.
+-- disabled_v1: v1 drops the rows whose condition is NULL
+SELECT t.a, t.b, u.a
+FROM t, u
+WHERE NOT EXISTS (SELECT 1 WHERE nullif(t.a, 2) = u.a)
+----
+-- A projected EXISTS over one row is false where its condition is NULL.
+-- disabled_v1: v1 returns NULL where the condition is NULL
+SELECT t.a, t.b, u.a, EXISTS (SELECT 1 WHERE nullif(t.a, 2) = u.a)
+FROM t, u
+----
+-- The same EXISTS under an OR.
+SELECT t.a, t.b, u.a
+FROM t, u
+WHERE EXISTS (SELECT 1 WHERE nullif(t.a, 2) = u.a) OR u.a = 5
+----
+-- An IN in WHERE over one row whose comparison reads the outer row drops the
+-- rows whose comparison is NULL.
+SELECT t.a, t.b, u.a
+FROM t, u
+WHERE nullif(t.a, 2) IN (SELECT u.a)
+----
+-- An EXISTS over one row that reads only the outer row, in WHERE and projected.
+-- disabled_v1: v1 returns NULL where the condition is NULL
+SELECT a, b, EXISTS (SELECT 1 WHERE nullif(a, 2) > 1)
+FROM t
+WHERE EXISTS (SELECT 1 WHERE nullif(a, 1) < 3)
+----
+-- A nondeterministic condition is evaluated once per row: no returned row reads
+-- its EXISTS as false.
+-- duckdb: SELECT 0
+SELECT count_if(NOT e)
+FROM (
+    SELECT a, EXISTS (SELECT 1 WHERE a >= 0 AND random() < 0.5) AS e
+    FROM t)
+WHERE e
+----
+-- A nondeterministic condition of an EXISTS over one row still filters.
+SELECT count(*)
+FROM t
+WHERE EXISTS (SELECT 1 WHERE a > 1 AND random() < 0)
+----
+-- A correlated EXISTS with a condition on the outer row alone beside its key.
+-- Rows with a NULL key or a NULL condition find no match.
+SELECT t.a, t.b
+FROM t
+WHERE EXISTS (
+    SELECT 1 FROM u WHERE u.a = nullif(t.a, 3) AND nullif(t.b, 40) > 30)
+----
+-- The same as NOT EXISTS.
+-- disabled_v1: v1 drops the row whose condition is NULL
+SELECT t.a, t.b
+FROM t
+WHERE NOT EXISTS (
+    SELECT 1 FROM u WHERE u.a = nullif(t.a, 3) AND nullif(t.b, 40) > 30)
+----
+-- The same, projected.
+-- disabled_v1: v1 returns NULL where the condition is NULL
+SELECT t.a, t.b, EXISTS (
+    SELECT 1 FROM u WHERE u.a = nullif(t.a, 3) AND nullif(t.b, 40) > 30)
+FROM t
+----
+-- An IN over one row whose WHERE holds on every row is the comparison.
+SELECT a, b, a IN (SELECT 1 WHERE b < 1000)
+FROM t
+----
+-- A projected EXISTS over one row whose outer side fixes a column to a constant
+-- through an IN.
+SELECT a, b, EXISTS (SELECT 1 WHERE b > 100)
+FROM t
+WHERE a IN (SELECT 2 WHERE b > 0)
+----
 -- IN over a correlated inner join returns false for an empty left input, NULL
 -- for only an unknown comparison, and true for a match.
 -- error_v1: Nested correlation across subquery boundaries is not supported yet
