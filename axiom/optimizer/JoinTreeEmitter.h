@@ -52,16 +52,7 @@ class JoinTreeEmitter {
   /// bucketing of a relation the plan reads grouped (see `GroupedRead`).
   /// `oneDriverPerTask` says whether each task runs one driver, which every
   /// exchange the tree adds states (see `Exchange::placementAfter`).
-  static NodeCP emit(
-      MemoOpCP root,
-      const JoinHypergraph& graph,
-      const ColumnVector& rootOutputColumns,
-      Builder& builder,
-      ExprSimplifier& simplifier,
-      int32_t numWorkers,
-      bool oneDriverPerTask);
-
-  /// Emits the tree using `joinFactory` to construct each Join step.
+  /// `joinFactory` constructs each Join step.
   static NodeCP emit(
       MemoOpCP root,
       const JoinHypergraph& graph,
@@ -83,17 +74,8 @@ class JoinTreeEmitter {
   /// `numWorkers > 1` broadcasts each cross-product build so a single-task
   /// (Values / global-aggregate) or scan component is not co-located with
   /// another component in one fragment.
-  static NodeCP emitComponents(
-      const std::vector<MemoOpCP>& componentRoots,
-      const JoinHypergraph& graph,
-      const ColumnVector& rootOutputColumns,
-      Builder& builder,
-      ExprSimplifier& simplifier,
-      int32_t numWorkers,
-      bool oneDriverPerTask);
-
-  /// Emits the component trees using `joinFactory` within each component and
-  /// `crossJoinFactory` to combine components.
+  /// `joinFactory` constructs the joins within each component and
+  /// `crossJoinFactory` the joins that combine components.
   static NodeCP emitComponents(
       const std::vector<MemoOpCP>& componentRoots,
       const JoinHypergraph& graph,

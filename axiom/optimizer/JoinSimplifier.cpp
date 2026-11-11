@@ -875,21 +875,6 @@ NodeSimplifier::JoinSimplifier::eliminateSingleRowBuild() {
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::JoinSimplifier::makeJoin() {
-  if (key_.leftKeys.empty()) {
-    ColumnVector requiredColumns = key_.effectiveSourceColumns();
-    if (markerWhenBuildHasRows_ != nullptr) {
-      PlanObjectSet required = PlanObjectSet::fromObjects(requiredColumns);
-      markerWhenBuildHasRows_->columns().forEach<Column>([&](ColumnCP column) {
-        if (required.contains(column)) {
-          return;
-        }
-        required.add(column);
-        requiredColumns.push_back(column);
-      });
-    }
-    nodes_.precomputeCrossJoinFilter(
-        key_.left, key_.right, key_.filter, requiredColumns);
-  }
   if (markerWhenBuildHasRows_ != nullptr) {
     return makeJoinWithMarker();
   }

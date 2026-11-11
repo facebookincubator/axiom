@@ -868,28 +868,6 @@ NodeCP JoinTreeEmitter::emit(
     Builder& builder,
     ExprSimplifier& simplifier,
     int32_t numWorkers,
-    bool oneDriverPerTask) {
-  const auto joinFactory = [&](Join::Key key) {
-    return PhysicalJoin::makeJoin(std::move(key), builder, simplifier);
-  };
-  return emit(
-      root,
-      graph,
-      rootOutputColumns,
-      builder,
-      simplifier,
-      numWorkers,
-      oneDriverPerTask,
-      joinFactory);
-}
-
-NodeCP JoinTreeEmitter::emit(
-    MemoOpCP root,
-    const JoinHypergraph& graph,
-    const ColumnVector& rootOutputColumns,
-    Builder& builder,
-    ExprSimplifier& simplifier,
-    int32_t numWorkers,
     bool oneDriverPerTask,
     JoinFactory joinFactory) {
   VELOX_CHECK_NOT_NULL(root);
@@ -915,32 +893,6 @@ NodeCP JoinTreeEmitter::emit(
   checkRootOutput(result, rootOutputColumns);
   checkAllConjunctsPlaced(state);
   return result;
-}
-
-NodeCP JoinTreeEmitter::emitComponents(
-    const std::vector<MemoOpCP>& componentRoots,
-    const JoinHypergraph& graph,
-    const ColumnVector& rootOutputColumns,
-    Builder& builder,
-    ExprSimplifier& simplifier,
-    int32_t numWorkers,
-    bool oneDriverPerTask) {
-  const auto joinFactory = [&](Join::Key key) {
-    return PhysicalJoin::makeJoin(std::move(key), builder, simplifier);
-  };
-  const auto crossJoinFactory = [&](Join::Key key) {
-    return builder.make<Join>(std::move(key));
-  };
-  return emitComponents(
-      componentRoots,
-      graph,
-      rootOutputColumns,
-      builder,
-      simplifier,
-      numWorkers,
-      oneDriverPerTask,
-      joinFactory,
-      crossJoinFactory);
 }
 
 NodeCP JoinTreeEmitter::emitComponents(

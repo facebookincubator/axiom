@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <numeric>
+#include <span>
 #include <vector>
 
 #include <folly/container/F14Map.h>
@@ -29,6 +30,7 @@
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/CostModel.h"
 #include "axiom/optimizer/DPhyp.h"
+#include "axiom/optimizer/EstimateMath.h"
 #include "axiom/optimizer/EstimateProvider.h"
 #include "axiom/optimizer/ExprFactory.h"
 #include "axiom/optimizer/ExprSimplifier.h"
@@ -36,6 +38,7 @@
 #include "axiom/optimizer/GroupedRead.h"
 #include "axiom/optimizer/HypergraphBuilder.h"
 #include "axiom/optimizer/JoinCluster.h"
+#include "axiom/optimizer/JoinFanout.h"
 #include "axiom/optimizer/JoinInputRewriter.h"
 #include "axiom/optimizer/JoinPartitioning.h"
 #include "axiom/optimizer/JoinTreeEmitter.h"
@@ -926,6 +929,34 @@ bool entersSide(const Join& join, NodeCP side) {
   return preservesSide && passesThrough(join, side);
 }
 
+// Returns true when 'input' has fewer rows than the times an expression that
+// reads only its columns is evaluated above it, so computing the expression at
+// 'input' costs less. That count is 'evaluations' when known. Otherwise it is
+// taken as the rows of the largest of 'others', the relations joined with
+// 'input': a many-to-one join yields about one row per row of its largest
+// input. An unknown size among 'others' is skipped, which leaves a smaller
+// largest. An input with at most one row always qualifies.
+bool hasFewerRows(
+    NodeCP input,
+    std::optional<float> evaluations,
+    std::span<const NodeCP> others,
+    EstimateProvider& estimateProvider) {
+  if (input->atMostOneRow()) {
+    return true;
+  }
+  if (!evaluations.has_value()) {
+    for (NodeCP other : others) {
+      const std::optional<float> rows =
+          estimateProvider.estimate(other).cardinality;
+      if (other != input && rows.has_value() &&
+          !(evaluations.has_value() && *evaluations >= *rows)) {
+        evaluations = rows;
+      }
+    }
+  }
+  return lessThan(estimateProvider.estimate(input).maxCardinality, evaluations);
+}
+
 // Computes the parts of a consumer's expressions that read a single relation
 // of the join tree below the consumer at that relation, when the relation has
 // fewer rows than the tree's output, so each part runs once per row of the
@@ -983,7 +1014,7 @@ class SmallRelationExpressions {
         estimateProvider_.estimate(input).cardinality;
     std::vector<NodeCP> small;
     for (NodeCP relation : relations) {
-      if (hasFewerRows(relation, outputRows)) {
+      if (hasFewerRows(relation, outputRows, relations, estimateProvider_)) {
         small.push_back(relation);
       }
     }
@@ -1091,17 +1122,6 @@ class SmallRelationExpressions {
     }
     VELOX_CHECK(node->is(NodeType::kUnnest));
     return node->as<Unnest>()->input();
-  }
-
-  // True when 'relation' has fewer rows than 'outputRows', the rows of the
-  // tree over it, or has at most one row.
-  bool hasFewerRows(NodeCP relation, std::optional<float> outputRows) {
-    if (relation->atMostOneRow()) {
-      return true;
-    }
-    const std::optional<float> rows =
-        estimateProvider_.estimate(relation).cardinality;
-    return rows.has_value() && outputRows.has_value() && *rows < *outputRows;
   }
 
   // Returns 'node' outputting the columns in 'needed' that it produces, each
@@ -1927,7 +1947,38 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       std::tie(join.left, join.leftKeys) =
           ensureDriverCoLocated(join.left, join.leftKeys);
     }
-    return PhysicalJoin::makeJoin(std::move(join), builder(), simplifier_);
+    const Join::Sides inputsWithParts = filterInputs(join);
+    return PhysicalJoin::makeJoin(
+        std::move(join), inputsWithParts, builder(), simplifier_);
+  }
+
+  // Returns the inputs of 'join' that compute the parts of its filter that
+  // read only them: those with fewer rows than the pairs the join matches on
+  // its keys, on each of which it evaluates its filter. A join without keys
+  // matches every pair, so both inputs do.
+  Join::Sides filterInputs(const Join::Key& join) {
+    if (join.filter.empty()) {
+      return {};
+    }
+    if (join.leftKeys.empty()) {
+      return {.left = true, .right = true};
+    }
+    const Estimate& left = estimateProvider_.estimate(join.left);
+    const Estimate& right = estimateProvider_.estimate(join.right);
+    ConstraintMap constraints = left.constraints;
+    constraints.insert(right.constraints.begin(), right.constraints.end());
+    const std::optional<float> pairs = JoinFanout::estimateJoinCardinality(
+        left.cardinality,
+        right.cardinality,
+        join.leftKeys,
+        join.rightKeys,
+        constraints);
+    return {
+        .left =
+            hasFewerRows(join.left, pairs, {&join.right, 1}, estimateProvider_),
+        .right =
+            hasFewerRows(join.right, pairs, {&join.left, 1}, estimateProvider_),
+    };
   }
 
   // Adds the exchanges required by a join outside DPhyp and translates it.

@@ -1072,3 +1072,30 @@ SELECT l.x, r.k, r.j
 FROM (VALUES (1), (2), (3), (NULL)) AS l(x)
 FULL JOIN (VALUES (1, 1), (1, 2), (2, 2), (2, 2), (NULL, NULL)) AS r(k, j)
   ON l.x = r.k AND l.x = r.j
+----
+-- A filter whose parts each read one input, on keys that match many rows on
+-- both sides. The inputs may compute their parts below the join.
+SELECT count(*)
+FROM t_large l
+JOIN t_large r ON l.k = r.k AND l.v % 7 > r.v % 5
+----
+-- The same filter on a left join keeps the left rows it rejects.
+SELECT count(*), count(r.v)
+FROM t_large l
+LEFT JOIN t_large r ON l.k = r.k AND l.v % 7 > r.v % 5
+----
+-- The same filter in a semi join.
+SELECT count(*)
+FROM t_large l
+WHERE EXISTS (
+  SELECT 1
+  FROM t_large r
+  WHERE r.k = l.k AND l.v % 7 > r.v % 5)
+----
+-- The same filter in an anti join.
+SELECT count(*)
+FROM t_large l
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM t_large r
+  WHERE r.k = l.k AND l.v % 7 > r.v % 5)

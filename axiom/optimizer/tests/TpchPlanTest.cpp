@@ -654,7 +654,8 @@ TEST_F(TpchPlanTest, q17) {
   // aggregating lineitem once per l_partkey and joining the result back to the
   // outer, so each part's average is computed once rather than once per outer
   // row (Gap 1 in TpchV1V2PlanComparison.md), with no AssignUniqueId.
-  // The join outputs only what the aggregation above reads.
+  // The join filter's 0.2 * avg is computed once per part, below the join,
+  // and the join outputs only what the aggregation above reads.
   auto matcher =
       matchScan("lineitem")
           .hashJoinInner(
@@ -664,8 +665,10 @@ TEST_F(TpchPlanTest, q17) {
                       matchScan("part")
                           .filter(
                               "p_brand = 'Brand#23' and p_container = 'MED BOX'")
-                          .project({"p_partkey"})),
-              {.filter = "l_quantity < avg * 0.2",
+                          .project({"p_partkey"}))
+                  .aliases({"k", "a"})
+                  .project({"k", "a * 0.2 as p"}),
+              {.filter = "l_quantity < p",
                .outputColumnNames = {{"l_extendedprice"}}})
           .aggregation()
           .project()
@@ -708,29 +711,66 @@ TEST_F(TpchPlanTest, q19) {
   // post-join Filter: the common per-side conjuncts are pushed to each scan
   // (shipmode / shipinstruct / quantity-range on lineitem; brand / container /
   // size on part), and only the cross-side terms ride as the join filter.
+  // Their part-side terms are computed once per part, below the join.
   // hashJoin -> project here asserts there is no intervening post-join Filter.
-  auto matcher =
+  const std::string lineitemFilter =
+      "\"and\"(l_shipmode in ('AIR', 'AIR REG'), "
+      " l_shipinstruct = 'DELIVER IN PERSON', "
+      " (l_quantity >= 1.0 and l_quantity <= 11.0) or "
+      " (l_quantity >= 10.0 and l_quantity <= 20.0) or "
+      " (l_quantity >= 20.0 and l_quantity <= 30.0))";
+
+  const std::vector<std::string> lineitemColumns = {
+      "l_partkey",
+      "l_quantity",
+      "l_extendedprice",
+      "l_discount",
+  };
+  const std::string partFilter =
+      "(p_brand = 'Brand#12' "
+      "  and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG') "
+      "  and p_size between 1 and 5) "
+      "or (p_brand = 'Brand#23' "
+      "  and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK') "
+      "  and p_size between 1 and 10) "
+      "or (p_brand = 'Brand#34' "
+      "  and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG') "
+      "  and p_size between 1 and 15)";
+
+  const std::vector<std::string> partTerms = {
+      "p_partkey",
+      "p_brand = 'Brand#12' and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')",
+      "p_size between 1 and 5",
+      "p_brand = 'Brand#23' and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')",
+      "p_size between 1 and 10",
+      "p_brand = 'Brand#34' and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')",
+      "p_size between 1 and 15",
+  };
+
+  AXIOM_ASSERT_PLAN(
+      planTpch(19),
       matchScan("lineitem")
-          .filter(
-              "\"and\"(l_shipmode in ('AIR', 'AIR REG'), "
-              "l_shipinstruct = 'DELIVER IN PERSON', "
-              "(l_quantity >= 1.0 and l_quantity <= 11.0) or "
-              "(l_quantity >= 10.0 and l_quantity <= 20.0) or "
-              "(l_quantity >= 20.0 and l_quantity <= 30.0))")
-          .project({"l_partkey", "l_quantity", "l_extendedprice", "l_discount"})
-          .hashJoinInner(matchScan("part").filter(
-              "(p_brand = 'Brand#12' and p_container in ('SM CASE', "
-              "'SM BOX', 'SM PACK', 'SM PKG') and p_size between 1 and 5) or "
-              "(p_brand = 'Brand#23' and p_container in ('MED BAG', "
-              "'MED BOX', 'MED PKG', 'MED PACK') and p_size between 1 and 10) or "
-              "(p_brand = 'Brand#34' and p_container in ('LG CASE', "
-              "'LG BOX', 'LG PACK', 'LG PKG') and p_size between 1 and 15)"))
+          .filter(lineitemFilter)
+          .project(lineitemColumns)
+          .hashJoinInner(
+              matchScan("part").filter(partFilter).project(partTerms))
           .project()
           .aggregation()
-          .build();
-  AXIOM_ASSERT_PLAN(planTpch(19), matcher);
+          .build());
 
-  ASSERT_NO_THROW(planTpchMultiNode({.query = 19, .numDrivers = 1}));
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planTpchMultiNode({.query = 19, .numDrivers = 1}),
+      matchScan("lineitem")
+          .multiThreaded(false)
+          .filter(lineitemFilter)
+          .project(lineitemColumns)
+          .hashJoinInner(matchScan("part")
+                             .filter(partFilter)
+                             .project(partTerms)
+                             .broadcast())
+          .project({"l_extendedprice * (1.0 - l_discount) as revenue"})
+          .distributedAggregation({}, {"sum(revenue)"})
+          .build());
   ASSERT_NO_THROW(planTpchMultiNode({.query = 19, .numDrivers = 4}));
 }
 

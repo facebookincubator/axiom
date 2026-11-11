@@ -19,7 +19,6 @@
 #include <folly/container/F14Set.h>
 
 #include "axiom/optimizer/AppendAll.h"
-#include "axiom/optimizer/JoinInputRewriter.h"
 #include "axiom/optimizer/NonNullOutput.h"
 #include "axiom/optimizer/PlanUtils.h"
 #include "axiom/optimizer/PrecomputeProjections.h"
@@ -1352,45 +1351,6 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   NodeCP output = builder_.make<Apply>(std::move(key));
   outputSubstitutions.retainVisible(output->outputColumns(), exprs_);
   return {output, std::move(outputSubstitutions)};
-}
-
-void NodeSimplifier::precomputeCrossJoinFilter(
-    NodeCP& left,
-    NodeCP& right,
-    ExprVector& filter,
-    const ColumnVector& sourceColumns) {
-  if (filter.empty()) {
-    return;
-  }
-  PrecomputeProjections leftPrecompute{
-      left, builder_, simplifier_, /*projectAllInputs=*/false};
-  PrecomputeProjections rightPrecompute{
-      right, builder_, simplifier_, /*projectAllInputs=*/false};
-  const auto leftColumns = PlanObjectSet::fromObjects(left->outputColumns());
-  const auto rightColumns = PlanObjectSet::fromObjects(right->outputColumns());
-  PlanObjectSet inputColumns{leftColumns};
-  inputColumns.unionSet(rightColumns);
-  for (ExprCP conjunct : filter) {
-    if (!inputColumns.containsColumns(conjunct)) {
-      return;
-    }
-  }
-
-  for (ColumnCP column : sourceColumns) {
-    if (leftColumns.contains(column)) {
-      leftPrecompute.toColumn(column);
-    } else if (rightColumns.contains(column)) {
-      rightPrecompute.toColumn(column);
-    }
-  }
-
-  JoinInputRewriter rewriter{
-      {{&leftPrecompute, &leftColumns}, {&rightPrecompute, &rightColumns}},
-      builder_,
-      /*onlyNarrowing=*/false};
-  filter = rewriter.rewrite(filter);
-  left = std::move(leftPrecompute).node();
-  right = std::move(rightPrecompute).node();
 }
 
 void NodeSimplifier::addJoinKeySubstitutions(
