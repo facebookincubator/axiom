@@ -957,7 +957,7 @@ TEST_P(UnnestTest, joinWithConstantUnnest) {
 
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(logicalPlan),
-      matchValues(makeRowVector({"arr"}, {makeArrayVector<int32_t>({{1, 2}})}))
+      matchValues(makeNamedRowVector("arr", makeArrayVector<int32_t>({{1, 2}})))
           .unnest({}, {"arr"}, std::nullopt)
           .aliases({"e"})
           .filter("e in (1, 2)")
@@ -978,11 +978,11 @@ TEST_P(UnnestTest, joinOfConstantUnnests) {
 
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(logicalPlan),
-      matchValues(makeRowVector({"arr"}, {makeArrayVector<int32_t>({{1, 2}})}))
+      matchValues(makeNamedRowVector("arr", makeArrayVector<int32_t>({{1, 2}})))
           .unnest({}, {"arr"}, std::nullopt)
           .hashJoinInner(
-              matchValues(
-                  makeRowVector({"arr2"}, {makeArrayVector<int32_t>({{2, 3}})}))
+              matchValues(makeNamedRowVector(
+                              "arr2", makeArrayVector<int32_t>({{2, 3}})))
                   .unnest({}, {"arr2"}, std::nullopt)
                   .aliases({"f"}),
               {.keys = {{"e = f"}}})

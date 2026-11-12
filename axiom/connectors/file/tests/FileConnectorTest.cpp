@@ -221,8 +221,8 @@ class FileConnectorTest : public ::testing::Test, public test::VectorTestBase {
       const std::vector<std::string>& expectedSchemas) {
     test::assertEqualVectors(
         query(sql),
-        makeRowVector(
-            {"Schema"}, {makeFlatVector<std::string>(expectedSchemas)}));
+        makeNamedRowVector(
+            "Schema", makeFlatVector<std::string>(expectedSchemas)));
   }
 
   // Supplies execution connectors to runner_.
@@ -245,10 +245,10 @@ TEST_F(FileConnectorTest, fullScan) {
 
 TEST_F(FileConnectorTest, projection) {
   exec::test::assertEqualResults(
-      {makeRowVector(
-          {"name"},
-          {makeFlatVector<std::string>(
-              {"gamma", "alpha", "epsilon", "beta", "delta"})})},
+      {makeNamedRowVector(
+          "name",
+          makeFlatVector<std::string>(
+              {"gamma", "alpha", "epsilon", "beta", "delta"}))},
       queryAll(fmt::format("SELECT name FROM {}", table())));
 }
 
@@ -672,7 +672,7 @@ TEST_F(FileConnectorTest, missingColumnInDirectoryFails) {
   // b.parquet has only 'id' — it is missing 'name'.
   writeParquetFile(
       fmt::format("{}/b.parquet", dir->getPath()),
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({2})}));
+      makeNamedRowVector("id", makeFlatVector<int64_t>({2})));
 
   VELOX_ASSERT_THROW(
       runner_->run(

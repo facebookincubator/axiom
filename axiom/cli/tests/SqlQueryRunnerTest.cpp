@@ -78,7 +78,7 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
     ASSERT_EQ(1, result.results.size());
     test::assertEqualVectors(
         result.results[0],
-        makeRowVector({"Schema"}, {makeFlatVector(expected)}));
+        makeNamedRowVector("Schema", makeFlatVector(expected)));
   }
 
   // Asserts 'query' (SHOW TABLES by default) returns exactly 'expected', in
@@ -91,7 +91,7 @@ class SqlQueryRunnerTest : public SqlQueryRunnerTestBase {
     ASSERT_EQ(1, result.results.size());
     test::assertEqualVectors(
         result.results[0],
-        makeRowVector({"Table"}, {makeFlatVector(expected)}));
+        makeNamedRowVector("Table", makeFlatVector(expected)));
   }
 
   // Asserts SHOW SESSION LIKE 'name' reports the given current value and
@@ -710,8 +710,8 @@ TEST_F(SqlQueryRunnerTest, showSchemasWithLike) {
   ASSERT_EQ(1, result.results.size());
   test::assertEqualVectors(
       result.results[0],
-      makeRowVector(
-          {"Schema"}, {makeFlatVector<std::string>({kDefaultSchema, "dev"})}));
+      makeNamedRowVector(
+          "Schema", makeFlatVector<std::string>({kDefaultSchema, "dev"})));
 }
 
 TEST_F(SqlQueryRunnerTest, showTables) {

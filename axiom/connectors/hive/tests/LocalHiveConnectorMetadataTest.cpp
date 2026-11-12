@@ -1054,7 +1054,7 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
 TEST_F(LocalHiveConnectorMetadataTest, failedInsert) {
   const auto tableType = ROW("key", BIGINT());
   const auto data =
-      makeNamedRowVector({{"key", makeFlatIdentityVector<int64_t>(10)}});
+      makeNamedRowVector("key", makeFlatIdentityVector<int64_t>(10));
 
   createEmptyTable(
       "test_failed_insert", TableDefinition::create(tableType, {}));

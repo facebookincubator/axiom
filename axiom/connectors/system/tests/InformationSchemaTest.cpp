@@ -134,10 +134,10 @@ TEST_F(InformationSchemaTest, schemata) {
 
   results = run("SHOW SCHEMAS");
   velox::test::assertEqualVectors(
-      makeRowVector(
-          {"Schema"},
-          {makeFlatVector<std::string>(
-              {"analytics", "default", "information_schema"})}),
+      makeNamedRowVector(
+          "Schema",
+          makeFlatVector<std::string>(
+              {"analytics", "default", "information_schema"})),
       results.at(0));
 
   for (const char* predicate :

@@ -2547,7 +2547,7 @@ TEST_P(JoinTest, filterPushdownThroughCrossJoinUnnest) {
 
     auto matcher =
         matchValues(
-            makeRowVector({"data"}, {makeArrayVector<int32_t>({{1, 2, 3}})}))
+            makeNamedRowVector("data", makeArrayVector<int32_t>({{1, 2, 3}})))
             .unnest({}, {"data"})
             .aliases({"e"})
             .project({"row(1, 2) as x", "e"}, options)
@@ -4286,7 +4286,7 @@ TEST_P(JoinTest, greedyValuesStart) {
   testConnector_->addTable("v_t3", ROW({"e", "f"}, BIGINT()))
       ->setStats(4000, {{"e", {.numDistinct = 4000}}});
 
-  auto rowVector = makeRowVector({"v"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto rowVector = makeNamedRowVector("v", makeFlatVector<int64_t>({1, 2, 3}));
 
   auto ctx = makeContext();
   auto logicalPlan = lp::PlanBuilder{ctx}
