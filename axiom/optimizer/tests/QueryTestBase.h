@@ -45,6 +45,17 @@ class Optimization;
 
 namespace facebook::axiom::optimizer::test {
 
+/// Owns an optimized test query and the contexts used to plan it. Inspect
+/// 'plan', then pass the query to runFragmentedPlan once. For example:
+/// `auto query = planVelox(plan); runFragmentedPlan(query);`.
+struct PlannedQuery : optimizer::PlanAndStats {
+  /// Velox context retained from planning through execution.
+  std::shared_ptr<velox::core::QueryCtx> queryCtx;
+
+  /// Connector sessions and state retained for the same query.
+  connector::ConnectorContextPtr connectorContext;
+};
+
 struct TestResult {
   /// Runner that produced the results. Owns results.
   std::shared_ptr<runner::LocalRunner> runner;
@@ -134,9 +145,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   ::axiom::sql::presto::RefreshVectorIndexStatement::Plans parseRefresh(
       std::string_view sql);
 
+  /// @param options If 'options.queryId' is set, it names the query's contexts
+  /// and plan; otherwise a unique ID is generated.
   /// @param planFilePathPrefix If specified, writes the query graph, optimized
   /// and executable plans to files with specified path prefix.
-  optimizer::PlanAndStats planVelox(
+  PlannedQuery planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const MultiFragmentPlan::Options& options =
           {
@@ -146,7 +159,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt,
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
 
-  optimizer::PlanAndStats planVelox(
+  PlannedQuery planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const connector::SchemaResolver& schemaResolver,
       const MultiFragmentPlan::Options& options =
@@ -165,7 +178,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
   /// order of position. Only the v2 optimizer binds placeholders.
-  optimizer::PlanAndStats planVelox(
+  PlannedQuery planVelox(
       const logical_plan::LogicalPlanNodePtr& plan,
       const std::vector<velox::Variant>& placeholderValues,
       const connector::SchemaResolver& schemaResolver,
@@ -188,7 +201,9 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
           .maxLocalPartitions = 4,
       });
 
-  TestResult runFragmentedPlan(optimizer::PlanAndStats& plan);
+  /// Executes 'query' once using the contexts retained during planning.
+  /// Consumes its execution contexts even when execution fails.
+  TestResult runFragmentedPlan(PlannedQuery& query);
 
   /// Runs the given single-stage Velox plan single-threaded.
   TestResult runVelox(const velox::core::PlanNodePtr& plan);
@@ -197,7 +212,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   /// Runs 'reference' plan single-threaded.
   /// @return 'reference' result.
   TestResult checkSame(
-      optimizer::PlanAndStats& experiment,
+      PlannedQuery& experiment,
       const velox::core::PlanNodePtr& reference);
 
   /// Checks that 'reference' and 'velox' produce the same result.
@@ -302,11 +317,8 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
           },
       const std::optional<OptimizerOptions>& optimizerOptions = std::nullopt);
 
-  std::shared_ptr<velox::core::QueryCtx>& getQueryCtx();
-
-  /// Returns the connector context shared by planning and execution of the
-  /// current query.
-  const connector::ConnectorContextPtr& getConnectorContext();
+  /// Creates a fresh query context using this fixture's configuration.
+  std::shared_ptr<velox::core::QueryCtx> newQueryCtx();
 
   static v1::VeloxHistory& suiteHistory() {
     return *gSuiteHistory;
@@ -411,15 +423,11 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::string& key,
       std::string value) {
     connectorSessionProperties_[connectorId][key] = std::move(value);
-    // The context carries the properties it was made with, so the next query
-    // needs one made with these.
-    connectorContext_.reset();
   }
 
   /// Clears all connector session properties set via setConnectorSession.
   void clearConnectorSession() {
     connectorSessionProperties_.clear();
-    connectorContext_.reset();
   }
 
   // Per-connector session properties passed to the OptimizerSession. Tests set
@@ -479,11 +487,6 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<velox::memory::MemoryPool> optimizerPool_;
 
-  // A QueryCtx created for each compiled query.
-  std::shared_ptr<velox::core::QueryCtx> queryCtx_;
-
-  // Connector context shared by planning and execution of that query.
-  connector::ConnectorContextPtr connectorContext_;
   std::unique_ptr<optimizer::v1::VeloxHistory> history_;
 
   inline static int32_t gQueryCounter{0};

@@ -81,7 +81,7 @@ class HiveBucketedExecutionTest : public test::HiveQueriesTestBase,
 
   // Plans 'logicalPlan' for distributed execution across 'numWorkers' workers.
   // 'numWorkers' must exceed 1, else the plan is single-node and unbucketed.
-  PlanAndStats planDistributed(
+  test::PlannedQuery planDistributed(
       const lp::LogicalPlanNodePtr& logicalPlan,
       int32_t numWorkers = 4) {
     VELOX_CHECK_GT(numWorkers, 1);

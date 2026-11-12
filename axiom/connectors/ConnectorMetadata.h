@@ -1413,6 +1413,13 @@ struct Procedure {
 
 using ProcedurePtr = std::shared_ptr<const Procedure>;
 
+/// Provides planning and lifecycle operations for one connector. One instance
+/// serves all queries, so its methods may run concurrently; implementations
+/// synchronize access to shared mutable state.
+///
+/// Example:
+///   auto metadata = registry.get(connectorId);
+///   auto table = metadata->findTable(tableName);
 class ConnectorMetadata {
  public:
   /// Return the metadata for a given connector ID. Throws if not registered.
@@ -1459,6 +1466,21 @@ class ConnectorMetadata {
   /// match ignoring case; a connector whose names are case-sensitive overrides
   /// it.
   virtual std::string normalizeIdentifier(std::string_view identifier) const;
+
+  /// Creates connector-defined state for this query, or nullptr when none is
+  /// needed. Receives a session with all other fields initialized. Query state
+  /// is unavailable during this call because this method creates it. The
+  /// returned state owns everything it needs after this call returns.
+  ///
+  /// Example:
+  ///   std::unique_ptr<ConnectorQueryState> makeQueryState(
+  ///       const ConnectorSession& session) const override {
+  ///     return std::make_unique<CacheState>(session.queryId());
+  ///   }
+  virtual std::unique_ptr<ConnectorQueryState> makeQueryState(
+      [[maybe_unused]] const ConnectorSession& session) const {
+    return nullptr;
+  }
 
   /// Return a TablePtr given the table name. The returned Table object is
   /// immutable. If updates to the Table object are required, the

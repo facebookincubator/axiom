@@ -272,7 +272,7 @@ class SubfieldTest : public HiveQueriesTestBase,
     lp::PlanBuilder::Context ctx(
         exec::test::kHiveConnectorId,
         kDefaultSchema,
-        getQueryCtx(),
+        newQueryCtx(),
         resolveDfFunction);
     ctx.connectorContext = connector::makeTestContext("test");
     auto logicalPlan =
@@ -1207,7 +1207,7 @@ TEST_P(SubfieldTest, blackbox) {
   createTable("t", {data});
 
   lp::PlanBuilder::Context ctx(
-      kHiveConnectorId, kDefaultSchema, getQueryCtx(), resolveDfFunction);
+      kHiveConnectorId, kDefaultSchema, newQueryCtx(), resolveDfFunction);
   ctx.connectorContext = connector::makeTestContext("test");
 
   auto logicalPlan =

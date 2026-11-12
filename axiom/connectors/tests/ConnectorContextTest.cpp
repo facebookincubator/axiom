@@ -24,31 +24,73 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::axiom::connector {
 namespace {
 
-ConnectorContextPtr makeContext(
-    ConnectorProperties properties,
-    std::atomic<int32_t>* writerCalls,
-    velox::BaseRuntimeStatWriter& writer) {
-  return std::make_shared<ConnectorContext>(
-      "q1",
-      "user",
-      std::move(properties),
-      [writerCalls, &writer](
-          std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
-        ++*writerCalls;
-        return std::shared_ptr<velox::BaseRuntimeStatWriter>(
-            &writer, [](auto*) {});
-      },
-      ConnectorMetadataRegistry::global());
-}
+// Query state that keeps the id of the query it was created for.
+class QueryIdState : public ConnectorQueryState {
+ public:
+  explicit QueryIdState(std::string queryId) : queryId_{std::move(queryId)} {}
+
+  const std::string& queryId() const {
+    return queryId_;
+  }
+
+ private:
+  const std::string queryId_;
+};
+
+// Creates query state from the session's query identity.
+class QueryStateMetadata : public TestConnectorMetadata {
+ public:
+  explicit QueryStateMetadata(TestConnector* connector)
+      : TestConnectorMetadata(connector) {}
+
+  std::unique_ptr<ConnectorQueryState> makeQueryState(
+      const ConnectorSession& session) const override {
+    return std::make_unique<QueryIdState>(session.queryId());
+  }
+};
+
+// Owns the metadata registry used by ConnectorContext tests. Connector 'a'
+// keeps query state; connector 'b' keeps none.
+class ConnectorContextTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    metadataRegistry_->insert(
+        "a", std::make_shared<QueryStateMetadata>(&firstConnector_));
+    metadataRegistry_->insert("b", secondConnector_.metadata());
+  }
+
+  ConnectorContextPtr makeContext(
+      ConnectorProperties properties,
+      std::atomic<int32_t>* writerCalls,
+      velox::BaseRuntimeStatWriter& writer) {
+    return std::make_shared<ConnectorContext>(
+        "q1",
+        "user",
+        std::move(properties),
+        [writerCalls, &writer](
+            std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
+          ++*writerCalls;
+          return std::shared_ptr<velox::BaseRuntimeStatWriter>(
+              &writer, [](auto*) {});
+        },
+        *metadataRegistry_);
+  }
+
+  TestConnector firstConnector_{"a"};
+  TestConnector secondConnector_{"b"};
+  std::shared_ptr<ConnectorMetadataRegistry::Registry> metadataRegistry_{
+      ConnectorMetadataRegistry::create()};
+};
 
 // Every caller in a query reaches a connector through one session.
-TEST(ConnectorContextTest, sessionForIsMemoizedPerConnector) {
+TEST_F(ConnectorContextTest, sessionForIsMemoizedPerConnector) {
   velox::ConcurrentRuntimeStatWriter writer;
   std::atomic<int32_t> writerCalls{0};
   auto context = makeContext({}, &writerCalls, writer);
@@ -59,10 +101,14 @@ TEST(ConnectorContextTest, sessionForIsMemoizedPerConnector) {
   EXPECT_EQ(first.get(), second.get());
   EXPECT_EQ(writerCalls, 1);
   EXPECT_EQ(&first->statsWriter(), &writer);
+  auto* queryState = first->queryStateAs<QueryIdState>();
+  ASSERT_NE(queryState, nullptr);
+  EXPECT_EQ(queryState->queryId(), "q1");
 }
 
-// Two connectors of one query get separate sessions.
-TEST(ConnectorContextTest, connectorsGetDistinctSessions) {
+// Two connectors of one query get separate sessions, and only a connector whose
+// metadata makes query state has any.
+TEST_F(ConnectorContextTest, connectorsGetDistinctSessions) {
   velox::ConcurrentRuntimeStatWriter writer;
   std::atomic<int32_t> writerCalls{0};
   auto context = makeContext({}, &writerCalls, writer);
@@ -72,10 +118,12 @@ TEST(ConnectorContextTest, connectorsGetDistinctSessions) {
 
   EXPECT_NE(firstSession.get(), secondSession.get());
   EXPECT_EQ(writerCalls, 2);
+  EXPECT_NE(firstSession->queryStateAs<QueryIdState>(), nullptr);
+  EXPECT_EQ(secondSession->queryStateAs<QueryIdState>(), nullptr);
 }
 
 // A connector sees only its own slice of the query's properties.
-TEST(ConnectorContextTest, sessionCarriesThisConnectorsProperties) {
+TEST_F(ConnectorContextTest, sessionCarriesThisConnectorsProperties) {
   velox::ConcurrentRuntimeStatWriter writer;
   std::atomic<int32_t> writerCalls{0};
   auto context = makeContext(
@@ -93,14 +141,16 @@ TEST(ConnectorContextTest, sessionCarriesThisConnectorsProperties) {
 }
 
 // The contract is that concurrent callers get one session, not merely one per
-// caller, so the writer is requested exactly once.
-TEST(ConnectorContextTest, concurrentCallersGetOneSession) {
+// caller, so the writer is requested exactly once. Each caller also sees the
+// session's query state already initialized.
+TEST_F(ConnectorContextTest, concurrentCallersGetOneSession) {
   velox::ConcurrentRuntimeStatWriter writer;
   std::atomic<int32_t> writerCalls{0};
   auto context = makeContext({}, &writerCalls, writer);
 
   constexpr int32_t kThreads = 8;
   std::vector<ConnectorSessionPtr> sessions(kThreads);
+  std::vector<QueryIdState*> queryStates(kThreads);
   std::vector<std::thread> threads;
   threads.reserve(kThreads);
   std::barrier barrier{kThreads};
@@ -108,6 +158,7 @@ TEST(ConnectorContextTest, concurrentCallersGetOneSession) {
     threads.emplace_back([&, i] {
       barrier.arrive_and_wait();
       sessions[i] = context->sessionFor("a");
+      queryStates[i] = sessions[i]->queryStateAs<QueryIdState>();
     });
   }
   for (auto& thread : threads) {
@@ -116,11 +167,13 @@ TEST(ConnectorContextTest, concurrentCallersGetOneSession) {
 
   EXPECT_THAT(sessions, testing::Each(sessions[0]));
   EXPECT_EQ(writerCalls, 1);
+  ASSERT_NE(queryStates[0], nullptr);
+  EXPECT_THAT(queryStates, testing::Each(queryStates[0]));
 }
 
 // A throw while building leaves the session unbuilt, so the next caller builds
 // it rather than seeing a half-made one or the earlier failure.
-TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
+TEST_F(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
   velox::ConcurrentRuntimeStatWriter writer;
   bool threw = false;
   auto context = std::make_shared<ConnectorContext>(
@@ -135,7 +188,7 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
         return std::shared_ptr<velox::BaseRuntimeStatWriter>(
             &writer, [](auto*) {});
       },
-      ConnectorMetadataRegistry::global());
+      *metadataRegistry_);
 
   VELOX_ASSERT_THROW(context->sessionFor("a"), "Writer unavailable");
 
@@ -143,15 +196,14 @@ TEST(ConnectorContextTest, sessionIsBuiltAfterAFailedAttempt) {
 }
 
 // A context without a writer provider has no way to wire a session.
-TEST(ConnectorContextTest, contextRequiresAWriterProvider) {
+TEST_F(ConnectorContextTest, contextRequiresAWriterProvider) {
   VELOX_ASSERT_THROW(
-      ConnectorContext(
-          "q1", "user", {}, nullptr, ConnectorMetadataRegistry::global()),
+      ConnectorContext("q1", "user", {}, nullptr, *metadataRegistry_),
       "requires a stat writer provider");
 }
 
 // A provider that yields no writer fails rather than leaving a session unwired.
-TEST(ConnectorContextTest, nullWriterFromProviderFails) {
+TEST_F(ConnectorContextTest, nullWriterFromProviderFails) {
   auto context = std::make_shared<ConnectorContext>(
       "q1",
       "user",
@@ -159,18 +211,35 @@ TEST(ConnectorContextTest, nullWriterFromProviderFails) {
       [](std::string_view) -> std::shared_ptr<velox::BaseRuntimeStatWriter> {
         return nullptr;
       },
-      ConnectorMetadataRegistry::global());
+      *metadataRegistry_);
   VELOX_ASSERT_THROW(
       context->sessionFor("a"), "Stat writer provider returned null");
 }
 
 // A context returns the registry the application passed.
-TEST(ConnectorContextTest, metadataRegistry) {
-  auto registry = ConnectorMetadataRegistry::create();
+TEST_F(ConnectorContextTest, metadataRegistry) {
   ConnectorContext context(
-      "q1", "user", {}, ConnectorContext::noopStatWriterProvider(), *registry);
+      "q1",
+      "user",
+      {},
+      ConnectorContext::noopStatWriterProvider(),
+      *metadataRegistry_);
 
-  EXPECT_EQ(&context.metadataRegistry(), registry.get());
+  EXPECT_EQ(&context.metadataRegistry(), metadataRegistry_.get());
+}
+
+// A connector session requires registered metadata.
+TEST_F(ConnectorContextTest, missingMetadata) {
+  metadataRegistry_->clear();
+  ConnectorContext context(
+      "q1",
+      "user",
+      {},
+      ConnectorContext::noopStatWriterProvider(),
+      *metadataRegistry_);
+
+  VELOX_ASSERT_THROW(
+      context.sessionFor("a"), "ConnectorMetadata not registered: a");
 }
 
 } // namespace

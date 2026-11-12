@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <atomic>
@@ -219,6 +221,16 @@ class TestTableLayout : public TableLayout {
 /// a table the metastore has no statistics for. setStats() is then rejected.
 class TestTable : public Table {
  public:
+  /// Identifies one TestTable instance and one version of its data.
+  struct Version {
+    /// Identity of this table instance.
+    uint64_t tableId;
+    /// Counts changes to the table's data.
+    uint64_t dataVersion;
+
+    bool operator==(const Version&) const = default;
+  };
+
   /// Name of the stable hidden row identifier stored with each row.
   static constexpr std::string_view kRowId = "$row_id";
 
@@ -289,6 +301,9 @@ class TestTable : public Table {
     return bucketSpec_;
   }
 
+  /// Returns the table's version, or std::nullopt for an unversioned table.
+  std::optional<Version> version() const;
+
   /// Appends a RowVector to the table's data. Each appended vector generates
   /// a separate TestConnectorSplit. Data is copied into the table's internal
   /// memory pool. When 'collectColumnStatistics' is true, computes per-column
@@ -319,8 +334,11 @@ class TestTable : public Table {
   /// Removes the rows whose stable identifiers appear in 'rowIds' and returns
   /// how many it removed. An identifier with no live row, such as one an
   /// earlier DELETE removed, removes nothing, so the count can be less than
-  /// 'rowIds.size()'.
-  int64_t deleteRows(const folly::F14FastSet<int64_t>& rowIds);
+  /// 'rowIds.size()'. Fails without removing rows if 'expectedVersion' is set
+  /// and differs from version().
+  int64_t deleteRows(
+      const folly::F14FastSet<int64_t>& rowIds,
+      std::optional<Version> expectedVersion);
 
   /// Sets how a row-level DELETE on this table distributes and orders the rows
   /// its writers receive. 'layout' must have a writer: TestConnector deletes
@@ -394,6 +412,10 @@ class TestTable : public Table {
   std::mutex stagedMutex_;
   // Data that INSERTs in progress have written, by write id.
   folly::F14FastMap<int64_t, std::vector<StagedData>> staged_;
+  // Guards addData(), deleteRows(), and version().
+  mutable std::mutex mutationMutex_;
+  // Present for versioned tables; dataVersion advances after a data change.
+  std::optional<Version> version_;
   // Assigns each appended row an identifier that survives later deletions.
   int64_t nextRowId_{0};
   // Row-level DELETE layout; the default asks for no shuffle and no sort.
@@ -785,6 +807,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
   /// Example: WITH (partitioned_by = ARRAY['ds']).
   static constexpr std::string_view kPartitionedBy = "partitioned_by";
 
+  /// CREATE TABLE property that enables version tracking for this table.
+  /// Defaults to false.
+  /// Example: WITH (versioned = true).
+  static constexpr std::string_view kVersioned = "versioned";
+
   explicit TestConnectorMetadata(TestConnector* connector)
       : connector_(connector),
         splitManager_(std::make_unique<TestSplitManager>(*this)) {}
@@ -793,6 +820,11 @@ class TestConnectorMetadata : public ConnectorMetadata {
     static const TestMetadataConfigProvider kProvider;
     return &kProvider;
   }
+
+  /// Creates version-observation state when this session enables
+  /// TestConfigProvider::kValidateTableVersions; returns nullptr otherwise.
+  std::unique_ptr<ConnectorQueryState> makeQueryState(
+      const ConnectorSession& session) const override;
 
   /// Signature of a matcher that, for a given plan subtree, returns
   /// the pushdown roots this connector wants to absorb.
@@ -1106,6 +1138,10 @@ class TestDataSource : public velox::connector::DataSource {
 /// ConfigProvider for TestConnector session properties.
 class TestConfigProvider : public velox::config::ConfigProvider {
  public:
+  /// Enables per-query table version validation. Defaults to false.
+  static constexpr const char* kValidateTableVersions =
+      "validate_table_versions";
+
   static constexpr const char* kCollectColumnStatistics =
       "collect_column_statistics";
 
@@ -1125,6 +1161,10 @@ class TestConfigProvider : public velox::config::ConfigProvider {
 
   std::vector<velox::config::ConfigProperty> properties() const override {
     return {
+        {kValidateTableVersions,
+         velox::config::ConfigPropertyType::kBoolean,
+         "false",
+         "Validate table versions captured while planning this query."},
         {kCollectColumnStatistics,
          velox::config::ConfigPropertyType::kBoolean,
          "true",
@@ -1156,6 +1196,9 @@ class TestConfigProvider : public velox::config::ConfigProvider {
 /// TestDataSource object which returns appended data. createDataSink
 /// creates a TestDataSink object which appends additional data to
 /// the associated table, or a TestDeleteDataSink for a row-level DELETE.
+///
+/// Tables can track versions. See "Versioned Tables" in README.md for the
+/// version model and the `validate_table_versions` session property.
 class TestConnector : public velox::connector::Connector {
  public:
   static constexpr std::string_view kDefaultSchema =

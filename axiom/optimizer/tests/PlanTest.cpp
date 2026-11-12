@@ -93,7 +93,7 @@ TEST_P(PlanTest, rejectedFilters) {
     lp::PlanBuilder::Context ctx(
         kTestConnectorId,
         kDefaultSchema,
-        getQueryCtx(),
+        newQueryCtx(),
         test::resolveDfFunction);
     ctx.coercer = &velox::TypeCoercer::defaults();
     ctx.connectorContext = connector::makeTestContext("test");
@@ -485,7 +485,7 @@ TEST_P(PlanTest, inList) {
 
   auto scan = [&]() {
     lp::PlanBuilder::Context context(
-        kTestConnectorId, kDefaultSchema, getQueryCtx());
+        kTestConnectorId, kDefaultSchema, newQueryCtx());
     context.connectorContext = connector::makeTestContext("test");
     return lp::PlanBuilder(context).tableScan("numbers");
   };
