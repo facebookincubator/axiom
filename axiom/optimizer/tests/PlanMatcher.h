@@ -231,11 +231,12 @@ class FixedPointMatch {
       std::string alias,
       PlanMatcherBuilder initialPlan);
 
-  /// Matches the next per-iteration plans, in call order — for a recursive CTE
-  /// on one task, the step. Each shuffle() or broadcast() in 'body' is the
-  /// boundary between two consecutive plans, which the loop runs in that
-  /// order, the later one reading the earlier through an Exchange. A 'body'
-  /// with no boundary matches one plan.
+  /// Matches the body's stages, for a recursive CTE on one task the step,
+  /// from the stage that writes the state. Each shuffle() or broadcast() in
+  /// 'body' reads the stage its Exchange names, so a stage that reads several
+  /// shuffles matches a join whose sides each end in one. 'body' must reach
+  /// every stage, and a 'body' with no boundary matches a single stage. Call
+  /// it once.
   FixedPointMatch& plan(PlanMatcherBuilder body);
 
   /// Assertions about convergence beyond how the loop decides to stop.
@@ -250,10 +251,10 @@ class FixedPointMatch {
   /// Asserts the loop stops once an iteration produces no rows.
   FixedPointMatch& convergeOnEmpty(Convergence assertions = {});
 
-  /// Matches the loop's convergence plans as one chain: each gather() in
-  /// 'convergence' is the boundary between the plans every worker runs and the
-  /// verdict worker 0 computes from their rows. Without one, the plan runs on
-  /// each task.
+  /// Matches the loop's convergence stages from the one that decides the
+  /// verdict, as plan() matches the body's: each gather() in 'convergence'
+  /// reads the rows of the stage every worker runs, for the verdict worker 0
+  /// computes. Without one, the convergence runs on each task.
   FixedPointMatch& converge(
       PlanMatcherBuilder convergence,
       Convergence assertions = {});
@@ -290,8 +291,8 @@ class FixedPointMatch {
     return vectorStates_;
   }
 
-  const std::vector<std::shared_ptr<PlanMatcher>>& plans() const {
-    return plans_;
+  const std::shared_ptr<PlanMatcher>& body() const {
+    return body_;
   }
 
   bool stopWhenDeltaEmpty() const {
@@ -328,7 +329,7 @@ class FixedPointMatch {
   std::vector<std::shared_ptr<PlanMatcher>> hashTableStates_;
   std::vector<std::pair<std::string, std::shared_ptr<PlanMatcher>>>
       vectorStates_;
-  std::vector<std::shared_ptr<PlanMatcher>> plans_;
+  std::shared_ptr<PlanMatcher> body_;
   std::shared_ptr<PlanMatcher> convergence_;
   std::shared_ptr<PlanMatcher> workerZeroVerdict_;
   bool outputOnWorkerZero_{false};

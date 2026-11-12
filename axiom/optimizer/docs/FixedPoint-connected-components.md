@@ -136,4 +136,5 @@ only saves work; the plan is valid without it.
   `edges` becomes a `HashTableStateDeclaration` probed by a
   `StateHashJoinNode`, each read of the state becomes its own
   `StateSourceNode`, and the convergence becomes
-  `ConvergenceConfig::globalVerdict`.
+  `ConvergenceConfig::converging` over its per-worker counts and the verdict
+  stage on worker 0.

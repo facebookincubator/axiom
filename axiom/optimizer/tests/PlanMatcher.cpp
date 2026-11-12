@@ -461,23 +461,11 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
     }
     const auto stateSymbols = stateSymbolsOf(plan, symbols);
 
-    // Each expected plan with N boundaries matches the next N + 1 plans.
-    const auto& plans = match_->plans();
-    if (!plans.empty()) {
-      size_t numPlans = 0;
-      for (const auto& expected : plans) {
-        numPlans += expected->shuffleBoundaryCount() + 1;
-      }
-      const auto bodyPlans = plansOf(plan.body());
-      EXPECT_EQ(bodyPlans.size(), numPlans);
-      AXIOM_TEST_RETURN_IF_FAILURE
-      auto next = bodyPlans.begin();
-      for (const auto& expected : plans) {
-        const auto end = next + expected->shuffleBoundaryCount() + 1;
-        if (!matchPlanChain({next, end}, *expected, stateSymbols)) {
-          return MatchResult::failure();
-        }
-        next = end;
+    // The body's stages match from the root, each shuffle reading the stage
+    // its Exchange names.
+    if (match_->body() != nullptr) {
+      if (!matchStages(plan.body(), *match_->body(), stateSymbols)) {
+        return MatchResult::failure();
       }
     }
 
@@ -491,9 +479,6 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
       EXPECT_FALSE(convergence.stopWhenDeltaEmpty);
       EXPECT_TRUE(convergence.verdictOnWorkerZero());
       AXIOM_TEST_RETURN_IF_FAILURE
-      const auto convergencePlans = plansOf(*convergence.plan);
-      EXPECT_EQ(convergencePlans.size(), 2);
-      AXIOM_TEST_RETURN_IF_FAILURE
       const auto countRows =
           PlanMatcherBuilder()
               .stateSource(match_->outputStateEntry(), /*delta=*/true)
@@ -502,7 +487,7 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
               .finalAggregation()
               .project()
               .build();
-      if (!matchPlanChain(convergencePlans, *countRows, stateSymbols)) {
+      if (!matchStages(*convergence.plan, *countRows, stateSymbols)) {
         return MatchResult::failure();
       }
     }
@@ -512,10 +497,8 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
       EXPECT_FALSE(convergence.stopWhenDeltaEmpty);
       EXPECT_TRUE(convergence.plan.has_value());
       AXIOM_TEST_RETURN_IF_FAILURE
-      if (!matchPlanChain(
-              plansOf(*convergence.plan),
-              *match_->convergence(),
-              stateSymbols)) {
+      if (!matchStages(
+              *convergence.plan, *match_->convergence(), stateSymbols)) {
         return MatchResult::failure();
       }
     }
@@ -553,45 +536,36 @@ class FixedPointMatcher : public PlanMatcherImpl<FixedPointNode> {
   }
 
  private:
-  // The plans of a fixed point's stages, in the order they were given.
-  static std::vector<PlanNodePtr> plansOf(const MultiStagePlan& stages) {
-    std::vector<PlanNodePtr> plans;
-    plans.reserve(stages.stages().size());
-    for (const auto& stage : stages.stages()) {
-      plans.push_back(stage.plan);
-    }
-    return plans;
-  }
-
-  // Matches 'plans', which run in order with each plan after the first reading
-  // the one before it through an Exchange, against 'chain', whose shuffles mark
-  // those boundaries.
-  static bool matchPlanChain(
-      const std::vector<PlanNodePtr>& plans,
-      const PlanMatcher& chain,
+  // Matches 'stages' against 'matcher' from the root stage. Each shuffle() or
+  // broadcast() in 'matcher' reads the stage the Exchange it reaches names as
+  // its producer, as for a query's stages, so a stage that reads several
+  // shuffles matches a join of several. 'matcher' must reach every stage.
+  static bool matchStages(
+      const MultiStagePlan& stages,
+      const PlanMatcher& matcher,
       const std::unordered_map<std::string, std::string>& symbols) {
-    std::vector<Stage> fragments;
-    std::unordered_map<int32_t, int32_t> fragmentIdToIndex;
-    for (int32_t i = 0; i < plans.size(); ++i) {
-      Stage fragment{.id = i, .type = StageType::kFixed, .plan = plans[i]};
-      if (i > 0) {
-        const auto* exchange =
-            PlanNode::findFirstNode<ExchangeNode>(plans[i].get());
-        EXPECT_NE(exchange, nullptr)
-            << "Plan " << i
-            << " reads no Exchange: " << plans[i]->toString(true, true);
-        if (exchange == nullptr) {
-          return false;
-        }
-        fragment.inputs.push_back(
-            {.exchangeId = exchange->id(), .producerStageId = i - 1});
+    std::string description;
+    for (const auto& stage : stages.stages()) {
+      description += fmt::format("Stage {}, reading:", stage.id);
+      for (const auto& input : stage.inputs) {
+        description += fmt::format(
+            " {} from stage {}", input.exchangeId, input.producerStageId);
       }
-      fragmentIdToIndex[i] = i;
-      fragments.push_back(std::move(fragment));
+      description += "\n" + stage.plan->toString(true, true);
+    }
+    SCOPED_TRACE(description);
+    EXPECT_EQ(stages.stages().size(), matcher.shuffleBoundaryCount() + 1)
+        << "Expected one stage per shuffle boundary, plus the root";
+    if (::testing::Test::HasNonfatalFailure()) {
+      return false;
+    }
+    std::unordered_map<int32_t, int32_t> stageIdToIndex;
+    for (int32_t i = 0; i < stages.stages().size(); ++i) {
+      stageIdToIndex[stages.stages()[i].id] = i;
     }
     const DistributedMatchContext context{
-        &fragments, &fragments.back(), &fragmentIdToIndex, /*plan=*/nullptr};
-    return chain.match(plans.back(), symbols, &context).match;
+        &stages.stages(), &stages.root(), &stageIdToIndex, /*plan=*/nullptr};
+    return matcher.match(stages.root().plan, symbols, &context).match;
   }
 
   // The state aliases hold within this fixed point's plans. Each alias of
@@ -2689,7 +2663,9 @@ FixedPointMatch& FixedPointMatch::vectorState(
 }
 
 FixedPointMatch& FixedPointMatch::plan(PlanMatcherBuilder body) {
-  plans_.push_back(body.build());
+  VELOX_CHECK_NULL(
+      body_, "FixedPointMatch::plan matches the whole body; call it once");
+  body_ = body.build();
   return *this;
 }
 

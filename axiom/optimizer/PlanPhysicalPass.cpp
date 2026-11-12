@@ -799,53 +799,6 @@ Placement placementOf(bool oneTask, bool oneDriverPerTask) {
                           : Placement::kDistributed;
 }
 
-// A partitioned loop's body runs as a chain of plans, each driven by the
-// exchange that links it to the plan before, and a join is driven by its left
-// input. Puts on the left each join input that reads the exchange.
-class ExchangeProbeRewriter : public NodeRewriter<> {
- public:
-  explicit ExchangeProbeRewriter(Builder& builder) : NodeRewriter(builder) {}
-
-  using NodeRewriter<>::rewrite;
-
-  // True when a join reads the exchange only on its right and cannot exchange
-  // its inputs: the body then cannot run as a chain.
-  bool unswappable() const {
-    return unswappable_;
-  }
-
- protected:
-  NodeCP rewriteJoin(const Join* node, NoContext& context) override {
-    const auto* join = NodeRewriter<>::rewriteJoin(node, context)->as<Join>();
-    if (!FixedPoint::movesState(join->right()) ||
-        FixedPoint::movesState(join->left())) {
-      return join;
-    }
-    if (!Join::canSwapInputs(join->joinType())) {
-      unswappable_ = true;
-      return join;
-    }
-    Join::Key key{
-        join->left(),
-        join->right(),
-        join->joinType(),
-        join->leftKeys(),
-        join->rightKeys(),
-        join->filter(),
-        join->nullAware(),
-        join->nullAsValue(),
-        join->outputColumns(),
-        join->sourceColumns()};
-    key.swapInputs();
-    key.buildIsLoopInvariant = Join::canBuildLoopInvariant(
-        key.joinType, key.rightKeys, key.nullAsValue, key.left, key.right);
-    return builder().make<Join>(key);
-  }
-
- private:
-  bool unswappable_{false};
-};
-
 // The cluster join planning orders under a join, and the joins it keeps as
 // leaves because the cluster reads values they produce.
 struct PlannedCluster {
@@ -1553,8 +1506,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     }
 
     // The convergence is gathered, so the loop's workers stop on one answer.
-    // Velox gathers only in the last link of a convergence's chain, and runs
-    // the plan after it on one driver.
+    // Velox runs the stage that reads the gathers on worker 0, on one driver.
     PhysicalPlanRewriter partitionedConvergence{
         builder(),
         simplifier_,
@@ -1567,15 +1519,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         [this](NodeCP input) { return rewrite(input); },
         statePartitioning,
         /*gatherOntoOneDriver=*/true};
-    ExchangeProbeRewriter probeRewriter{builder()};
-    step = probeRewriter.rewrite(step);
-    NodeCP convergence = probeRewriter.rewrite(
+    NodeCP convergence =
         partitionedConvergence.ensureGathered(partitionedConvergence.rewrite(
             node->convergence() != nullptr ? node->convergence()
-                                           : emptyDeltaCheck(node))));
-    if (probeRewriter.unswappable()) {
-      return nullptr;
-    }
+                                           : emptyDeltaCheck(node)));
 
     return builder().make<FixedPoint>({
         .anchor = anchor,
@@ -1639,11 +1586,6 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
                                        : emptyDeltaCheck(node));
     if (!FixedPoint::movesState(step) || !broadcastsFit(step) ||
         FixedPoint::movesState(convergence)) {
-      return nullptr;
-    }
-    ExchangeProbeRewriter probeRewriter{builder()};
-    step = probeRewriter.rewrite(step);
-    if (probeRewriter.unswappable()) {
       return nullptr;
     }
 

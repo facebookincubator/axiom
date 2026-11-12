@@ -190,7 +190,7 @@ broadcast.
   - The aggregation by `cluster` is split into partial sums, a shuffle on
     `cluster`, and the final sums, and its result is broadcast.
   - The left join with the old centroids runs after the broadcast, on every
-    worker, with the broadcast rows on its probe side.
+    worker, with the broadcast rows on its build side.
   - The convergence is planned as a local plan over the state, which worker 0
     runs.
   - The loop's output comes from worker 0 only.
