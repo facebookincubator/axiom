@@ -60,8 +60,14 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
     velox::connector::unregisterConnector(connector_->connectorId());
   }
 
-  ConnectorSessionPtr makeSession() {
-    return makeTestContext("test")->sessionFor(connector_->connectorId());
+  ConnectorSessionPtr makeSession(bool validateTableVersions = false) {
+    return makeTestContext(
+               "test",
+               "test",
+               {{connector_->connectorId(),
+                 {{TestConfigProvider::kValidateTableVersions,
+                   validateTableVersions ? "true" : "false"}}}})
+        ->sessionFor(connector_->connectorId());
   }
 
   std::shared_ptr<TestConnector> connector_;
@@ -129,7 +135,8 @@ TEST_F(TestConnectorTest, table) {
     }
   }
   EXPECT_THAT(rowIds, testing::ElementsAre(0, 1, 2, 3, 4));
-  EXPECT_EQ(testTable->deleteRows(folly::F14FastSet<int64_t>{1}), 1);
+  EXPECT_EQ(
+      testTable->deleteRows(folly::F14FastSet<int64_t>{1}, std::nullopt), 1);
   connector_->appendData(
       "table",
       makeRowVector(
@@ -215,10 +222,10 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   columns.push_back(layout.createColumnHandle(nullptr, "a"));
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
-  auto tableHandle = layout.createTableHandle(
-      nullptr, std::move(columns), *evaluator, empty, rejectedFilterIndices);
-
   auto session = makeSession();
+  auto tableHandle = layout.createTableHandle(
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+
   auto partitions = co_await splitManager->co_listPartitions(
       session, tableHandle, *evaluator);
   auto splitSource = splitManager->getSplitSource(
@@ -339,13 +346,9 @@ TEST_F(TestConnectorTest, dataSource) {
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
+  auto session = makeSession();
   auto tableHandle = layout.createTableHandle(
-      /*session=*/nullptr,
-
-      std::move(columns),
-      *evaluator,
-      empty,
-      rejectedFilterIndices);
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
 
   auto vector1 = makeRowVector(
       {makeFlatVector<int>({0, 1}), makeFlatVector<StringView>({"a", "b"})});
@@ -687,7 +690,8 @@ std::vector<uint32_t> referenceBucketIds(
 
 velox::connector::ConnectorTableHandlePtr makeScanHandle(
     const TableLayout& layout,
-    const std::vector<std::string>& columnNames) {
+    const std::vector<std::string>& columnNames,
+    const ConnectorSessionPtr& session) {
   auto evaluator =
       std::make_unique<exec::SimpleExpressionEvaluator>(nullptr, nullptr);
   std::vector<velox::connector::ColumnHandlePtr> columns;
@@ -698,10 +702,84 @@ velox::connector::ConnectorTableHandlePtr makeScanHandle(
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
   return layout.createTableHandle(
-      nullptr, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
 }
 
 } // namespace
+
+TEST_F(TestConnectorTest, unversionedTable) {
+  auto session = makeSession(true);
+  ASSERT_NE(session->queryStateAs<ConnectorQueryState>(), nullptr);
+
+  auto table = connector_->addTable("u", ROW("a", BIGINT()));
+  EXPECT_EQ(table->version(), std::nullopt);
+  makeScanHandle(*table->primaryLayout(), {"a"}, session);
+  table->addData(makeRowVector({makeFlatVector<int64_t>({3})}));
+  makeScanHandle(*table->primaryLayout(), {"a"}, session);
+  EXPECT_EQ(table->version(), std::nullopt);
+  EXPECT_EQ(table->deleteRows({0}, std::nullopt), 1);
+  EXPECT_EQ(table->version(), std::nullopt);
+}
+
+TEST_F(TestConnectorTest, versionAdvances) {
+  auto table =
+      connector_->addTable("t", ROW("a", BIGINT()), {{"versioned", true}});
+  const auto initial = table->version();
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_EQ(initial->dataVersion, 0);
+
+  table->addData(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+  const auto appended = table->version();
+  ASSERT_TRUE(appended.has_value());
+  EXPECT_EQ(appended->tableId, initial->tableId);
+  EXPECT_EQ(appended->dataVersion, initial->dataVersion + 1);
+
+  EXPECT_EQ(table->deleteRows({9}, appended), 0);
+  EXPECT_EQ(table->version(), appended);
+
+  EXPECT_EQ(table->deleteRows({0}, appended), 1);
+  const auto deleted = table->version();
+  ASSERT_TRUE(deleted.has_value());
+  EXPECT_EQ(deleted->tableId, initial->tableId);
+  EXPECT_EQ(deleted->dataVersion, appended->dataVersion + 1);
+}
+
+TEST_F(TestConnectorTest, staleDelete) {
+  auto table =
+      connector_->addTable("t", ROW("a", BIGINT()), {{"versioned", true}});
+  table->addData(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+  const auto planned = table->version();
+  EXPECT_EQ(table->deleteRows({0}, planned), 1);
+  const auto deleted = table->version();
+
+  VELOX_ASSERT_THROW(
+      table->deleteRows({1}, planned), "DELETE target changed after planning");
+  EXPECT_EQ(table->version(), deleted);
+  EXPECT_EQ(table->numRows(), 1);
+
+  EXPECT_EQ(table->deleteRows({1}, std::nullopt), 1);
+  EXPECT_EQ(table->numRows(), 0);
+}
+
+// One query rejects two planning observations of different table versions.
+TEST_F(TestConnectorTest, versionConsistency) {
+  auto session = makeSession(true);
+  auto uncheckedSession = makeSession(false);
+  ASSERT_NE(session->queryStateAs<ConnectorQueryState>(), nullptr);
+  EXPECT_EQ(uncheckedSession->queryStateAs<ConnectorQueryState>(), nullptr);
+  auto table =
+      connector_->addTable("t", ROW("a", BIGINT()), {{"versioned", true}});
+  makeScanHandle(*table->primaryLayout(), {"a"}, session);
+  makeScanHandle(*table->primaryLayout(), {"a"}, uncheckedSession);
+  table->addData(makeRowVector({makeFlatVector<int64_t>({1})}));
+
+  VELOX_ASSERT_THROW(
+      makeScanHandle(*table->primaryLayout(), {"a"}, session),
+      "Table changed during planning");
+  makeScanHandle(*table->primaryLayout(), {"a"}, uncheckedSession);
+  auto independentSession = makeSession(true);
+  makeScanHandle(*table->primaryLayout(), {"a"}, independentSession);
+}
 
 CO_TEST_F(TestConnectorTest, bucketedTable) {
   constexpr int32_t kNumBuckets = 4;
@@ -722,9 +800,9 @@ CO_TEST_F(TestConnectorTest, bucketedTable) {
     EXPECT_EQ(expected[firstKey], table->dataBucketIds()[i]);
   }
 
-  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"});
   auto* splitManager = metadata_->splitManager();
   auto session = makeSession();
+  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"}, session);
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
   auto partitions =
       co_await splitManager->co_listPartitions(session, tableHandle, evaluator);
@@ -792,10 +870,11 @@ CO_TEST_F(TestConnectorTest, bucketedTableNumBucketsExceedsNumRows) {
     EXPECT_GT(vector->size(), 0);
   }
 
-  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"});
+  auto session = makeSession();
+  auto tableHandle = makeScanHandle(*table->primaryLayout(), {"key"}, session);
   exec::SimpleExpressionEvaluator evaluator{nullptr, nullptr};
   auto partitions = co_await metadata_->splitManager()->co_listPartitions(
-      makeSession(), tableHandle, evaluator);
+      session, tableHandle, evaluator);
   EXPECT_EQ(partitions.size(), kNumBuckets);
 }
 

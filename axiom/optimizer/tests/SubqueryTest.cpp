@@ -2790,9 +2790,7 @@ TEST_P(SubqueryTest, inReplicateNullsAndAny) {
 }
 
 TEST_P(SubqueryTest, constantFoldingWithoutExecutor) {
-  auto& ctx = getQueryCtx();
-  ctx = velox::core::QueryCtx::create(nullptr, velox::core::QueryConfig{{}});
-
+  executor_.reset();
   auto logicalPlan =
       parseSelect("SELECT * FROM nation WHERE n_regionkey > (SELECT 1)");
 

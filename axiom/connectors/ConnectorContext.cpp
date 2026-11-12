@@ -85,16 +85,19 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
   folly::call_once(entry->once, [&] {
     // call_once does not latch on an exception, so a throw here leaves the
     // entry unbuilt and the next caller retries it.
+    auto metadata = metadataRegistry_.get(std::string{connectorId});
     auto statsWriter = statWriterProvider_(connectorId);
     VELOX_CHECK_NOT_NULL(
         statsWriter, "Stat writer provider returned null for {}", connectorId);
 
-    entry->session = std::make_shared<ConnectorSession>(
+    auto session = std::make_shared<ConnectorSession>(
         queryId_,
         user_,
         propertiesFor(properties_, connectorId),
         std::move(statsWriter),
         queryKind_);
+    session->setQueryState(metadata->makeQueryState(*session));
+    entry->session = std::move(session);
   });
 
   return entry->session;

@@ -251,6 +251,60 @@ Tests observe a DELETE through callbacks on the connector:
 `setOnFinishDelete` receives the row IDs each writer staged, once per DELETE
 that runs its writers, and `setOnAbortDelete` runs once per aborted DELETE.
 
+### Versioned Tables
+
+Ordinary TestConnector tables are unversioned, and the default connector keeps
+no query state. To test a connector that validates table versions at DELETE
+commit, create the relevant tables with `versioned = true` and enable the
+boolean session property `validate_table_versions` for each query:
+
+```cpp
+auto connector = std::make_shared<TestConnector>("test");
+auto table = connector->addTable("t", ROW("a", BIGINT()), {{"versioned", true}});
+```
+
+The session property defaults to false. A query with validation enabled keeps
+version observations; tables track versions independently of this property.
+Tables created through the ordinary C++ API, TPC-H registration, or SQL stay
+unversioned by default.
+
+Enable validation for subsequent queries in a CLI session:
+
+```sql
+SET SESSION test.validate_table_versions = true;
+CREATE TABLE t (a BIGINT) WITH (versioned = true);
+```
+
+A version consists of a table instance identity and a data counter. The
+identity detects a recreated or replaced table even when its counter equals
+the old counter. Counters advance on actual mutations with validation disabled
+as well as enabled:
+
+| Operation | Effect on the version |
+|---|---|
+| Create a versioned table | Assigns a fresh identity and starts the counter at zero. |
+| Append a nonempty batch | Advances the counter once. |
+| Delete at least one row | Advances the counter once. |
+| Delete no rows or reject a stale DELETE | Preserves the version. |
+| Change statistics or a layout | Preserves the version. |
+| Drop and recreate a table | Creates a new identity; the new table explicitly opts in again. |
+| Add a column to an empty table | Replaces the table with a new identity and preserves its options. |
+
+When validation is enabled, creating a scan or lookup handle records the
+version of a versioned table in the query's connector session, keyed by schema
+and table name. Another handle for the same table, including through a SQL
+alias, must observe the same version; otherwise planning fails with
+`Table changed during planning`.
+Unversioned handles leave the observation state unchanged. Recorded versions
+live as long as that session.
+
+DELETE writers stage stable row IDs. At commit, the connector compares the
+version recorded during planning with the current target. Validation and row
+removal share one lock. A different version fails with
+`DELETE target changed after planning` and removes no rows, including when a
+versioned target was replaced by an unversioned table. A missing target fails
+separately. A target with no recorded version is not validated.
+
 ### Discrete Predicate Values
 
 Discrete predicate values specify the complete set of values a column can take.

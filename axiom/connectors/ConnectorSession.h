@@ -25,6 +25,7 @@
 #include <folly/container/F14Map.h>
 
 #include "axiom/common/Enums.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 
@@ -53,17 +54,35 @@ AXIOM_DECLARE_ENUM_NAME(QueryKind);
 /// before that.
 using QueryKindState = std::atomic<std::optional<QueryKind>>;
 
+/// Holds connector-defined state for one query. Connector APIs may access the
+/// state concurrently, so implementations provide any required synchronization.
+///
+/// Example:
+///   if (auto* cache = session->queryStateAs<CacheState>()) {
+///     cache->record(...);
+///   }
+class ConnectorQueryState {
+ public:
+  virtual ~ConnectorQueryState() = default;
+};
+
 /// Holds what one connector is given for one query: the query's identity, this
 /// connector's property slice, and the writer it records into. Every connector
 /// API takes one.
 ///
-/// Made by ConnectorContext on first use and released with it; a connector
-/// retains nothing beyond the call it was passed to.
+/// ConnectorContext makes one on first use. Connector-defined query state lives
+/// as long as this session.
+///
+/// Example:
+///   auto session = context->sessionFor(connectorId);
+///   metadata->beginWrite(session, ...);
 ///
 /// Invariants:
 ///   - `statsWriter` is non-null.
 class ConnectorSession final {
  public:
+  /// Creates a session whose connector query state is uninitialized.
+  /// `queryStateAs` fails on it until `setQueryState` runs.
   ConnectorSession(
       std::string queryId,
       std::string user,
@@ -115,6 +134,28 @@ class ConnectorSession final {
     return queryKind_ ? queryKind_->load() : std::nullopt;
   }
 
+  /// Sets optional connector-defined state during engine initialization. Fails
+  /// if called more than once.
+  void setQueryState(std::unique_ptr<ConnectorQueryState> queryState) {
+    VELOX_CHECK(
+        !queryState_.has_value(),
+        "Connector query state is already initialized");
+    queryState_.emplace(std::move(queryState));
+  }
+
+  /// Returns this connector's query state as type 'T', or nullptr if the
+  /// connector keeps no state. Fails if state initialization has not run or if
+  /// 'T' does not match the state's dynamic type.
+  template <typename T>
+  T* queryStateAs() const {
+    VELOX_CHECK(
+        queryState_.has_value(), "Connector query state is not initialized");
+    if (queryState_.value() == nullptr) {
+      return nullptr;
+    }
+    return velox::checkedPointerCast<T>(queryState_->get());
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
@@ -123,6 +164,9 @@ class ConnectorSession final {
   // Shared with the ConnectorContext that sets it. Null for a session made
   // outside a context.
   const std::shared_ptr<const QueryKindState> queryKind_;
+  // Tracks whether initialization has run, including when the connector keeps
+  // no query state.
+  std::optional<std::unique_ptr<ConnectorQueryState>> queryState_;
 };
 
 } // namespace facebook::axiom::connector

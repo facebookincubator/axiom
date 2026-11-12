@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -36,7 +37,13 @@ class TpchConnectorMetadataTest : public ::testing::Test {
         velox::connector::tpch::TpchConnectorFactory::kTpchConnectorName,
         config,
         nullptr);
-    metadata_ = std::make_unique<TpchConnectorMetadata>(connector_.get());
+    metadata_ = std::make_shared<TpchConnectorMetadata>(connector_.get());
+    ConnectorMetadataRegistry::global().insert(
+        connector_->connectorId(), metadata_);
+  }
+
+  void TearDown() override {
+    ConnectorMetadataRegistry::global().erase(connector_->connectorId());
   }
 
   ConnectorSessionPtr makeSession() {
@@ -44,7 +51,7 @@ class TpchConnectorMetadataTest : public ::testing::Test {
   }
 
   std::unique_ptr<velox::connector::tpch::TpchConnector> connector_;
-  std::unique_ptr<TpchConnectorMetadata> metadata_;
+  std::shared_ptr<TpchConnectorMetadata> metadata_;
 };
 
 TEST_F(TpchConnectorMetadataTest, findAllTables) {

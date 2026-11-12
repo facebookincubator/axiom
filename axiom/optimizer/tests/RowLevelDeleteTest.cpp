@@ -57,15 +57,23 @@ class RowLevelDeleteTest : public test::QueryTestBase {
         .getOnlyResult<int64_t>();
   }
 
-  std::shared_ptr<connector::TestTable> addRows(std::string_view tableName) {
+  std::shared_ptr<connector::TestTable> addRows(
+      std::string_view tableName,
+      const folly::F14FastMap<std::string, velox::Variant>& options = {}) {
     testConnector_->dropTableIfExists(tableName);
     auto table = testConnector_->addTable(
-        std::string{tableName}, ROW({"id", "value"}, BIGINT()));
+        std::string{tableName}, ROW({"id", "value"}, BIGINT()), options);
     table->addData(makeRowVector(
         {makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({10, 20})}));
     table->addData(makeRowVector(
         {makeFlatVector<int64_t>({2, 3}), makeFlatVector<int64_t>({30, 40})}));
     return table;
+  }
+
+  // Appends a batch of two rows to 'table'.
+  void appendRows(const std::shared_ptr<connector::TestTable>& table) {
+    table->addData(makeRowVector(
+        {makeFlatVector<int64_t>({4, 5}), makeFlatVector<int64_t>({50, 60})}));
   }
 
   // Row IDs each writer staged, one entry per finished DELETE.
@@ -213,6 +221,98 @@ TEST_F(RowLevelDeleteTest, executionFailure) {
   EXPECT_EQ(numAbortedDeletes_, 1);
   EXPECT_EQ(runCount("FROM t"), 4);
   EXPECT_TRUE(finishedDeletes_.empty());
+}
+
+// A DELETE commits when its target is unchanged since planning.
+TEST_F(RowLevelDeleteTest, unchangedTarget) {
+  setConnectorSession(kTestConnectorId, "validate_table_versions", "true");
+  auto table = addRows("t", {{"versioned", true}});
+  const auto planned = table->version();
+  auto plan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+
+  runFragmentedPlan(plan);
+
+  EXPECT_EQ(table->version()->tableId, planned->tableId);
+  EXPECT_EQ(table->version()->dataVersion, planned->dataVersion + 1);
+}
+
+// A DELETE is rejected when its target changed after planning, whether rows
+// were appended or deleted or the table was replaced.
+TEST_F(RowLevelDeleteTest, staleTarget) {
+  setConnectorSession(kTestConnectorId, "validate_table_versions", "true");
+  const auto planDelete = [&] {
+    return planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+  };
+  const auto expectRejected = [&](auto& plan, const auto& table) {
+    const auto version = table->version();
+    const auto numRows = table->numRows();
+
+    VELOX_ASSERT_THROW(
+        runFragmentedPlan(plan), "DELETE target changed after planning");
+
+    EXPECT_EQ(table->version(), version);
+    EXPECT_EQ(table->numRows(), numRows);
+  };
+
+  {
+    SCOPED_TRACE("appended rows");
+    auto table = addRows("t", {{"versioned", true}});
+    auto plan = planDelete();
+    appendRows(table);
+    expectRejected(plan, table);
+  }
+  {
+    SCOPED_TRACE("deleted rows");
+    auto table = addRows("t", {{"versioned", true}});
+    auto plan = planDelete();
+    table->deleteRows({0}, table->version());
+    expectRejected(plan, table);
+  }
+  {
+    SCOPED_TRACE("versioned replacement");
+    addRows("t", {{"versioned", true}});
+    auto plan = planDelete();
+    // Same data counter as the original; only the identity differs.
+    auto replacement = addRows("t", {{"versioned", true}});
+    expectRejected(plan, replacement);
+  }
+  {
+    SCOPED_TRACE("unversioned replacement");
+    addRows("t", {{"versioned", true}});
+    auto plan = planDelete();
+    auto replacement = addRows("t");
+    expectRejected(plan, replacement);
+  }
+}
+
+// A DELETE commits despite later changes to its target when the query does not
+// validate table versions.
+TEST_F(RowLevelDeleteTest, validationDisabled) {
+  auto table = addRows("t", {{"versioned", true}});
+  auto plan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+  appendRows(table);
+  const auto changed = table->version();
+
+  runFragmentedPlan(plan);
+
+  EXPECT_EQ(table->version()->tableId, changed->tableId);
+  EXPECT_EQ(table->version()->dataVersion, changed->dataVersion + 1);
+}
+
+// Separately planned queries keep their own table versions.
+TEST_F(RowLevelDeleteTest, queryOwnership) {
+  setConnectorSession(kTestConnectorId, "validate_table_versions", "true");
+  auto table = addRows("t", {{"versioned", true}});
+  auto deletePlan = planVelox(parseDelete("DELETE FROM t WHERE value >= 30"));
+  appendRows(table);
+  const auto numRows = table->numRows();
+
+  // Planning after the append must not observe the version the DELETE saw.
+  planVelox(parseSelect("SELECT value FROM t"));
+
+  VELOX_ASSERT_THROW(
+      runFragmentedPlan(deletePlan), "DELETE target changed after planning");
+  EXPECT_EQ(table->numRows(), numRows);
 }
 
 // A layout whose shuffle key type differs from the partition type's key type is
