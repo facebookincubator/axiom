@@ -21,7 +21,7 @@ endif()
 
 add_library(collagen_arrow ArrowIpcLib.cpp)
 
-target_link_libraries(collagen_arrow velox_arrow_bridge velox_vector velox_memory Arrow::arrow)
+target_link_libraries(collagen_arrow velox_arrow_bridge velox_vector velox_memory arrow)
 
 add_library(collagen_spark_velox_converter SparkVeloxConverter.cpp)
 
@@ -93,9 +93,9 @@ target_link_libraries(
   velox_memory
   Folly::folly
   gRPC::grpc++
-  gflags::gflags
+  gflags
 )
 
 add_executable(collagen_server CollagenServer.cpp)
 
-target_link_libraries(collagen_server collagen_main Folly::folly gflags::gflags)
+target_link_libraries(collagen_server collagen_main Folly::folly gflags)

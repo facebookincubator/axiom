@@ -53,7 +53,7 @@ class SparkToAxiomSetOperationTest : public ::testing::Test {
     velox::functions::prestosql::registerAllScalarFunctions();
 
     // Initialize memory manager and create a memory pool for testing
-    velox::memory::MemoryManager::initialize({});
+    velox::memory::MemoryManager::testingSetInstance({});
     pool_ = velox::memory::MemoryManager::getInstance()->addLeafPool();
 
     // Set up test connector
