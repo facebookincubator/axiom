@@ -169,7 +169,7 @@ TEST_P(TestConnectorQueryTest, sharedSubexpressionPlanning) {
 // A wide same-operator OR chain flattens into one n-ary call and executes;
 // without flattening the left-nested tree would exceed the nesting depth cap.
 TEST_P(TestConnectorQueryTest, wideOrChainExecutes) {
-  auto data = makeRowVector({"a"}, {makeFlatVector<int64_t>({-1, 0, 1, 2})});
+  auto data = makeNamedRowVector("a", makeFlatVector<int64_t>({-1, 0, 1, 2}));
   testConnector_->addTable("t", data->rowType())->addData(data);
 
   // Well past the 512 nesting depth cap (a pre-flatten tree would be rejected),

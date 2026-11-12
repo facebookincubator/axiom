@@ -420,7 +420,7 @@ TEST_F(LocalRunnerTest, fixedPoint) {
   auto schema = velox::ROW("n", velox::BIGINT());
   auto initialPlan =
       PlanBuilder(idGenerator_, pool_.get())
-          .values({makeRowVector({"n"}, {makeFlatVector<int64_t>({1})})})
+          .values({makeNamedRowVector("n", makeFlatVector<int64_t>({1}))})
           .planNode();
   auto step = PlanBuilder(idGenerator_, pool_.get())
                   .stateSource("r", schema)

@@ -406,9 +406,9 @@ class SubfieldTest : public HiveQueriesTestBase,
   void createArrayTable() {
     createTable(
         "t",
-        {makeRowVector(
-            {"a"},
-            {makeArrayVectorFromJson<int64_t>({"[1, 2, 3]", "[4, 5, 6]"})})});
+        {makeNamedRowVector(
+            "a",
+            makeArrayVectorFromJson<int64_t>({"[1, 2, 3]", "[4, 5, 6]"}))});
   }
 
   std::vector<velox::RowVectorPtr> createFeaturesTable(FeatureOptions& opts) {
@@ -901,10 +901,9 @@ TEST_P(SubfieldTest, parallelExpr) {
 TEST_P(SubfieldTest, unnest) {
   createTable(
       "t_unnest",
-      {makeRowVector(
-          {"a"},
-          {makeNestedArrayVectorFromJson<int64_t>(
-              {"[[1, 2], [3, 4]]", "[]"})})});
+      {makeNamedRowVector(
+          "a",
+          makeNestedArrayVectorFromJson<int64_t>({"[[1, 2], [3, 4]]", "[]"}))});
 
   auto logicalPlan = parseSelect(
       "SELECT u, a[3] FROM t_unnest CROSS JOIN UNNEST(a[1]) AS t(u)");
@@ -1119,15 +1118,15 @@ TEST_P(SubfieldTest, subquery) {
   createTable(
       "t_subquery",
       {
-          makeRowVector(
-              {"a"},
-              {makeRowVector(
+          makeNamedRowVector(
+              "a",
+              makeRowVector(
                   {"x", "y", "z"},
                   {
                       makeFlatVector<int32_t>({1, 2, 3}),
                       makeFlatVector<int32_t>({10, 20, 30}),
                       makeFlatVector<int32_t>({11, 22, 33}),
-                  })}),
+                  })),
       });
 
   // This test verifies subfield pushdown, not join ordering. The decorrelated
