@@ -618,10 +618,22 @@ class Emitter {
   struct FixedPointEmission {
     std::string stateName;
     std::vector<velox::core::StateDeclarationPtr> states;
-    // The plans cut so far from the step or the convergence being emitted, in
-    // run order. Each ends in the PartitionedOutput of an exchange on the
-    // state's path; the next plan reads it through an Exchange.
-    std::vector<velox::core::PlanNodePtr> cutPlans;
+    // Producer stages cut so far from the step or convergence. Each ends in
+    // a PartitionedOutput and records the exchanges it actually consumes.
+    std::vector<velox::core::Stage> cutStages;
+    // Inputs of the current stage, scoped while emitting each producer.
+    std::vector<velox::core::StageInput> inputs;
+
+    // Appends the root and resets the graph for the next branch of the loop.
+    std::vector<velox::core::Stage> takeStages(velox::core::PlanNodePtr root) {
+      cutStages.push_back({
+          .id = static_cast<int32_t>(cutStages.size() + 1),
+          .plan = std::move(root),
+          .inputs = std::exchange(inputs, {}),
+      });
+      return velox::core::FixedPointNode::sizeStagesToShuffles(
+          std::exchange(cutStages, {}));
+    }
 
     // Returns a name for the next state.
     std::string nextStateName() const {
@@ -2448,17 +2460,35 @@ velox::core::PlanNodePtr Emitter::makeExchangeConsumer(
 }
 
 velox::core::PlanNodePtr Emitter::emitStepExchange(const Exchange& exchange) {
-  velox::core::PlanNodePtr sourcePlan = emit(exchange.input());
-  fixedPoint_->cutPlans.push_back(
-      makeExchangeProducer(exchange.partitioning(), sourcePlan));
-  return makeExchangeConsumer(
-      exchange.partitioning(), sourcePlan->outputType());
+  auto& emission = *fixedPoint_;
+  velox::core::PlanNodePtr sourcePlan;
+  std::vector<velox::core::StageInput> producerInputs;
+  {
+    // A sibling's exchanges belong to the enclosing stage, not this producer.
+    auto outerInputs = std::exchange(emission.inputs, {});
+    SCOPE_EXIT {
+      emission.inputs = std::move(outerInputs);
+    };
+    sourcePlan = emit(exchange.input());
+    producerInputs = std::exchange(emission.inputs, {});
+  }
+  const auto producerId = static_cast<int32_t>(emission.cutStages.size() + 1);
+  emission.cutStages.push_back({
+      .id = producerId,
+      .plan = makeExchangeProducer(exchange.partitioning(), sourcePlan),
+      .inputs = std::move(producerInputs),
+  });
+  auto consumer =
+      makeExchangeConsumer(exchange.partitioning(), sourcePlan->outputType());
+  emission.inputs.push_back({consumer->id(), producerId});
+  return consumer;
 }
 
 velox::core::PlanNodePtr Emitter::emitExchange(const Exchange& exchange) {
   const auto& partitioning = exchange.partitioning();
-  // In a loop, an exchange between workers ends one plan of the chain and
-  // starts the next. One across the drivers of a task stays in the plan.
+  // In a loop, an exchange between workers ends the producer's stage and is
+  // read by the consumer's stage. One across the drivers of a task stays in
+  // the plan.
   if (fixedPoint_ != nullptr && !partitioning.isDriver()) {
     return emitStepExchange(exchange);
   }
@@ -2801,39 +2831,34 @@ velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
 
   const std::string stateName{fixedPoint.name()};
   FixedPointEmission emission{.stateName = stateName};
-  std::vector<velox::core::PlanNodePtr> plans;
-  std::vector<velox::core::PlanNodePtr> partials;
-  velox::core::PlanNodePtr verdict;
+  std::vector<velox::core::Stage> bodyStages;
+  std::vector<velox::core::Stage> convergenceStages;
   {
     auto* enclosing = std::exchange(fixedPoint_, &emission);
     SCOPE_EXIT {
       fixedPoint_ = enclosing;
     };
-    auto stepPlan = emit(fixedPoint.step());
-    plans = std::exchange(emission.cutPlans, {});
-    plans.push_back(std::move(stepPlan));
+    bodyStages = emission.takeStages(emit(fixedPoint.step()));
     if (fixedPoint.convergence() != nullptr) {
-      verdict = emit(fixedPoint.convergence());
-      partials = std::exchange(emission.cutPlans, {});
+      auto verdict = emit(fixedPoint.convergence());
+      convergenceStages = emission.takeStages(std::move(verdict));
+      // Over a replicated state, worker 0 decides from its own copy of the
+      // state and shares the answer. Its root reads no shuffle, so takeStages
+      // leaves its type as it was.
+      if (fixedPoint.replicatesState()) {
+        convergenceStages.back().type = velox::core::StageType::kSingle;
+      }
     }
   }
 
   auto schema = ExprEmitter::toRowType(fixedPoint.outputColumns());
-
-  // A convergence cut at a gather runs its last plan on worker 0 and shares
-  // the answer. Over a replicated state, worker 0 runs the convergence over
-  // its own replica and shares the answer.
   const auto maxIterations = fixedPoint.maxIterations();
   const bool replicated = fixedPoint.replicatesState();
-  auto convergence = verdict == nullptr
+  auto convergence = convergenceStages.empty()
       ? velox::core::ConvergenceConfig::whenDeltaEmpty(maxIterations)
-      : replicated ? velox::core::ConvergenceConfig::workerZeroVerdict(
-                         std::move(verdict), maxIterations)
-      : partials.empty()
-      ? velox::core::ConvergenceConfig::converging(
-            std::move(verdict), maxIterations)
-      : velox::core::ConvergenceConfig::globalVerdict(
-            std::move(partials), std::move(verdict), maxIterations);
+      : velox::core::ConvergenceConfig::converging(
+            velox::core::MultiStagePlan(std::move(convergenceStages)),
+            maxIterations);
   convergence.errorWhenMaxIterationReached = fixedPoint.failAtBound();
 
   std::vector<velox::core::StateDeclarationPtr> stateDeclarations;
@@ -2849,7 +2874,7 @@ velox::core::PlanNodePtr Emitter::emitFixedPoint(const FixedPoint& fixedPoint) {
   return std::make_shared<velox::core::FixedPointNode>(
       nextId(),
       std::move(stateDeclarations),
-      std::move(plans),
+      velox::core::MultiStagePlan(std::move(bodyStages)),
       std::move(convergence),
       stateName,
       /*outputOnWorkerZero=*/replicated);

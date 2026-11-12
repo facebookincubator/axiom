@@ -217,9 +217,9 @@ iterations and is seeded from the anchor.
 | — | other subtree of the step without a `WorkingTable` | `VectorStateDeclaration` + `StateSourceNode(delta=false)` |
 | anchor branch | anchor branch | `VectorStateDeclaration(counter, append=true)` |
 | — | `FixedPoint` without `convergence` | `ConvergenceConfig::whenDeltaEmpty(maxIterations)` |
-| — | `convergence` with a gather `Exchange` | `ConvergenceConfig::globalVerdict`: the plans before the gather run on every worker, the last on worker 0, the task with destination 0 |
+| — | `convergence` with a gather `Exchange` | `ConvergenceConfig::converging` over the convergence's stages, whose last stage, after the gather, runs on worker 0 (the task with destination 0) and shares its verdict |
 | — | `convergence` without one | `ConvergenceConfig::converging`: the plan runs on every worker |
-| — | `Exchange` on the step's path from its `WorkingTable` | `PartitionedOutput` ending one body plan, `Exchange` starting the next |
+| — | `Exchange` on the step's path from its `WorkingTable` | `PartitionedOutput` ending the producer's stage, `Exchange` reading it in the consumer's stage, recorded as the consumer's input |
 
 `WorkingTableReadMode` also has an `kAccumulated` mode, which emits
 `delta=false` — a read of the whole state rather than the last iteration's
@@ -333,30 +333,27 @@ In pipeline order:
   partial results and a verdict on one task. A partitioned loop without one
   gets `count(*) = 0` over the latest delta: each worker counts its rows, and
   the counts are gathered and added up on one task. A query whose function
-  registry lacks `count` or equality fails. In a partitioned loop's step, each
-  join takes as its probe side the input that reads the exchange, since Velox
-  drives each body plan from the exchange that links it to the plan before; a
-  loop with a join that cannot take that side runs on one task.
+  registry lacks `count` or equality fails.
 
 - **Emit** — emits `ConvergenceConfig::whenDeltaEmpty(maxIterations)` for a
   fixed point without `convergence`: Velox stops on the row count of the delta
-  it already holds. Emit cuts the step at each `Exchange` between workers on its
-  path from the `WorkingTable` into the next body plan, and the `convergence`
-  the same way:
-  the plans before its gather run on every worker, and the last one on worker
-  0, which shares its answer (`ConvergenceConfig::globalVerdict`); the
-  convergence of a loop on one task runs there
-  (`ConvergenceConfig::converging`). Over a replicated state, worker 0 runs
-  the convergence over its own copy and shares its answer
-  (`ConvergenceConfig::workerZeroVerdict`), and only worker 0 emits the output
-  (`FixedPointNode::outputOnWorkerZero`). Emit builds the body and the
-  convergence as chains, in which each plan after the first reads exactly one
-  exchange, as its primary input. PlanPhysical placed
-  every exchange, and Emit translates them. Emit declares the state append or
-  replace as the fixed point's mode says, and emits each `WorkingTable` as its
-  own `StateSourceNode`. An exchange across the drivers of a task stays inside
-  its body plan as a `LocalPartition`. The runner gives each iteration's plans
-  the query's drivers per task (`FixedPointOptions::iterationMaxDrivers`).
+  it already holds. Emit cuts the step into stages at each `Exchange` between
+  workers, and the `convergence` the same way. Each stage records the
+  exchanges it reads and the stage that produces each, so a stage can read
+  several, as a k-means update does when it joins the centroids with a
+  separately shuffled map of them. Emit passes the stages to Velox as a
+  `MultiStagePlan` for the body and for the convergence. A convergence with a
+  gather runs its stages before the gather on every worker and the last one
+  on worker 0, which shares its answer; the convergence of a loop on one task
+  runs there (`ConvergenceConfig::converging`). Over a replicated state,
+  worker 0 runs the convergence over its own copy and shares its answer, and
+  only worker 0 emits the output (`FixedPointNode::outputOnWorkerZero`).
+  PlanPhysical placed every exchange, and Emit translates them. Emit declares
+  the state append or replace as the fixed point's mode says, and emits each
+  `WorkingTable` as its own `StateSourceNode`. An exchange across the drivers
+  of a task stays inside its stage as a `LocalPartition`. The runner gives each
+  iteration's plans the query's drivers per task
+  (`FixedPointOptions::iterationMaxDrivers`).
 
   A fixed point's fragment takes its type from its anchor alone, since the step
   and the convergence run in sub-tasks of the anchor's tasks:

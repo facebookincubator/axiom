@@ -163,6 +163,162 @@ TEST_F(FixedPointTest, selfJoinInStep) {
       })});
 }
 
+// One k-means update with two centroids per partition, as REFRESH VECTOR INDEX
+// trains a day's codecs with PALM. The loop's state holds each partition's
+// centroids, partitioned by day and partition. Each iteration
+//  - A: reads the centroids and shuffles them by partition,
+//  - B: groups the refreshed day's centroids by partition into one map from
+//    cluster to centroid, and shuffles the maps by partition,
+//  - C: joins each of the day's points, held by partition across iterations,
+//    with its partition's map, assigns it to the nearer centroid, averages each
+//    cluster's points, and moves each centroid to its cluster's average,
+//    keeping a centroid without points where it is, and
+//  - D: writes the moved centroids back by day and partition.
+// The day is fixed, so C joins on partition alone and reads both A's and B's
+// shuffles.
+TEST_F(FixedPointTest, kMeansUpdate) {
+  testConnector_
+      ->addTable(
+          "seeds",
+          ROW({
+              {"day", VARCHAR()},
+              {"partition", VARCHAR()},
+              {"cluster", BIGINT()},
+              {"x", DOUBLE()},
+          }))
+      ->addData(makeNamedRowVector({
+          {"day", makeFlatVector<std::string>({"d1", "d1", "d1", "d1"})},
+          {"partition", makeFlatVector<std::string>({"a", "a", "b", "b"})},
+          {"cluster", makeFlatVector<int64_t>({0, 1, 0, 1})},
+          {"x", makeFlatVector<double>({0.0, 10.0, 0.0, 10.0})},
+      }));
+  testConnector_
+      ->addTable(
+          "points",
+          ROW({{"day", VARCHAR()}, {"partition", VARCHAR()}, {"x", DOUBLE()}}))
+      ->addData(makeNamedRowVector({
+          {"day",
+           makeFlatVector<std::string>(
+               {"d1", "d1", "d1", "d1", "d1", "d1", "d1", "d1", "d0"})},
+          {"partition",
+           makeFlatVector<std::string>(
+               {"a", "a", "a", "a", "b", "b", "b", "b", "a"})},
+          {"x", makeFlatVector<double>({1, 3, 8, 12, 2, 4, 6, 9, 100})},
+      }));
+  // At scale the centroid map is shuffled to the points, not broadcast.
+  optimizerOptions_.broadcastSizeLimit = 0;
+
+  lp::PlanBuilder plan(makeContext());
+  auto seeds = plan.newPlan().tableScan("seeds");
+  const auto centroids = [&] {
+    return plan.newPlan().fixedPointState("centroids", seeds);
+  };
+  auto matrix =
+      centroids()
+          .aggregate({"day", "partition"}, {"map_agg(cluster, x) AS matrix"})
+          .as("m");
+  auto means =
+      plan.newPlan()
+          .tableScan("points")
+          .filter("day = 'd1'")
+          .as("p")
+          .join(
+              matrix,
+              "p.day = m.day AND p.partition = m.partition",
+              lp::JoinType::kLeft)
+          .project(
+              {"p.day AS day",
+               "p.partition AS partition",
+               "if(abs(p.x - m.matrix[0]) <= abs(p.x - m.matrix[1]), 0, 1) "
+               "AS cluster",
+               "p.x AS x"})
+          .aggregate({"day", "partition", "cluster"}, {"avg(x) AS x"})
+          .as("new");
+  auto step = centroids()
+                  .as("old")
+                  .join(
+                      means,
+                      "old.day = new.day AND old.partition = new.partition "
+                      "AND old.cluster = new.cluster",
+                      lp::JoinType::kLeft)
+                  .project(
+                      {"old.day AS day",
+                       "old.partition AS partition",
+                       "old.cluster AS cluster",
+                       "coalesce(new.x, old.x) AS x"});
+  auto logicalPlan =
+      seeds.iterate("centroids", step, 2, {"day", "partition", "cluster"})
+          .build();
+
+  // Stage C is the matcher's root join. Its probe side reads A's shuffle, and
+  // its build side joins the points with B's shuffle on its own build side.
+  const auto centroidsDelta = [&](const std::string& prefix) {
+    return matchDelta(
+        "centroids",
+        {prefix + "day",
+         prefix + "partition",
+         prefix + "cluster",
+         prefix + "x"});
+  };
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planVelox(logicalPlan).plan,
+      matchFixedPoint(
+          startFixedPoint("centroids")
+              .outputState(
+                  /*append=*/false,
+                  matchScan("seeds").shuffle({"day", "partition"}))
+              .vectorState(
+                  "points",
+                  matchScan("points")
+                      .aliases({"partition", "x", "day"})
+                      .filter("day = 'd1'")
+                      .project({"partition", "x"})
+                      .shuffle({"partition"}))
+              .plan(
+                  centroidsDelta("")
+                      .shuffle({"partition"})
+                      .hashJoinLeft(
+                          core::PlanMatcherBuilder()
+                              .stateSource("points", /*delta=*/false)
+                              .aliases({"p_partition", "p_x"})
+                              .hashJoinLeft(
+                                  centroidsDelta("m_")
+                                      .filter("m_day = 'd1'")
+                                      .localAggregation(
+                                          {"m_day", "m_partition"},
+                                          {"map_agg(m_cluster, m_x) AS matrix"})
+                                      .shuffle({"m_partition"}),
+                                  {.keys = {{"p_partition = m_partition"}}})
+                              .project(
+                                  {"p_partition",
+                                   "if(abs(p_x - subscript(matrix, 0)) <= "
+                                   "abs(p_x - subscript(matrix, 1)), 0, 1) "
+                                   "AS p_cluster",
+                                   "p_x"})
+                              .localAggregation(
+                                  {"p_partition", "p_cluster"},
+                                  {"avg(p_x) AS mean"}),
+                          {.keys =
+                               {{"partition = p_partition",
+                                 "cluster = p_cluster"}},
+                           .filter = "day = 'd1'"})
+                      .project(
+                          {"day", "partition", "cluster", "coalesce(mean, x)"})
+                      .shuffle({"day", "partition"})))
+          .gather()
+          .build());
+
+  checkSame(
+      logicalPlan,
+      {makeNamedRowVector({
+          {"day", makeFlatVector<std::string>({"d1", "d1", "d1", "d1"})},
+          {"partition", makeFlatVector<std::string>({"a", "a", "b", "b"})},
+          {"cluster", makeFlatVector<int64_t>({0, 1, 0, 1})},
+          {"x", makeFlatVector<double>({2.0, 10.0, 3.0, 7.5})},
+      })},
+      {.maxRemotePartitions = 3, .maxLocalPartitions = 2});
+}
+
 // A loop's step runs with the task's drivers, as any other subtree does: its
 // aggregation splits into a partial and a final step around a local gather.
 TEST_F(FixedPointTest, stepDrivers) {
@@ -774,9 +930,10 @@ TEST_F(FixedPointTest, rowLocalConvergencePartitioned) {
   checkSame(logicalPlan, {makeRowVector({makeFlatVector<int64_t>({2, 3})})});
 }
 
-// With several workers, a loop whose step joins on a shuffled input that cannot
-// be the join's probe side runs on one task.
-TEST_F(FixedPointTest, unswappableJoinOnOneTask) {
+// A loop's step may read a shuffle on a join's build side. The semi join keeps
+// the shuffled destinations as its build side, as its inputs cannot swap, and
+// the loop runs on every worker.
+TEST_F(FixedPointTest, shuffleOnBuildSide) {
   testConnector_->addTable("t", ROW("a", BIGINT()))
       ->addData(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
   testConnector_->addTable("e", ROW({"src", "dst"}, BIGINT()))
@@ -814,17 +971,35 @@ TEST_F(FixedPointTest, unswappableJoinOnOneTask) {
               /*keyColumns=*/{})
           .build();
 
-  auto makeMatcher = [](bool distributed) {
-    return matchFixedPoint(
-               startFixedPoint("r")
-                   .outputState(
-                       /*append=*/false, matchScan("t").gatherIf(distributed))
-                   .hashTableState(matchScan("e").gatherIf(distributed)))
-        .project({"a AS n"})
-        .build();
-  };
-  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), makeMatcher(false));
-  AXIOM_ASSERT_DISTRIBUTED_PLAN(planVelox(logicalPlan).plan, makeMatcher(true));
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan),
+      matchFixedPoint(startFixedPoint("r")
+                          .outputState(/*append=*/false, matchScan("t"))
+                          .hashTableState(matchScan("e")))
+          .project({"a AS n"})
+          .build());
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planVelox(logicalPlan).plan,
+      matchFixedPoint(
+          startFixedPoint("r")
+              .outputState(/*append=*/false, matchScan("t").shuffle({"a"}))
+              .hashTableState(matchScan("e").shuffle({"src"}))
+              .plan(matchDelta("r", {"n"})
+                        .hashJoin(
+                            matchDelta("r", {"source"})
+                                .stateHashJoin({"source"})
+                                .project({"dst"})
+                                .partialAggregation()
+                                .shuffle({"dst"})
+                                .localPartition()
+                                .finalAggregation(),
+                            core::JoinType::kLeftSemiFilter,
+                            {.keys = {{"n = dst"}}})
+                        .project({"n + 1 AS next"})
+                        .shuffle({"next"})))
+          .project({"a AS n"})
+          .gather()
+          .build());
   checkSame(logicalPlan, {makeRowVector({makeFlatVector<int64_t>({3})})});
 }
 
@@ -1207,16 +1382,17 @@ TEST_F(FixedPointTest, pageRank) {
               .hashTableState(matchScan("large_edges"))
               .plan(
                   ranks()
-                      .filter("out_degree > 0")
-                      .stateHashJoin({"vertex_id"})
-                      .project()
-                      .project()
-                      .partialAggregation()
-                      .shuffle()
-                      .localPartition()
-                      .finalAggregation()
-                      .broadcast()
-                      .hashJoinRight(ranks())
+                      .hashJoinLeft(
+                          ranks()
+                              .filter("out_degree > 0")
+                              .stateHashJoin({"vertex_id"})
+                              .project()
+                              .project()
+                              .partialAggregation()
+                              .shuffle()
+                              .localPartition()
+                              .finalAggregation()
+                              .broadcast())
                       .nestedLoopJoin(
                           ranks()
                               .project()
@@ -1363,14 +1539,15 @@ TEST_F(FixedPointTest, connectedComponents) {
                     matchScan(std::string(edgesTable)).shuffle({"src"}))
                 .plan(
                     labels()
-                        .filter("changed")
-                        .stateHashJoin({"vertex"})
-                        .project()
-                        .partialAggregation({"dst"}, {"min(label)"})
-                        .shuffle({"dst"})
-                        .localPartition()
-                        .finalAggregation()
-                        .hashJoinRight(labels())
+                        .hashJoinLeft(
+                            labels()
+                                .filter("changed")
+                                .stateHashJoin({"vertex"})
+                                .project()
+                                .partialAggregation({"dst"}, {"min(label)"})
+                                .shuffle({"dst"})
+                                .localPartition()
+                                .finalAggregation())
                         .project())
                 .converge(
                     labels()
@@ -1537,21 +1714,22 @@ TEST_F(FixedPointTest, kMeans) {
                   /*append=*/false, matchScan("seeds").project().broadcast())
               .vectorState("points", matchScan("points"))
               .plan(
-                  core::PlanMatcherBuilder()
-                      .stateSource("points", /*delta=*/false)
-                      .nestedLoopJoin(
-                          centroids()
+                  centroids()
+                      .hashJoinLeft(
+                          core::PlanMatcherBuilder()
+                              .stateSource("points", /*delta=*/false)
+                              .nestedLoopJoin(
+                                  centroids()
+                                      .project()
+                                      .localGather()
+                                      .singleAggregation())
                               .project()
-                              .localGather()
-                              .singleAggregation())
-                      .project()
-                      .partialAggregation()
-                      .shuffle()
-                      .localPartition()
-                      .finalAggregation()
-                      .project()
-                      .broadcast()
-                      .hashJoinRight(centroids())
+                              .partialAggregation()
+                              .shuffle()
+                              .localPartition()
+                              .finalAggregation()
+                              .project()
+                              .broadcast())
                       .project())
               .convergeOnWorkerZero(
                   centroids()

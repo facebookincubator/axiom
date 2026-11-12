@@ -225,5 +225,5 @@ the additions marked as follow-ups.
   with `edges` reads no state, so its build side becomes a
   `HashTableStateDeclaration`, built once and probed by a `StateHashJoinNode`.
   Each read of the state becomes its own `StateSourceNode`. The convergence
-  becomes `ConvergenceConfig::globalVerdict`: fragment D runs on every worker
-  and the verdict plan on worker 0.
+  becomes `ConvergenceConfig::converging` over two stages: fragment D runs on
+  every worker, and the verdict stage after the gather on worker 0.
