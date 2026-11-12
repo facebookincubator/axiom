@@ -235,13 +235,9 @@ std::optional<PersistedStats> PersistedStats::read(
   }
 }
 
-void PersistedStats::write(const std::string& directory, PersistedStats stats) {
-  auto existing = PersistedStats::read(directory);
-  if (existing.has_value()) {
-    existing->merge(stats.numRows, stats.columns);
-    stats = std::move(existing.value());
-  }
-
+void PersistedStats::write(
+    const std::string& directory,
+    const PersistedStats& stats) {
   const auto file = statsPath(directory);
   std::ofstream outputFile(file);
   VELOX_CHECK(outputFile.is_open(), "Failed to open stats file: {}", file);

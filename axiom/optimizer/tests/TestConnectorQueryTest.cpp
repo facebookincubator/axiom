@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
+#include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/QueryTestBase.h"
 #include "velox/exec/TableWriter.h"
@@ -35,18 +36,21 @@ class TestConnectorQueryTest : public QueryTestBase,
     useV2_ = GetParam();
   }
 
+  static connector::ConnectorSessionPtr makeSession() {
+    return connector::makeTestContext("test")->sessionFor(kTestConnectorId);
+  }
+
   MultiFragmentPlanPtr appendTableWrite(
       const MultiFragmentPlanPtr& plan,
       const RowTypePtr& schema,
-      const std::string& tableName) {
+      const connector::ConnectorWriteHandlePtr& writeHandle) {
     EXPECT_EQ(plan->stages().size(), 1);
     const auto& stage = plan->stagePlan().root();
 
     auto source = stage.plan;
     auto handle = std::make_shared<core::InsertTableHandle>(
         kTestConnectorId,
-        std::make_shared<connector::TestInsertTableHandle>(SchemaTableName{
-            std::string(connector::TestConnector::kDefaultSchema), tableName}),
+        writeHandle->veloxHandle(),
         /*notNullColumns=*/folly::F14FastSet<std::string>{});
     auto write = std::make_shared<core::TableWriteNode>(
         "writenodeid",
@@ -125,8 +129,15 @@ TEST_P(TestConnectorQueryTest, writeFiltered) {
   });
 
   auto fragmentedPlan = planVelox(logicalPlan, options_);
-  fragmentedPlan.plan = appendTableWrite(fragmentedPlan.plan, schema, "u");
+  auto writeHandle = testConnector_->metadata()->beginWrite(
+      makeSession(), table, connector::WriteKind::kInsert, /*explain=*/false);
+  fragmentedPlan.plan =
+      appendTableWrite(fragmentedPlan.plan, schema, writeHandle);
   runFragmentedPlan(fragmentedPlan);
+  testConnector_->metadata()
+      ->finishWrite(
+          makeSession(), writeHandle, /*writeResults=*/{}, nullptr, {})
+      .get();
 
   EXPECT_EQ(table->data().size(), 1);
   auto actual = table->data().front();

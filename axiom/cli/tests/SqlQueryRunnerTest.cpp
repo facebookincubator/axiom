@@ -643,6 +643,10 @@ TEST_F(SqlQueryRunnerTest, createTableRunsWritePath) {
 
   // A real CREATE runs the write path, surfacing the commit error.
   VELOX_ASSERT_THROW(run("CREATE TABLE t(x int)"), "boom from finishWrite");
+
+  // The failed commit aborted the write, which dropped the table.
+  run("RESET SESSION test.finish_write_error");
+  run("CREATE TABLE t(x int)");
 }
 
 TEST_F(SqlQueryRunnerTest, createAndDropSchema) {

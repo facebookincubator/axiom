@@ -437,6 +437,38 @@ void TestTable::addData(
   }
 }
 
+void TestTable::stageData(
+    int64_t writeId,
+    const velox::RowVectorPtr& data,
+    bool collectColumnStatistics) {
+  std::lock_guard<std::mutex> l(stagedMutex_);
+  staged_[writeId].push_back(
+      {std::dynamic_pointer_cast<velox::RowVector>(
+           velox::BaseVector::copy(*data, pool_.get())),
+       collectColumnStatistics});
+}
+
+void TestTable::commitWrite(int64_t writeId) {
+  std::vector<StagedData> staged;
+  {
+    std::lock_guard<std::mutex> l(stagedMutex_);
+    auto it = staged_.find(writeId);
+    if (it == staged_.end()) {
+      return;
+    }
+    staged = std::move(it->second);
+    staged_.erase(it);
+  }
+  for (const auto& [data, collectColumnStatistics] : staged) {
+    addData(data, collectColumnStatistics);
+  }
+}
+
+void TestTable::abortWrite(int64_t writeId) {
+  std::lock_guard<std::mutex> l(stagedMutex_);
+  staged_.erase(writeId);
+}
+
 int64_t TestTable::deleteRows(const folly::F14FastSet<int64_t>& rowIds) {
   std::vector<velox::RowVectorPtr> keptData;
   std::vector<int32_t> keptBucketIds;
@@ -719,7 +751,7 @@ std::shared_ptr<SplitSource> TestSplitManager::getSplitSource(
       partitionType);
 }
 
-std::shared_ptr<Table> TestConnectorMetadata::findTableInternal(
+std::shared_ptr<TestTable> TestConnectorMetadata::findTableInternal(
     const SchemaTableName& tableName) {
   auto it = tables_.find(tableName);
   if (it == tables_.end()) {
@@ -1278,9 +1310,10 @@ folly::coro::Task<TablePtr> TestConnectorMetadata::co_doCreateTable(
 ConnectorWriteHandlePtr TestConnectorMetadata::beginWrite(
     const ConnectorSessionPtr& /*session*/,
     const TablePtr& table,
-    WriteKind /*kind*/,
+    WriteKind kind,
     bool /*explain*/) {
-  auto insertHandle = std::make_shared<TestInsertTableHandle>(table->name());
+  auto insertHandle = std::make_shared<TestInsertTableHandle>(
+      table->name(), kind, nextWriteId_++);
   return std::make_shared<ConnectorWriteHandle>(
       std::move(insertHandle),
       velox::exec::TableWriteTraits::outputType(std::nullopt));
@@ -1291,8 +1324,7 @@ DeleteLayout TestConnectorMetadata::deleteLayout(
     const velox::connector::ConnectorTableHandlePtr& scanHandle,
     bool /*exact*/) {
   const auto* testHandle = scanHandle->asChecked<TestTableHandle>();
-  const auto table = std::dynamic_pointer_cast<TestTable>(
-      findTableInternal(testHandle->schemaTableName()));
+  const auto table = findTableInternal(testHandle->schemaTableName());
   VELOX_CHECK_NOT_NULL(
       table,
       "DELETE target does not exist: {}",
@@ -1314,7 +1346,7 @@ ConnectorDeleteHandlePtr TestConnectorMetadata::beginDelete(
 
 RowsFuture TestConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& session,
-    const ConnectorWriteHandlePtr& /*handle*/,
+    const ConnectorWriteHandlePtr& handle,
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr /*groupingKeys*/,
     std::vector<std::vector<ColumnStatistics>> /*groupStats*/) {
@@ -1323,6 +1355,13 @@ RowsFuture TestConnectorMetadata::finishWrite(
       error.has_value() && !error->empty()) {
     VELOX_USER_FAIL("{}", *error);
   }
+
+  const auto* testHandle =
+      handle->veloxHandle()->asChecked<TestInsertTableHandle>();
+  const auto table = findTableInternal(testHandle->tableName());
+  VELOX_CHECK_NOT_NULL(
+      table, "Table does not exist: {}", testHandle->tableName().toString());
+  table->commitWrite(testHandle->writeId());
 
   int64_t rows = 0;
   velox::DecodedVector decoded;
@@ -1335,6 +1374,22 @@ RowsFuture TestConnectorMetadata::finishWrite(
     }
   }
   return folly::makeSemiFuture(std::optional<int64_t>{rows});
+}
+
+velox::ContinueFuture TestConnectorMetadata::abortWrite(
+    const ConnectorSessionPtr& /*session*/,
+    const ConnectorWriteHandlePtr& handle) noexcept try {
+  const auto* testHandle =
+      handle->veloxHandle()->asChecked<TestInsertTableHandle>();
+  if (testHandle->kind() == WriteKind::kCreate) {
+    dropTableIfExists(testHandle->tableName());
+  } else if (const auto table = findTableInternal(testHandle->tableName())) {
+    table->abortWrite(testHandle->writeId());
+  }
+  return {};
+} catch (const std::exception& e) {
+  LOG(ERROR) << e.what() << " while aborting write to TestConnector table";
+  return folly::exception_wrapper{folly::current_exception()};
 }
 
 RowsFuture TestConnectorMetadata::finishDelete(
@@ -1374,8 +1429,7 @@ RowsFuture TestConnectorMetadata::finishDelete(
       writerRows.push_back(std::move(staged));
     }
   }
-  auto table = std::dynamic_pointer_cast<TestTable>(
-      findTableInternal(deleteHandle->tableName()));
+  auto table = findTableInternal(deleteHandle->tableName());
   VELOX_CHECK_NOT_NULL(
       table,
       "DELETE target does not exist: {}",
@@ -1736,7 +1790,8 @@ std::unique_ptr<velox::connector::DataSink> TestConnector::createDataSink(
   const auto collectColumnStatistics =
       connectorQueryCtx->sessionProperties()->get<bool>(
           TestConfigProvider::kCollectColumnStatistics, true);
-  return std::make_unique<TestDataSink>(table, collectColumnStatistics);
+  return std::make_unique<TestDataSink>(
+      table, testHandle->writeId(), collectColumnStatistics);
 }
 
 std::shared_ptr<TestTable> TestConnector::addTable(
@@ -1770,8 +1825,7 @@ std::shared_ptr<TestTable> TestConnector::addTable(
       std::move(definition),
       /*ifNotExists=*/false,
       /*explain=*/false));
-  return std::static_pointer_cast<TestTable>(
-      metadata_->findTableInternal(tableName));
+  return metadata_->findTableInternal(tableName);
 }
 
 std::shared_ptr<TestTable> TestConnector::addPartitionedTable(
@@ -1807,8 +1861,7 @@ VectorIndexPtr TestConnector::addVectorIndex(
 
 std::shared_ptr<TestTable> TestConnector::findTable(
     const SchemaTableName& tableName) {
-  return std::static_pointer_cast<TestTable>(
-      metadata_->findTableInternal(tableName));
+  return metadata_->findTableInternal(tableName);
 }
 
 bool TestConnector::dropTableIfExists(const SchemaTableName& name) {
@@ -1823,6 +1876,7 @@ void TestConnector::registerSerDe() {
   TestTableHandle::registerSerDe();
   TestColumnHandle::registerSerDe();
   TestConnectorSplit::registerSerDe();
+  TestInsertTableHandle::registerSerDe();
   registered = true;
 }
 
@@ -2046,7 +2100,7 @@ std::shared_ptr<velox::connector::Connector> TestConnectorFactory::newConnector(
 
 void TestDataSink::appendData(velox::RowVectorPtr vector) {
   if (vector) {
-    table_->addData(vector, collectColumnStatistics_);
+    table_->stageData(writeId_, vector, collectColumnStatistics_);
   }
 }
 

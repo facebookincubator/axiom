@@ -1828,21 +1828,6 @@ void collectWrittenFiles(
   }
 }
 
-// Moves the files and partition directories written to 'sourceDir' into
-// 'targetDir' (see collectWrittenFiles). Checks every target before moving any,
-// so a partition that exists fails the move with nothing moved.
-void moveWrittenFiles(
-    const fs::path& sourceDir,
-    const fs::path& targetDir,
-    size_t numPartitionLevels) {
-  std::vector<std::pair<fs::path, fs::path>> moves;
-  collectWrittenFiles(sourceDir, targetDir, numPartitionLevels, moves);
-  for (const auto& [source, target] : moves) {
-    fs::create_directories(target.parent_path());
-    fs::rename(source, target);
-  }
-}
-
 // Check if directory exists.
 bool dirExists(const std::string& path) {
   struct stat info{};
@@ -2084,6 +2069,61 @@ std::optional<int64_t> LocalHiveConnectorMetadata::removePartitions(
   return rows;
 }
 
+// static
+LocalHiveConnectorMetadata::WriteStats LocalHiveConnectorMetadata::writeStats(
+    const std::string& targetPath,
+    bool partitioned,
+    uint64_t rows,
+    const velox::RowVectorPtr& groupingKeys,
+    std::vector<std::vector<ColumnStatistics>> groupStats) {
+  VELOX_CHECK(
+      !partitioned || groupingKeys != nullptr || rows == 0,
+      "A write to a partitioned table must report its partitions");
+  WriteStats stats;
+  if (groupingKeys != nullptr) {
+    VELOX_CHECK_EQ(
+        groupStats.size(),
+        groupingKeys->size(),
+        "Stats group count does not match grouping keys count");
+
+    // The last column in groupingKeys is $row_count (per-group row count).
+    // Preceding columns are partition keys.
+    const auto numColumns = groupingKeys->childrenSize();
+    VELOX_CHECK_GT(numColumns, 0);
+    auto* rowCounts = groupingKeys->childAt(numColumns - 1)
+                          ->asUnchecked<velox::SimpleVector<int64_t>>();
+
+    // Drop the $row_count column (last) to get only partition keys.
+    auto partitionKeys = dropLastColumn(groupingKeys);
+
+    for (auto i = 0; i < groupingKeys->size(); ++i) {
+      const auto partitionRows = rowCounts->valueAt(i);
+      auto partitionDirName =
+          velox::connector::hive::HivePartitionName::partitionName(
+              i, partitionKeys, /*partitionKeyAsLowerCase=*/true);
+      stats.partitions.push_back(fs::path(targetPath) / partitionDirName);
+      stats.files.emplace_back(
+          fmt::format("{}/{}", targetPath, partitionDirName),
+          PersistedStats{
+              static_cast<uint64_t>(partitionRows), std::move(groupStats[i])});
+    }
+  } else if (!partitioned) {
+    stats.files.emplace_back(
+        targetPath,
+        PersistedStats{
+            rows,
+            groupStats.empty() ? std::vector<ColumnStatistics>{}
+                               : std::move(groupStats[0])});
+  }
+  for (auto& [directory, written] : stats.files) {
+    if (auto existing = PersistedStats::read(directory)) {
+      existing->merge(written.numRows, written.columns);
+      written = std::move(*existing);
+    }
+  }
+  return stats;
+}
+
 RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const ConnectorSessionPtr& /*session*/,
     const ConnectorWriteHandlePtr& handle,
@@ -2114,59 +2154,38 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
                                        ->asChecked<HiveTableLayout>()
                                        ->hivePartitionColumns()
                                        .size();
-  moveWrittenFiles(writePath, targetPath, numPartitionColumns);
+  // Everything that can reject the write runs before the files move, so a
+  // failed write leaves the table as it was.
+  std::vector<std::pair<fs::path, fs::path>> moves;
+  collectWrittenFiles(writePath, targetPath, numPartitionColumns, moves);
+
+  auto stats = writeStats(
+      targetPath,
+      numPartitionColumns > 0,
+      rows,
+      groupingKeys,
+      std::move(groupStats));
+
+  // The partitions the write changes are no longer the ones the indexes hold.
+  // Dropping them first is safe: an index that covers fewer partitions is
+  // still correct.
+  if (rows > 0) {
+    removeFromVectorIndexes(*hiveHandle->table(), stats.partitions);
+  }
+
+  // Commits the write. Only I/O errors can fail the steps from here on.
+  for (const auto& [source, target] : moves) {
+    fs::create_directories(target.parent_path());
+    fs::rename(source, target);
+  }
   deleteDirectoryRecursive(writePath);
-
-  // Persist write-time stats. For partitioned tables, write per-partition
-  // .stats files, none when the write has no rows. For unpartitioned tables,
-  // write a single .stats file in the table directory. Merges with existing
-  // stats from prior writes.
-  const bool partitioned = numPartitionColumns > 0;
-  VELOX_CHECK(
-      !partitioned || groupingKeys != nullptr || rows == 0,
-      "A write to a partitioned table must report its partitions");
-  std::vector<fs::path> writtenPartitions;
-  if (groupingKeys != nullptr) {
-    VELOX_CHECK_EQ(
-        groupStats.size(),
-        groupingKeys->size(),
-        "Stats group count does not match grouping keys count");
-
-    // The last column in groupingKeys is $row_count (per-group row count).
-    // Preceding columns are partition keys.
-    const auto numColumns = groupingKeys->childrenSize();
-    VELOX_CHECK_GT(numColumns, 0);
-    auto* rowCounts = groupingKeys->childAt(numColumns - 1)
-                          ->asUnchecked<velox::SimpleVector<int64_t>>();
-
-    // Drop the $row_count column (last) to get only partition keys.
-    auto partitionKeys = dropLastColumn(groupingKeys);
-
-    for (auto i = 0; i < groupingKeys->size(); ++i) {
-      const auto partitionRows = rowCounts->valueAt(i);
-      auto partitionDirName =
-          velox::connector::hive::HivePartitionName::partitionName(
-              i, partitionKeys, /*partitionKeyAsLowerCase=*/true);
-      writtenPartitions.push_back(fs::path(targetPath) / partitionDirName);
-      PersistedStats::write(
-          fmt::format("{}/{}", targetPath, partitionDirName),
-          {static_cast<uint64_t>(partitionRows), std::move(groupStats[i])});
-    }
-  } else if (!partitioned) {
-    PersistedStats::write(
-        targetPath,
-        {rows,
-         groupStats.empty() ? std::vector<ColumnStatistics>{}
-                            : std::move(groupStats[0])});
+  for (const auto& [directory, merged] : stats.files) {
+    PersistedStats::write(directory, merged);
   }
 
   // loadTable reads the .schema and .stats files, populating in-memory
   // Column stats.
   loadTable(hiveHandle->table()->name().table, targetPath);
-  // The partitions the write changed are no longer the ones the indexes hold.
-  if (rows > 0) {
-    removeFromVectorIndexes(*hiveHandle->table(), writtenPartitions);
-  }
 
   return rows;
 }

@@ -40,11 +40,7 @@ class TpchConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        Properties{},
-        makeTestStatWriter());
+    return makeTestContext("test")->sessionFor(connector_->connectorId());
   }
 
   std::unique_ptr<velox::connector::tpch::TpchConnector> connector_;

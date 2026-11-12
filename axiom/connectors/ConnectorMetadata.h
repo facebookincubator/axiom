@@ -1635,7 +1635,9 @@ class ConnectorMetadata {
   }
 
   /// Finalizes the table write operation represented by the provided handle.
-  /// Returns a future containing the number of rows written.
+  /// Returns a future containing the number of rows written. Commits
+  /// atomically: on failure, the table is as it was before the call, and the
+  /// engine then calls abortWrite.
   ///
   /// @param session Connector session.
   /// @param handle Write handle returned by beginWrite.
@@ -1663,6 +1665,8 @@ class ConnectorMetadata {
   /// Finalizes a DELETE started by beginDelete and returns the number of rows
   /// removed. 'deleteResults' contains the results produced by row-level delete
   /// writers, or is empty when the connector performs a metadata-only delete.
+  /// Commits atomically: on failure, the table is as it was before the call,
+  /// and the engine then calls abortDelete.
   virtual RowsFuture finishDelete(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorDeleteHandlePtr& handle,
@@ -1670,21 +1674,24 @@ class ConnectorMetadata {
     VELOX_UNSUPPORTED();
   }
 
-  /// Aborts an abandoned or failed write operation. Abort is not guaranteed to
-  /// run in all failure cases. After abort is triggered for the write operation
-  /// represented by ConnectorWriteHandle, this handle can no longer be used to
-  /// commit a write operation with finishWrite. If this function is not
-  /// implemented by a connector, abort will be a no-op. If the abort is a
-  /// synchronous operation, the connector should perform the abort and return
-  /// an already-fulfilled future.
+  /// Aborts an abandoned or failed write operation, including one whose
+  /// finishWrite failed. Since finishWrite is atomic, the abort undoes only
+  /// what beginWrite and the writers did. Abort is not guaranteed to run in
+  /// all failure cases. After abort
+  /// is triggered for the write operation represented by ConnectorWriteHandle,
+  /// this handle can no longer be used to commit a write operation with
+  /// finishWrite. If this function is not implemented by a connector, abort
+  /// will be a no-op. If the abort is a synchronous operation, the connector
+  /// should perform the abort and return an already-fulfilled future.
   virtual velox::ContinueFuture abortWrite(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorWriteHandlePtr& handle) noexcept {
     return {};
   }
 
-  /// Aborts an abandoned or failed DELETE. If not implemented, abort is a
-  /// no-op.
+  /// Aborts an abandoned or failed DELETE, including one whose finishDelete
+  /// failed. Since finishDelete is atomic, the abort undoes only what
+  /// beginDelete and the writers did. If not implemented, abort is a no-op.
   virtual velox::ContinueFuture abortDelete(
       [[maybe_unused]] const ConnectorSessionPtr& session,
       [[maybe_unused]] const ConnectorDeleteHandlePtr& handle) noexcept {
