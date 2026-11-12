@@ -137,11 +137,7 @@ bool runSetupStatement(
           ::axiom::sql::presto::ParserOptions{}));
   auto stmt = parser.parse(sql);
 
-  auto session = std::make_shared<connector::ConnectorSession>(
-      /*queryId=*/"test",
-      /*user=*/"test",
-      connector::Properties{},
-      connector::makeTestStatWriter());
+  auto session = connector::makeTestContext("test")->sessionFor(connectorId);
 
   if (stmt->isCreateTable()) {
     const auto& create =

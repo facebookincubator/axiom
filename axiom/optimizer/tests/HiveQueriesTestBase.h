@@ -55,11 +55,8 @@ class HiveQueriesTestBase : public QueryTestBase {
   static void TearDownTestCase();
 
   static connector::ConnectorSessionPtr makeSession() {
-    return std::make_shared<connector::ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        connector::Properties{},
-        connector::makeTestStatWriter());
+    return connector::makeTestContext("test")->sessionFor(
+        velox::exec::test::kHiveConnectorId);
   }
 
   /// Returns a schema of a table.

@@ -61,11 +61,7 @@ class TestConnectorTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        Properties{},
-        makeTestStatWriter());
+    return makeTestContext("test")->sessionFor(connector_->connectorId());
   }
 
   std::shared_ptr<TestConnector> connector_;
@@ -260,8 +256,6 @@ TEST_F(TestConnectorTest, splits) {
 
 TEST_F(TestConnectorTest, dataSink) {
   auto schema = ROW({"a"}, {INTEGER()});
-  auto handle = std::make_shared<TestInsertTableHandle>(
-      SchemaTableName{std::string(TestConnector::kDefaultSchema), "table"});
   auto table = connector_->addTable("table", schema);
   EXPECT_EQ(table->numRows(), 0);
 
@@ -282,26 +276,39 @@ TEST_F(TestConnectorTest, dataSink) {
           /*driverId=*/0,
           /*sessionTimezone=*/"UTC");
 
-  auto dataSink = connector_->createDataSink(
-      schema,
-      handle,
-      connectorQueryCtx.get(),
-      velox::connector::CommitStrategy::kNoCommit);
-  EXPECT_NE(dataSink, nullptr);
+  // Writes 'vectors' through a data sink of a new INSERT and returns the
+  // INSERT's handle.
+  const auto write = [&](const std::vector<RowVectorPtr>& vectors) {
+    auto handle = connector_->metadata()->beginWrite(
+        makeSession(), table, WriteKind::kInsert, /*explain=*/false);
+    auto dataSink = connector_->createDataSink(
+        schema,
+        handle->veloxHandle(),
+        connectorQueryCtx.get(),
+        velox::connector::CommitStrategy::kNoCommit);
+    for (const auto& vector : vectors) {
+      dataSink->appendData(vector);
+    }
+    EXPECT_TRUE(dataSink->finish());
+    EXPECT_TRUE(dataSink->close().empty());
+    return handle;
+  };
 
-  auto vector = makeRowVector({makeFlatVector<int>({0, 1, 2})});
-  dataSink->appendData(vector);
-  EXPECT_EQ(table->numRows(), 3);
-
-  vector = makeRowVector({makeFlatVector<int>({3, 4})});
-  dataSink->appendData(vector);
+  // The rows become visible when the INSERT commits.
+  auto handle = write(
+      {makeRowVector({makeFlatVector<int>({0, 1, 2})}),
+       makeRowVector({makeFlatVector<int>({3, 4})}),
+       nullptr});
+  EXPECT_EQ(table->numRows(), 0);
+  connector_->metadata()
+      ->finishWrite(makeSession(), handle, /*writeResults=*/{}, nullptr, {})
+      .get();
   EXPECT_EQ(table->numRows(), 5);
 
-  dataSink->appendData(nullptr);
+  // An aborted INSERT adds no rows.
+  handle = write({makeRowVector({makeFlatVector<int>({5})})});
+  connector_->metadata()->abortWrite(makeSession(), handle).get();
   EXPECT_EQ(table->numRows(), 5);
-
-  EXPECT_TRUE(dataSink->finish());
-  EXPECT_TRUE(dataSink->close().empty());
 
   auto deleteSink = connector_->createDataSink(
       ROW(std::string{TestTable::kRowId}, BIGINT()),

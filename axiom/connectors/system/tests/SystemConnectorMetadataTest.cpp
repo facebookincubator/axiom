@@ -167,11 +167,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
   }
 
   ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
-        /*queryId=*/"test",
-        /*user=*/"test",
-        Properties{},
-        makeTestStatWriter());
+    return makeTestContext("test")->sessionFor(kSystemCatalog);
   }
 
   // Creates a DataSource for the given schema/table through the connector,

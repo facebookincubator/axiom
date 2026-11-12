@@ -18,7 +18,9 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <atomic>
 #include <functional>
+#include <mutex>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "velox/core/ITypedExpr.h"
@@ -300,6 +302,20 @@ class TestTable : public Table {
       const velox::RowVectorPtr& data,
       bool collectColumnStatistics = true);
 
+  /// Holds a copy of 'data' for the INSERT 'writeId' until commitWrite adds it
+  /// to the table (see addData) or abortWrite drops it. The writers of one
+  /// INSERT may call this concurrently.
+  void stageData(
+      int64_t writeId,
+      const velox::RowVectorPtr& data,
+      bool collectColumnStatistics);
+
+  /// Adds the data staged for the INSERT 'writeId' to the table.
+  void commitWrite(int64_t writeId);
+
+  /// Drops the data staged for the INSERT 'writeId'.
+  void abortWrite(int64_t writeId);
+
   /// Removes the rows whose stable identifiers appear in 'rowIds' and returns
   /// how many it removed. An identifier with no live row, such as one an
   /// earlier DELETE removed, removes nothing, so the count can be less than
@@ -361,6 +377,11 @@ class TestTable : public Table {
     int64_t totalSizeInBytes{0};
   };
 
+  struct StagedData {
+    velox::RowVectorPtr data;
+    bool collectColumnStatistics;
+  };
+
   velox::connector::Connector* connector_;
   std::vector<const TableLayout*> layouts_;
   std::unique_ptr<TestTableLayout> exportedLayout_;
@@ -369,6 +390,10 @@ class TestTable : public Table {
   velox::RowTypePtr dataType_;
   std::vector<velox::RowVectorPtr> data_;
   std::vector<int32_t> dataBucketIds_;
+  // Guards 'staged_' against the concurrent writers of an INSERT.
+  std::mutex stagedMutex_;
+  // Data that INSERTs in progress have written, by write id.
+  folly::F14FastMap<int64_t, std::vector<StagedData>> staged_;
   // Assigns each appended row an identifier that survives later deletions.
   int64_t nextRowId_{0};
   // Row-level DELETE layout; the default asks for no shuffle and no sort.
@@ -630,19 +655,60 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
 class TestInsertTableHandle
     : public velox::connector::ConnectorInsertTableHandle {
  public:
-  explicit TestInsertTableHandle(SchemaTableName tableName)
-      : tableName_(std::move(tableName)) {}
+  TestInsertTableHandle(
+      SchemaTableName tableName,
+      WriteKind kind,
+      int64_t writeId)
+      : tableName_(std::move(tableName)), kind_{kind}, writeId_{writeId} {}
 
   const SchemaTableName& tableName() const {
     return tableName_;
+  }
+
+  /// Tells abortWrite whether the write created the table.
+  WriteKind kind() const {
+    return kind_;
+  }
+
+  /// Identifies the write's staged data in the table (see
+  /// TestTable::stageData).
+  int64_t writeId() const {
+    return writeId_;
   }
 
   std::string toString() const override {
     return tableName_.toString();
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TestInsertTableHandle::getClassName();
+    obj["schemaName"] = tableName_.schema;
+    obj["tableName"] = tableName_.table;
+    obj["kind"] = WriteKindName::toName(kind_);
+    obj["writeId"] = writeId_;
+    return obj;
+  }
+
+  static std::shared_ptr<TestInsertTableHandle> create(
+      const folly::dynamic& obj) {
+    return std::make_shared<TestInsertTableHandle>(
+        SchemaTableName(
+            obj["schemaName"].asString(), obj["tableName"].asString()),
+        WriteKindName::toWriteKind(obj["kind"].asString()),
+        obj["writeId"].asInt());
+  }
+
+  static void registerSerDe() {
+    velox::registerDeserializer<TestInsertTableHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TestInsertTableHandle)
+
  private:
   const SchemaTableName tableName_;
+  const WriteKind kind_;
+  const int64_t writeId_;
 };
 
 /// Identifies the TestConnector table whose row deletions a writer stages.
@@ -751,7 +817,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   /// Non-interface method which supplies a non-const Table reference
   /// which is capable of performing writes to the underlying table.
-  std::shared_ptr<Table> findTableInternal(const SchemaTableName& tableName);
+  std::shared_ptr<TestTable> findTableInternal(
+      const SchemaTableName& tableName);
 
   ConnectorSplitManager* splitManager() override {
     return splitManager_.get();
@@ -813,12 +880,19 @@ class TestConnectorMetadata : public ConnectorMetadata {
       const DeleteLayout& layout,
       bool explain) override;
 
+  /// Adds the rows the writers staged to the table and returns their number.
   RowsFuture finishWrite(
       const ConnectorSessionPtr& session,
       const ConnectorWriteHandlePtr& handle,
       const std::vector<velox::RowVectorPtr>& writeResults,
       velox::RowVectorPtr groupingKeys,
       std::vector<std::vector<ColumnStatistics>> groupStats) override;
+
+  /// Drops the rows the writers staged, and the table an aborted CREATE TABLE
+  /// created.
+  velox::ContinueFuture abortWrite(
+      const ConnectorSessionPtr& session,
+      const ConnectorWriteHandlePtr& handle) noexcept override;
 
   /// Removes the rows the writers staged, passes each writer's identifiers to
   /// TestConnector::onFinishDelete, and returns the number of rows removed.
@@ -959,6 +1033,8 @@ class TestConnectorMetadata : public ConnectorMetadata {
 
   TestConnector* connector_;
   folly::F14FastMap<SchemaTableName, std::shared_ptr<TestTable>> tables_;
+  // Identifies each write beginWrite starts (see TestInsertTableHandle).
+  std::atomic<int64_t> nextWriteId_{0};
   // The centroids tables findTable made, by name (see
   // VectorIndex::centroidsTableName()). Each is made once: a table's memory
   // pool takes the table's name.
@@ -1352,19 +1428,18 @@ class TestConnectorFactory : public velox::connector::ConnectorFactory {
 
 class TestDataSink : public velox::connector::DataSink {
  public:
-  TestDataSink(std::shared_ptr<Table> table, bool collectStats)
-      : collectColumnStatistics_(collectStats) {
-    table_ = std::dynamic_pointer_cast<TestTable>(table);
-    VELOX_CHECK(table_, "table {} not a TestTable", table->name().toString());
-  }
+  TestDataSink(
+      std::shared_ptr<TestTable> table,
+      int64_t writeId,
+      bool collectStats)
+      : table_{std::move(table)},
+        writeId_{writeId},
+        collectColumnStatistics_(collectStats) {}
 
-  /// Data is copied to the memory pool internal to the
-  /// corresponding Table object and appended to the Table's
-  /// data buffer.
+  /// Stages a copy of 'vector' in the table, which TestConnectorMetadata
+  /// adds to the table in finishWrite or drops in abortWrite.
   void appendData(velox::RowVectorPtr vector) override;
 
-  /// Data append is completed inside appendData, so the finish()
-  /// interface is treated as a no-op.
   bool finish() override {
     return true;
   }
@@ -1381,6 +1456,7 @@ class TestDataSink : public velox::connector::DataSink {
 
  private:
   std::shared_ptr<TestTable> table_;
+  const int64_t writeId_;
   bool collectColumnStatistics_;
 };
 

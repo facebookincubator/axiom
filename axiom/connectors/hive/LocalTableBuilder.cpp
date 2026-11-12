@@ -16,11 +16,6 @@
 
 #include "axiom/connectors/hive/LocalTableBuilder.h"
 
-#include <fstream>
-
-#include <folly/dynamic.h>
-#include <folly/json.h>
-
 #include "axiom/connectors/hive/LocalTableMetadata.h"
 #include "axiom/connectors/hive/StatisticsBuilder.h"
 #include "axiom/optimizer/JsonUtil.h"
@@ -37,10 +32,6 @@
 namespace facebook::axiom::connector::hive {
 
 namespace {
-
-std::string statsPath(const std::string& path) {
-  return fmt::format("{}/.stats", path);
-}
 
 // Merges 'source' into 'target': sums numValues, takes min of mins, max of
 // maxes, and max of numDistinct.
@@ -64,40 +55,6 @@ void mergeColumnStatsValues(
     target.numDistinct =
         std::max(target.numDistinct.value_or(0), source.numDistinct.value());
   }
-}
-
-folly::dynamic columnStatsToJson(const ColumnStatistics& stats) {
-  folly::dynamic json = folly::dynamic::object;
-  json["name"] = stats.name;
-  json["numValues"] = stats.numValues;
-  json["nullPct"] = stats.nullPct;
-  if (stats.min.has_value()) {
-    json["min"] = stats.min->serialize();
-  }
-  if (stats.max.has_value()) {
-    json["max"] = stats.max->serialize();
-  }
-  if (stats.numDistinct.has_value()) {
-    json["numDistinct"] = stats.numDistinct.value();
-  }
-  if (stats.maxLength.has_value()) {
-    json["maxLength"] = stats.maxLength.value();
-  }
-  if (stats.avgLength.has_value()) {
-    json["avgLength"] = stats.avgLength.value();
-  }
-  return json;
-}
-
-folly::dynamic persistedStatsToJson(const PersistedStats& stats) {
-  folly::dynamic columns = folly::dynamic::array;
-  for (const auto& colStats : stats.columns) {
-    columns.push_back(columnStatsToJson(colStats));
-  }
-  folly::dynamic json = folly::dynamic::object;
-  json["numRows"] = stats.numRows;
-  json["columns"] = std::move(columns);
-  return json;
 }
 
 // Creates an integer Variant with the TypeKind matching the column type.
@@ -328,11 +285,6 @@ void LocalTableBuilder::build(const std::string& tablePath) {
     }
   }
 
-  // Remove any existing .stats file and write fresh stats.
-  const auto statsFile = statsPath(tablePath);
-  if (std::filesystem::exists(statsFile)) {
-    std::filesystem::remove(statsFile);
-  }
   PersistedStats::write(tablePath, {totalRows, std::move(orderedStats)});
 
   // Sample for NDV estimates if configured.
@@ -500,13 +452,7 @@ void LocalTableBuilder::sampleNumDistincts(
     }
   }
 
-  // Write back the updated stats (overwrite, not merge).
-  const auto statsFile = statsPath(tablePath);
-  std::ofstream outputFile(statsFile);
-  VELOX_CHECK(outputFile.is_open(), "Failed to open stats file: {}", statsFile);
-  outputFile << folly::toPrettyJson(persistedStatsToJson(*existingStats));
-  outputFile.close();
-  VELOX_CHECK(!outputFile.fail(), "Failed to write stats file: {}", statsFile);
+  PersistedStats::write(tablePath, *existingStats);
 }
 
 } // namespace facebook::axiom::connector::hive

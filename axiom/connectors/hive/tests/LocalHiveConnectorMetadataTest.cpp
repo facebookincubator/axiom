@@ -51,6 +51,17 @@ class LocalHiveConnectorMetadataTest
     return {kDefaultSchema, std::move(name)};
   }
 
+  // Creates the empty table 'name' in the default schema and returns it.
+  TablePtr createEmptyTable(
+      const std::string& name,
+      TableDefinition definition) {
+    return folly::coro::blockingWait(metadata_->co_createEmptyTable(
+        makeSession(),
+        qualifiedName(name),
+        std::move(definition),
+        /*ifNotExists=*/false));
+  }
+
   static void makeAscending(const RowVectorPtr& rows, int32_t& counter) {
     auto ints = rows->childAt(0)->as<FlatVector<int64_t>>();
     for (auto i = 0; i < ints->size(); ++i) {
@@ -150,11 +161,8 @@ class LocalHiveConnectorMetadataTest
   }
 
   static ConnectorSessionPtr makeSession() {
-    return std::make_shared<ConnectorSession>(
-        /*queryId=*/"q-test",
-        /*user=*/"u-test",
-        Properties{},
-        makeTestStatWriter());
+    return makeTestContext("test")->sessionFor(
+        velox::exec::test::kHiveConnectorId);
   }
 
   /// Write the specified data to the table with a TableWrite operation. The
@@ -294,9 +302,8 @@ class LocalHiveConnectorMetadataTest
       const std::string& name,
       std::vector<std::string> primaryKey = {},
       std::vector<VectorIndexDefinition> vectorIndexes = {}) {
-    folly::coro::blockingWait(metadata_->co_createEmptyTable(
-        makeSession(),
-        qualifiedName(name),
+    createEmptyTable(
+        name,
         TableDefinition{
             .columns =
                 {{.name = "id", .type = BIGINT()},
@@ -305,8 +312,7 @@ class LocalHiveConnectorMetadataTest
             .properties = {{"partitioned_by", Variant::array({Variant("ds")})}},
             .primaryKey = std::move(primaryKey),
             .vectorIndexes = std::move(vectorIndexes),
-        },
-        /*ifNotExists=*/false));
+        });
   }
 
   // Returns the definition of an index 'name' of 'column', keyed by 'key',
@@ -886,9 +892,8 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
 TEST_F(LocalHiveConnectorMetadataTest, commentsAndPrimaryKey) {
   auto session = makeSession();
   const auto tableName = qualifiedName("commented");
-  folly::coro::blockingWait(metadata_->co_createEmptyTable(
-      session,
-      tableName,
+  createEmptyTable(
+      tableName.table,
       TableDefinition{
           .columns =
               {{.name = "id", .type = BIGINT(), .comment = "the key"},
@@ -896,8 +901,7 @@ TEST_F(LocalHiveConnectorMetadataTest, commentsAndPrimaryKey) {
           .comment = "a table",
           .properties = {{"partitioned_by", Variant::array({Variant("ds")})}},
           .primaryKey = {"id"},
-      },
-      /*ifNotExists=*/false));
+      });
   folly::coro::blockingWait(metadata_->co_addColumn(
       session,
       tableName,
@@ -947,11 +951,8 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
       options.emplace(
           HiveWriteOptions::kPartitionedBy, velox::Variant::array({"ds"}));
     }
-    auto staged = folly::coro::blockingWait(metadata_->co_createEmptyTable(
-        session,
-        qualifiedName(name),
-        TableDefinition::create(tableType, options),
-        /*ifNotExists=*/false));
+    auto staged =
+        createEmptyTable(name, TableDefinition::create(tableType, options));
     created = metadata_->findTable(qualifiedName(name));
     compareTableLayout(staged, created);
 
@@ -1000,15 +1001,12 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
         });
   };
 
-  auto session = makeSession();
-  folly::coro::blockingWait(metadata_->co_createEmptyTable(
-      session,
-      qualifiedName("test_insert_partitions"),
+  createEmptyTable(
+      "test_insert_partitions",
       TableDefinition::create(
           tableType,
           {{HiveWriteOptions::kPartitionedBy,
-            velox::Variant::array({"ds", "hr"})}}),
-      /*ifNotExists=*/false));
+            velox::Variant::array({"ds", "hr"})}}));
   const auto write = [&](const std::string& hr) {
     writeToTable(
         metadata_->findTable(qualifiedName("test_insert_partitions")),
@@ -1050,6 +1048,35 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
     EXPECT_FALSE(
         std::filesystem::exists(fmt::format("{}/hr={}", dsPath, hour)));
   }
+}
+
+// An insert that fails adds no data files to the table.
+TEST_F(LocalHiveConnectorMetadataTest, failedInsert) {
+  const auto tableType = ROW("key", BIGINT());
+  const auto data =
+      makeNamedRowVector({{"key", makeFlatIdentityVector<int64_t>(10)}});
+
+  createEmptyTable(
+      "test_failed_insert", TableDefinition::create(tableType, {}));
+  const auto insert = [&]() {
+    writeToTable(
+        metadata_->findTable(qualifiedName("test_failed_insert")),
+        data,
+        WriteKind::kInsert,
+        dwio::common::FileFormat::DWRF);
+  };
+  insert();
+
+  const auto tablePath = localTablePath(qualifiedName("test_failed_insert"));
+  const auto dataFiles = getDataFiles(tablePath);
+  ASSERT_EQ(dataFiles.size(), 1);
+
+  {
+    std::ofstream stats(tablePath + "/.stats");
+    stats << "not json";
+  }
+  VELOX_ASSERT_THROW(insert(), "Failed to parse persisted stats JSON");
+  EXPECT_EQ(getDataFiles(tablePath), dataFiles);
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, abortCreateWithRetry) {
@@ -1518,14 +1545,12 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexColumns) {
   EXPECT_EQ("id", findVectorIndex("keyed", "j")->keyColumn);
 
   // The storage tables add columns that partition columns may not be named.
-  folly::coro::blockingWait(metadata_->co_createEmptyTable(
-      makeSession(),
-      qualifiedName("clustered"),
+  createEmptyTable(
+      "clustered",
       TableDefinition::create(
           ROW({"id", "embedding", "cluster_id"},
               {BIGINT(), ARRAY(REAL()), VARCHAR()}),
-          {{"partitioned_by", Variant::array({Variant("cluster_id")})}}),
-      /*ifNotExists=*/false));
+          {{"partitioned_by", Variant::array({Variant("cluster_id")})}}));
   VELOX_ASSERT_THROW(
       addVectorIndex("clustered", vectorIndex("i")),
       "Vector index partition column name is reserved: cluster_id");
@@ -1710,16 +1735,14 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexCoverage) {
 
   // Without partition columns, the index covers its table once its index table
   // has rows, and a write to the table drops the index's rows.
-  folly::coro::blockingWait(metadata_->co_createEmptyTable(
-      makeSession(),
-      qualifiedName("points"),
+  createEmptyTable(
+      "points",
       TableDefinition{
           .columns =
               {{.name = "id", .type = BIGINT()},
                {.name = "embedding", .type = ARRAY(REAL())}},
           .vectorIndexes = {vectorIndex("i")},
-      },
-      /*ifNotExists=*/false));
+      });
   const auto insertPoint = [&](int64_t id) {
     writeToTable(
         metadata_->findTable(qualifiedName("points")),

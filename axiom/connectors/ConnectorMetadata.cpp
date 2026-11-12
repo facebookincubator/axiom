@@ -632,12 +632,15 @@ folly::coro::Task<TablePtr> ConnectorMetadata::co_createEmptyTable(
       table,
       WriteKind::kCreate,
       /*explain=*/false);
-  auto committed = co_await folly::coro::co_awaitTry(finishWrite(
-      session,
-      handle,
-      /*writeResults=*/{},
-      /*groupingKeys=*/nullptr,
-      /*groupStats=*/{}));
+  auto committed =
+      co_await folly::coro::co_awaitTry(folly::makeSemiFutureWith([&] {
+        return finishWrite(
+            session,
+            handle,
+            /*writeResults=*/{},
+            /*groupingKeys=*/nullptr,
+            /*groupStats=*/{});
+      }));
   if (committed.hasException()) {
     // Best-effort abort so a failed commit does not leave connector-side state
     // behind. The commit's error is the one to report.

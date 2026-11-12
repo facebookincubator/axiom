@@ -84,9 +84,9 @@ struct PersistedStats {
   /// std::nullopt if the file doesn't exist.
   static std::optional<PersistedStats> read(const std::string& directory);
 
-  /// Writes stats to a .stats file in 'directory', merging with any existing
-  /// stats from prior writes.
-  static void write(const std::string& directory, PersistedStats stats);
+  /// Writes 'stats' to the .stats file in 'directory', replacing any existing
+  /// one.
+  static void write(const std::string& directory, const PersistedStats& stats);
 };
 
 /// The .schema file that describes the columns of a local table.

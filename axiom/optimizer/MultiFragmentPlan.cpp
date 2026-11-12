@@ -22,6 +22,7 @@
 #include <folly/Conv.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <glog/logging.h>
 
 #include <algorithm>
 #include <cmath>
@@ -459,13 +460,20 @@ FinishWrite::~FinishWrite() {
   }
 }
 
-connector::RowsFuture FinishWrite::commit(
-    const std::vector<velox::RowVectorPtr>& writeResults) && {
-  VELOX_CHECK(*this);
-  SCOPE_EXIT {
-    operation_.reset();
-  };
+// static
+velox::ContinueFuture FinishWrite::abortOperation(
+    connector::ConnectorMetadata& metadata,
+    const connector::ConnectorSessionPtr& session,
+    const Operation& operation) noexcept {
+  if (const auto* deletion = std::get_if<DeleteOperation>(&operation)) {
+    return metadata.abortDelete(session, deletion->handle);
+  }
+  return metadata.abortWrite(
+      session, std::get<WriteOperation>(operation).handle);
+}
 
+connector::RowsFuture FinishWrite::finish(
+    const std::vector<velox::RowVectorPtr>& writeResults) const {
   if (auto* operation = std::get_if<DeleteOperation>(&*operation_)) {
     return metadata_->finishDelete(session_, operation->handle, writeResults);
   }
@@ -476,24 +484,55 @@ connector::RowsFuture FinishWrite::commit(
         session_, operation.handle, writeResults, nullptr, {});
   }
 
-  auto [statsRows, dataRows] = splitWriteResults(
+  auto split = splitWriteResults(
       writeResults,
       operation.handle->resultType()->size(),
       operation.handle->resultType());
-
-  if (statsRows.empty()) {
-    return metadata_->finishWrite(
-        session_, operation.handle, dataRows, nullptr, {});
+  velox::RowVectorPtr partitionKeys;
+  std::vector<std::vector<connector::ColumnStatistics>> partitionStats;
+  if (!split.statsRows.empty()) {
+    std::tie(partitionKeys, partitionStats) =
+        extractStats(operation.statsMapping, split.statsRows, split.dataRows);
   }
-
-  auto [partitionKeys, partitionStats] =
-      extractStats(operation.statsMapping, statsRows, dataRows);
   return metadata_->finishWrite(
       session_,
       operation.handle,
-      dataRows,
+      split.dataRows,
       std::move(partitionKeys),
       std::move(partitionStats));
+}
+
+connector::RowsFuture FinishWrite::commit(
+    const std::vector<velox::RowVectorPtr>& writeResults) && {
+  VELOX_CHECK(*this);
+  auto finished =
+      folly::makeSemiFutureWith([&] { return finish(writeResults); });
+
+  // The continuation owns what an abort needs, so the write is aborted only
+  // when the finish call fails.
+  auto operation = std::move(*operation_);
+  operation_.reset();
+  return std::move(finished).defer(
+      [metadata = metadata_,
+       session = session_,
+       operation =
+           std::move(operation)](folly::Try<std::optional<int64_t>>&& result)
+          -> connector::RowsFuture {
+        if (result.hasValue()) {
+          return folly::makeSemiFuture(std::move(result));
+        }
+        return abortOperation(*metadata, session, operation)
+            .defer(
+                [failure = std::move(result).exception()](
+                    folly::Try<folly::Unit>&& aborted)
+                    -> std::optional<int64_t> {
+                  if (aborted.hasException()) {
+                    LOG(ERROR) << "Failed to abort write: "
+                               << aborted.exception().what();
+                  }
+                  failure.throw_exception();
+                });
+      });
 }
 
 velox::ContinueFuture FinishWrite::abort() && noexcept {
@@ -501,11 +540,7 @@ velox::ContinueFuture FinishWrite::abort() && noexcept {
   SCOPE_EXIT {
     operation_.reset();
   };
-  if (auto* operation = std::get_if<DeleteOperation>(&*operation_)) {
-    return metadata_->abortDelete(session_, operation->handle);
-  }
-  return metadata_->abortWrite(
-      session_, std::get<WriteOperation>(*operation_).handle);
+  return abortOperation(*metadata_, session_, *operation_);
 }
 
 namespace {

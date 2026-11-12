@@ -73,8 +73,8 @@ struct WriteStatsMapping {
 };
 
 /// Callbacks to finalize writing to a connector after the query completes.
-/// On success, the runner calls 'commit'. On failure, 'abort'. Only one of the
-/// 'commit' or 'abort' is called.
+/// The runner calls 'commit' once the query succeeds, or 'abort' if it fails
+/// before that. A failed commit aborts the write itself.
 class FinishWrite {
  public:
   FinishWrite() = default;
@@ -105,7 +105,9 @@ class FinishWrite {
   }
 
   /// Commits a CREATE or INSERT through finishWrite, or a DELETE through
-  /// finishDelete. Returns the number of rows written or removed.
+  /// finishDelete. Returns the number of rows written or removed. On any
+  /// failure, including a failed finish call, aborts the write before
+  /// failing. Do not call abort() afterwards.
   [[nodiscard]] connector::RowsFuture commit(
       const std::vector<velox::RowVectorPtr>& writeResults) &&;
 
@@ -127,6 +129,17 @@ class FinishWrite {
   };
 
   using Operation = std::variant<WriteOperation, DeleteOperation>;
+
+  // Calls finishDelete, or finishWrite with the stats split out of
+  // 'writeResults'.
+  connector::RowsFuture finish(
+      const std::vector<velox::RowVectorPtr>& writeResults) const;
+
+  // Aborts the write or the DELETE that 'operation' holds.
+  static velox::ContinueFuture abortOperation(
+      connector::ConnectorMetadata& metadata,
+      const connector::ConnectorSessionPtr& session,
+      const Operation& operation) noexcept;
 
   std::shared_ptr<connector::ConnectorMetadata> metadata_;
   std::string connectorId_;

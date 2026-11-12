@@ -483,6 +483,24 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
       bool explain,
       const std::function<void()>& publish);
 
+  // The stats a write persists and the partition directories it adds.
+  struct WriteStats {
+    // Each .stats file to write, by directory, merged with the stats of prior
+    // writes: one per partition, none for a partitioned write of no rows, or
+    // one in the table directory for an unpartitioned table.
+    std::vector<std::pair<std::string, PersistedStats>> files;
+    std::vector<fs::path> partitions;
+  };
+
+  // Returns the stats of writing 'rows' rows to the table at 'targetPath',
+  // from finishWrite's 'groupingKeys' and 'groupStats'.
+  static WriteStats writeStats(
+      const std::string& targetPath,
+      bool partitioned,
+      uint64_t rows,
+      const velox::RowVectorPtr& groupingKeys,
+      std::vector<std::vector<ColumnStatistics>> groupStats);
+
   // Removes the partitions 'partitions', directories under the table
   // directory of 'table', from the storage tables of each vector index of
   // 'table'. Removes all of each index's data when 'table' has no partition
