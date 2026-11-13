@@ -85,6 +85,7 @@ QueryGraphContext::QueryGraphContext(
   addName(SpecialFormCallNames::kSwitch);
   addName(SpecialFormCallNames::kIn);
   addName(SpecialFormCallNames::kRowConstructor);
+  addName(SpecialFormCallNames::kAtTimeZone);
 
   populateFunctionNames();
 }

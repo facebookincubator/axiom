@@ -110,6 +110,11 @@ Three collaborating classes perform the translation:
   `PlanBuilder` / `ExprResolver` layer.
 - **GroupByPlanner**. Plans GROUP BY, ROLLUP, CUBE and GROUPING SETS clauses.
 
+`ExpressionPlanner` carries `AT TIME ZONE` as an internal untyped call marker.
+Type resolution turns it into a special form after applying Presto's rule: the
+value must be a time or timestamp, with or without a time zone. See
+[`AT TIME ZONE` type validation](docs/AtTimeZone.md).
+
 ### Phase 4: Output Wrapping
 
 The `LogicalPlanNode` tree is wrapped in a `SqlStatement` subclass:
