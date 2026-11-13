@@ -148,6 +148,16 @@ One row per outer. Empty-input outers (no child rows) get padded by
 restored to their empty-input value (count → 0). That happens in a
 result Project (omitted here; see "the three primitives").
 
+When L's rows are already unique on an `AssignUniqueId` column below
+its Filters and Projects, such as the `rn` of a subquery decorrelated
+before this one, `tagged_L` is L passing that column up instead of a
+new `AssignUniqueId`, unless L already outputs it. The IN and EXISTS
+rules below do the same. A body with a `gby` under a scalar subquery's
+single-row check always tags its own `rn`: an enclosing Apply that lifts
+its `EnforceDistinct([rn])` applies after it every conjunct on a column
+computed above `rn`'s `AssignUniqueId`, so a reused `rn` would move a
+filter on an earlier subquery's value after the check.
+
 **Picture 2 — `Apply.filter` is non-null:**
 
 `Apply.filter` predicates split into two classes:
