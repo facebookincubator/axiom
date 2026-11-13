@@ -337,6 +337,34 @@ velox::RowTypePtr toRowType(const std::vector<const Column*>& columns) {
   }
   return velox::ROW(std::move(names), extractPartitionKeyTypes(columns));
 }
+
+// Returns the bucketing of a table bucketed 'numBuckets' ways with Hive's hash,
+// or nullptr if 'numBuckets' is not set.
+velox::connector::hive::HiveBucketPropertyPtr makeBucketProperty(
+    std::optional<int32_t> numBuckets,
+    const std::vector<const Column*>& bucketedByColumns,
+    const std::vector<const Column*>& sortedByColumns,
+    const std::vector<SortOrder>& sortOrder) {
+  if (!numBuckets.has_value()) {
+    return nullptr;
+  }
+  const auto bucketedByType = toRowType(bucketedByColumns);
+  std::vector<velox::connector::hive::HiveSortingColumnPtr> sortedBy;
+  sortedBy.reserve(sortedByColumns.size());
+  for (size_t i = 0; i < sortedByColumns.size(); ++i) {
+    sortedBy.push_back(
+        std::make_shared<velox::connector::hive::HiveSortingColumn>(
+            sortedByColumns[i]->name(),
+            velox::core::SortOrder(
+                sortOrder[i].isAscending, sortOrder[i].isNullsFirst)));
+  }
+  return std::make_shared<velox::connector::hive::HiveBucketProperty>(
+      velox::connector::hive::HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets.value(),
+      bucketedByType->names(),
+      bucketedByType->children(),
+      std::move(sortedBy));
+}
 } // namespace
 
 HiveTableLayout::HiveTableLayout(
@@ -364,15 +392,17 @@ HiveTableLayout::HiveTableLayout(
       fileFormat_(fileFormat),
       hivePartitionColumns_(std::move(hivePartitionedByColumns)),
       hivePartitionColumnsType_(toRowType(hivePartitionColumns_)),
-      numBuckets_(numPartitions),
       partitionType_{
           numPartitions.has_value()
               ? std::make_shared<const HivePartitionType>(
                     numPartitions.value(),
                     extractPartitionKeyTypes(partitionedByColumns))
-              : nullptr} {
-  VELOX_CHECK_EQ(sortedByColumns.size(), sortOrder.size());
-}
+              : nullptr},
+      bucketProperty_{makeBucketProperty(
+          numPartitions,
+          partitionedByColumns,
+          sortedByColumns,
+          sortOrder)} {}
 
 velox::RowTypePtr HiveTableLayout::dataColumns() const {
   const auto& type = rowType();
@@ -552,7 +582,9 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
       serdeParameters(),
       filterColumnHandles,
       sampleRate,
-      tableName.schema);
+      tableName.schema,
+      /*dataColumnFieldIds=*/std::vector<int32_t>{},
+      bucketProperty_);
 }
 
 std::vector<const Column*> HiveTableLayout::nonPartitionFilterColumns(
@@ -886,37 +918,6 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
             hiveLayout->createColumnHandle(session, name)));
   }
 
-  std::shared_ptr<const velox::connector::hive::HiveBucketProperty>
-      bucketProperty;
-  if (hiveLayout->numBuckets().has_value()) {
-    std::vector<std::string> names;
-    std::vector<velox::TypePtr> types;
-    for (auto& column : hiveLayout->partitionColumns()) {
-      names.push_back(column->name());
-      types.push_back(column->type());
-    }
-    std::vector<
-        std::shared_ptr<const velox::connector::hive::HiveSortingColumn>>
-        sortedBy;
-    sortedBy.reserve(hiveLayout->orderColumns().size());
-    for (size_t i = 0; i < hiveLayout->orderColumns().size(); ++i) {
-      sortedBy.push_back(
-          std::make_shared<velox::connector::hive::HiveSortingColumn>(
-              hiveLayout->orderColumns()[i]->name(),
-              velox::core::SortOrder(
-                  hiveLayout->sortOrder()[i].isAscending,
-                  hiveLayout->sortOrder()[i].isNullsFirst)));
-    }
-
-    bucketProperty =
-        std::make_shared<velox::connector::hive::HiveBucketProperty>(
-            velox::connector::hive::HiveBucketProperty::Kind::kHiveCompatible,
-            hiveLayout->numBuckets().value(),
-            std::move(names),
-            std::move(types),
-            std::move(sortedBy));
-  }
-
   // An explained plan is never executed and needs no place to write.
   // Resolving one is not free: it can leave state behind.
   auto locationHandle = explain
@@ -931,7 +932,7 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
           inputColumns,
           std::move(locationHandle),
           storageFormat,
-          bucketProperty,
+          hiveLayout->bucketProperty(),
           compressionKind,
           serdeParameters,
           writerOptions);

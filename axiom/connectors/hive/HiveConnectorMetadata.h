@@ -243,7 +243,14 @@ class HiveTableLayout : public TableLayout {
       const velox::Type& type);
 
   std::optional<int32_t> numBuckets() const {
-    return numBuckets_;
+    return bucketProperty_ == nullptr
+        ? std::nullopt
+        : std::optional<int32_t>(bucketProperty_->bucketCount());
+  }
+
+  /// Returns the table's bucketing, or nullptr if the table is not bucketed.
+  const velox::connector::hive::HiveBucketPropertyPtr& bucketProperty() const {
+    return bucketProperty_;
   }
 
   /// Estimates statistics for a bucket identity in [0, numBuckets), assuming
@@ -318,8 +325,10 @@ class HiveTableLayout : public TableLayout {
   const velox::dwio::common::FileFormat fileFormat_;
   const std::vector<const Column*> hivePartitionColumns_;
   const velox::RowTypePtr hivePartitionColumnsType_;
-  const std::optional<int32_t> numBuckets_;
   const std::shared_ptr<const HivePartitionType> partitionType_;
+  // The table's bucketing, which the scan and write handles carry; nullptr if
+  // the table is not bucketed.
+  const velox::connector::hive::HiveBucketPropertyPtr bucketProperty_;
 };
 
 /// Drops the per-column statistics past the first 'numColumns', which a
