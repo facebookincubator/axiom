@@ -31,6 +31,7 @@ if(AXIOM_BUILD_TESTING)
     PrestoParserTest.cpp
     PrestoParserTestBase.cpp
     ReferencedTablesTest.cpp
+    SyntacticTableNamesTest.cpp
     GraphParserTest.cpp
     SortParserTest.cpp
     SplitStatementsTest.cpp

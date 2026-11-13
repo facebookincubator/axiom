@@ -46,6 +46,7 @@
 #include "axiom/sql/presto/VectorSearchPlanner.h"
 #include "axiom/sql/presto/ast/AstBuilder.h"
 #include "axiom/sql/presto/ast/AstPrinter.h"
+#include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "axiom/sql/presto/grammar/SyntaxParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
@@ -3792,6 +3793,314 @@ SqlStatementPtr parseCall(
       std::move(arguments));
 }
 
+// Builds the AST for one statement without planning it.
+std::shared_ptr<Statement> buildStatement(
+    std::string_view sql,
+    const ParserOptions& options,
+    bool enableTracing) {
+  SyntaxParser syntaxParser(sql, options.maxExpressionDepth);
+  auto* context = syntaxParser.parse();
+
+  AstBuilder astBuilder(options, enableTracing);
+  auto query =
+      std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
+
+  if (enableTracing) {
+    std::stringstream astString;
+    AstPrinter printer(astString);
+    query->accept(&printer);
+
+    std::cout << "AST: " << astString.str() << std::endl;
+  }
+
+  return query;
+}
+
+// Names tables from an AST without resolving them.
+class SyntacticTableVisitor : public DefaultTraversalVisitor {
+ public:
+  SyntacticTableVisitor(
+      ParserSessionPtr session,
+      std::string_view defaultConnectorId,
+      std::string_view defaultSchema)
+      : session_{std::move(session)},
+        defaultConnectorId_{defaultConnectorId},
+        defaultSchema_{defaultSchema} {}
+
+  SyntacticTableNames take(std::string_view kindName) && {
+    return SyntacticTableNames{
+        std::move(inputTables_), std::move(outputTable_), kindName};
+  }
+
+ protected:
+  void visitQuery(Query* node) override {
+    scopes_.emplace_back();
+    DefaultTraversalVisitor::visitQuery(node);
+    scopes_.pop_back();
+  }
+
+  void visitWith(With* node) override {
+    recursiveScopes_.push_back(node->isRecursive());
+    DefaultTraversalVisitor::visitWith(node);
+    recursiveScopes_.pop_back();
+  }
+
+  void visitWithQuery(WithQuery* node) override {
+    // A CTE is recursive only when its enclosing WITH is recursive
+    // and its body references its own name. A recursive alias is
+    // visible inside its own query. A non-recursive alias becomes
+    // visible only after its query, so a table the CTE reads is
+    // named even when it shares the alias name.
+    const auto canonicalName = canonicalizeName(node->name()->value());
+    const bool recursive = !recursiveScopes_.empty() &&
+        recursiveScopes_.back() &&
+        RecursiveCteValidator::referencesCte(*node->query(), canonicalName);
+    VELOX_CHECK(
+        !scopes_.empty(), "WITH query without an enclosing query scope");
+    if (recursive) {
+      scopes_.back().insert(canonicalName);
+    }
+    DefaultTraversalVisitor::visitWithQuery(node);
+    if (!recursive) {
+      scopes_.back().insert(canonicalName);
+    }
+  }
+
+  void visitTable(Table* node) override {
+    if (isCteReference(*node->name())) {
+      return;
+    }
+    inputTables_.insert(constructTableName(*node->name()));
+    DefaultTraversalVisitor::visitTable(node);
+  }
+
+  void visitGraphElementTable(GraphElementTable* node) override {
+    if (!isCteReference(*node->table())) {
+      inputTables_.insert(constructTableName(*node->table()));
+    }
+    DefaultTraversalVisitor::visitGraphElementTable(node);
+  }
+
+  void visitInsert(Insert* node) override {
+    setOutputTable(*node->target());
+    DefaultTraversalVisitor::visitInsert(node);
+  }
+
+  void visitCreateTableAsSelect(CreateTableAsSelect* node) override {
+    setOutputTable(*node->name());
+    DefaultTraversalVisitor::visitCreateTableAsSelect(node);
+  }
+
+  void visitDelete(Delete* node) override {
+    inputTables_.insert(constructTableName(*node->table()));
+    setOutputTable(*node->table());
+    DefaultTraversalVisitor::visitDelete(node);
+  }
+
+  void visitCreateTable(CreateTable* node) override {
+    setOutputTable(*node->name());
+    DefaultTraversalVisitor::visitCreateTable(node);
+  }
+
+  void visitLikeClause(LikeClause* node) override {
+    inputTables_.insert(constructTableName(*node->tableName()));
+  }
+
+  void visitDropTable(DropTable* node) override {
+    setOutputTable(*node->tableName());
+    DefaultTraversalVisitor::visitDropTable(node);
+  }
+
+  void visitAddVectorIndex(AddVectorIndex* node) override {
+    setOutputTable(*node->tableName());
+    DefaultTraversalVisitor::visitAddVectorIndex(node);
+  }
+
+  void visitDropVectorIndex(DropVectorIndex* node) override {
+    setOutputTable(*node->tableName());
+    DefaultTraversalVisitor::visitDropVectorIndex(node);
+  }
+
+  void visitRefreshVectorIndex(RefreshVectorIndex* node) override {
+    inputTables_.insert(constructTableName(*node->tableName()));
+    setOutputTable(*node->tableName());
+    DefaultTraversalVisitor::visitRefreshVectorIndex(node);
+  }
+
+  void visitAddColumn(AddColumn* node) override {
+    setOutputTable(*node->tableName());
+    DefaultTraversalVisitor::visitAddColumn(node);
+  }
+
+  void visitShowColumns(ShowColumns* node) override {
+    inputTables_.insert(constructTableName(*node->table()));
+  }
+
+  void visitShowCreateTable(ShowCreateTable* node) override {
+    inputTables_.insert(constructTableName(*node->name()));
+  }
+
+  void visitShowCreateView(ShowCreateView* node) override {
+    inputTables_.insert(constructTableName(*node->name()));
+  }
+
+  void visitShowStats(ShowStats* node) override {
+    inputTables_.insert(constructTableName(*node->table()));
+  }
+
+  void visitShowStatsForQuery(ShowStatsForQuery* node) override {
+    if (node->query()) {
+      node->query()->accept(this);
+    }
+  }
+
+  // Statements that name no tables.
+  void visitResetSession(ResetSession* /*node*/) override {}
+  void visitSetSession(SetSession* /*node*/) override {}
+  void visitShowSchemas(ShowSchemas* /*node*/) override {}
+  void visitShowSession(ShowSession* /*node*/) override {}
+  void visitShowTables(ShowTables* /*node*/) override {}
+  void visitUse(Use* /*node*/) override {}
+
+ private:
+  // Returns true if a name is a single-part reference to a CTE alias
+  // visible here.
+  bool isCteReference(const QualifiedName& name) const {
+    const auto& parts = name.parts();
+    if (parts.size() != 1) {
+      return false;
+    }
+    const auto canonicalName = canonicalizeName(parts[0]);
+    for (const auto& scope : scopes_) {
+      if (scope.count(canonicalName) > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  facebook::axiom::CatalogSchemaTableName constructTableName(
+      const QualifiedName& name) const {
+    const auto& parts = name.parts();
+    AXIOM_PRESTO_SYNTAX_CHECK(
+        !parts.empty() && parts.size() <= 3,
+        name.location(),
+        name.suffix(),
+        "Table name must have 1-3 components: {}",
+        name.fullyQualifiedName());
+    // Resolution here is name canonicalization only. No table is
+    // looked up: an unregistered connector keeps the name as written.
+    const auto [connectorId, connectorTable] = toConnectorTable(
+        session_,
+        name,
+        std::string(defaultConnectorId_),
+        std::string(defaultSchema_),
+        session_->options().informationSchemaConnectorId);
+    return {connectorId, connectorTable};
+  }
+
+  void setOutputTable(const QualifiedName& name) {
+    VELOX_CHECK(
+        !outputTable_.has_value(),
+        "A statement names more than one output table: {}",
+        name.fullyQualifiedName());
+    outputTable_ = constructTableName(name);
+  }
+
+  // Session supplying parser options and the connector registry
+  // for name canonicalization. No table is looked up through it.
+  ParserSessionPtr session_;
+
+  // Connector used for a table name with no catalog. Borrowed from
+  // the parser, which outlives this visitor.
+  std::string_view defaultConnectorId_;
+
+  // Schema used for a table name with no schema. Borrowed from the
+  // parser, which outlives this visitor.
+  std::string_view defaultSchema_;
+
+  // Aliases of the CTEs visible in each Query currently traversed,
+  // innermost last. visitQuery pushes a scope for its WITH clause.
+  std::vector<std::unordered_set<std::string>> scopes_;
+
+  // Whether each WITH clause currently traversed is recursive.
+  std::vector<bool> recursiveScopes_;
+
+  // Tables named for reading.
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables_;
+
+  // Table named as the target of a write, if any.
+  std::optional<facebook::axiom::CatalogSchemaTableName> outputTable_;
+};
+
+// Returns the planner kind label for a statement form that has
+// one, or the AST node label for any other statement form.
+std::string_view syntacticKindName(const Statement& statement) {
+  const auto type = statement.type();
+  if (type == NodeType::kQuery || type == NodeType::kShowSchemas ||
+      type == NodeType::kShowTables || type == NodeType::kShowCatalogs ||
+      type == NodeType::kShowCreate || type == NodeType::kShowCreateView ||
+      type == NodeType::kShowColumns || type == NodeType::kShowStats ||
+      type == NodeType::kShowFunctions) {
+    return SqlStatementKindName::toName(SqlStatementKind::kSelect);
+  }
+  if (type == NodeType::kCreateTable) {
+    return SqlStatementKindName::toName(SqlStatementKind::kCreateTable);
+  }
+  if (type == NodeType::kCreateTableAsSelect) {
+    return SqlStatementKindName::toName(SqlStatementKind::kCreateTableAsSelect);
+  }
+  if (type == NodeType::kInsert) {
+    return SqlStatementKindName::toName(SqlStatementKind::kInsert);
+  }
+  if (type == NodeType::kRefreshVectorIndex) {
+    return SqlStatementKindName::toName(SqlStatementKind::kRefreshVectorIndex);
+  }
+  if (type == NodeType::kDelete) {
+    return SqlStatementKindName::toName(SqlStatementKind::kDelete);
+  }
+  if (type == NodeType::kDropTable) {
+    return SqlStatementKindName::toName(SqlStatementKind::kDropTable);
+  }
+  if (type == NodeType::kAddVectorIndex) {
+    return SqlStatementKindName::toName(SqlStatementKind::kAddVectorIndex);
+  }
+  if (type == NodeType::kDropVectorIndex) {
+    return SqlStatementKindName::toName(SqlStatementKind::kDropVectorIndex);
+  }
+  if (type == NodeType::kCreateSchema) {
+    return SqlStatementKindName::toName(SqlStatementKind::kCreateSchema);
+  }
+  if (type == NodeType::kDropSchema) {
+    return SqlStatementKindName::toName(SqlStatementKind::kDropSchema);
+  }
+  if (type == NodeType::kExplain) {
+    return SqlStatementKindName::toName(SqlStatementKind::kExplain);
+  }
+  if (type == NodeType::kShowStatsForQuery) {
+    return SqlStatementKindName::toName(SqlStatementKind::kShowStatsForQuery);
+  }
+  if (type == NodeType::kShowSession) {
+    return SqlStatementKindName::toName(SqlStatementKind::kShowSession);
+  }
+  if (type == NodeType::kSetSession) {
+    return SqlStatementKindName::toName(SqlStatementKind::kSetSession);
+  }
+  if (type == NodeType::kResetSession) {
+    return SqlStatementKindName::toName(SqlStatementKind::kResetSession);
+  }
+  if (type == NodeType::kUse) {
+    return SqlStatementKindName::toName(SqlStatementKind::kUse);
+  }
+  if (type == NodeType::kAddColumn) {
+    return SqlStatementKindName::toName(SqlStatementKind::kAddColumn);
+  }
+  if (type == NodeType::kCall) {
+    return SqlStatementKindName::toName(SqlStatementKind::kCall);
+  }
+  return NodeTypeName::toName(type);
+}
+
 SqlStatementPtr doPlan(
     const std::shared_ptr<Statement>& query,
     const std::string& defaultConnectorId,
@@ -4008,22 +4317,7 @@ SqlStatementPtr PrestoParser::doParse(
     std::string_view sql,
     bool enableTracing) {
   auto parseSql = [this, enableTracing](std::string_view sql) {
-    SyntaxParser syntaxParser(sql, session_->options().maxExpressionDepth);
-    auto* context = syntaxParser.parse();
-
-    AstBuilder astBuilder(session_->options(), enableTracing);
-    auto query =
-        std::any_cast<std::shared_ptr<Statement>>(astBuilder.visit(context));
-
-    if (enableTracing) {
-      std::stringstream astString;
-      AstPrinter printer(astString);
-      query->accept(&printer);
-
-      std::cout << "AST: " << astString.str() << std::endl;
-    }
-
-    return query;
+    return buildStatement(sql, session_->options(), enableTracing);
   };
 
   auto query = parseSql(sql);
@@ -4040,6 +4334,14 @@ SqlStatementPtr PrestoParser::doParse(
   }
 
   return doPlan(query, defaultConnectorId_, defaultSchema_, parseSql, session_);
+}
+
+SyntacticTableNames PrestoParser::extractSyntacticTableNames(
+    std::string_view sql) const {
+  const auto statement = buildStatement(sql, session_->options(), false);
+  SyntacticTableVisitor visitor(session_, defaultConnectorId_, defaultSchema_);
+  visitor.process(statement.get());
+  return std::move(visitor).take(syntacticKindName(*statement));
 }
 
 } // namespace axiom::sql::presto

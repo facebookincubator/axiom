@@ -15,11 +15,38 @@
  */
 #pragma once
 
+#include <optional>
+#include <string_view>
+#include <unordered_set>
+
+#include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/sql/presto/ParserSession.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
+
+/// Table names read from SQL text without looking any table up.
+///
+/// Names are canonicalized as parse() canonicalizes them, with the
+/// parser defaults applied. A name may name a view, a table that
+/// does not exist, or a table a CTE never reads. Names also include
+/// metadata sources, such as LIKE and SHOW targets. Use the result
+/// only where a table name is a hint, such as routing. Do not use
+/// the result where every table a query reads or writes must be
+/// known, such as permission checks or lineage.
+struct SyntacticTableNames {
+  /// Tables the SQL text names for reading.
+  std::unordered_set<facebook::axiom::CatalogSchemaTableName> inputTables;
+
+  /// Table the SQL text names as the target of a write, if any.
+  std::optional<facebook::axiom::CatalogSchemaTableName> outputTable;
+
+  /// Name of the statement kind. Planner labels name statements
+  /// parse() supports, and AST node labels name the rest. The name
+  /// has static storage.
+  std::string_view kindName;
+};
 
 /// SQL Parser compatible with PrestoSQL dialect.
 class PrestoParser {
@@ -41,6 +68,18 @@ class PrestoParser {
   }
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
+
+  /// Extracts table names from SQL text without planning the query
+  /// or looking a table up. The session supplies only parser options
+  /// and the connector registry used for name canonicalization.
+  ///
+  /// @param sql SQL text containing one statement.
+  /// @return Table names canonicalized as parse() canonicalizes them,
+  /// with the parser defaults applied.
+  /// @throws PrestoSqlError if the SQL is syntactically invalid.
+  /// @throws VeloxRuntimeError for a statement form the AST builder
+  /// does not support, such as UPDATE, CREATE VIEW, or ANALYZE.
+  SyntacticTableNames extractSyntacticTableNames(std::string_view sql) const;
 
   /// Parses multiple semicolon-separated SQL statements.
   /// @param sql SQL text containing one or more statements separated by
