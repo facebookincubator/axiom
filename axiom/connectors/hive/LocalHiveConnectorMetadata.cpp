@@ -34,6 +34,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionName.h"
@@ -86,13 +87,31 @@ velox::common::Filter* FOLLY_NULLABLE findFilter(
   return nullptr;
 }
 
-// Filters files based on $path and $bucket filters from the table handle.
-// Returns a list of file pointers that match the filters.
+// Returns HiveBucketPruning::allowedBuckets for the handle's filters on the
+// bucket columns, or std::nullopt if the table is not bucketed.
+std::optional<std::vector<bool>> allowedBuckets(
+    const velox::connector::hive::HiveTableHandle& tableHandle) {
+  const auto& bucketProperty = tableHandle.bucketProperty();
+  if (bucketProperty == nullptr) {
+    return std::nullopt;
+  }
+  std::vector<const velox::common::Filter*> filters;
+  filters.reserve(bucketProperty->bucketedBy().size());
+  for (const auto& name : bucketProperty->bucketedBy()) {
+    filters.push_back(findFilter(tableHandle, name));
+  }
+  return velox::connector::hive::HiveBucketPruning::allowedBuckets(
+      *bucketProperty, filters);
+}
+
+// Returns the files that pass the $path and $bucket filters and that the
+// filters on the bucket columns allow.
 std::vector<const FileInfo*> filterFilesByTableHandle(
     const std::vector<std::unique_ptr<const FileInfo>>& files,
     const velox::connector::hive::HiveTableHandle& tableHandle) {
   auto* pathFilter = findFilter(tableHandle, HiveTable::kPath);
   auto* bucketFilter = findFilter(tableHandle, HiveTable::kBucket);
+  const std::optional<std::vector<bool>> allowed = allowedBuckets(tableHandle);
 
   std::vector<const FileInfo*> selectedFiles;
   for (const auto& file : files) {
@@ -104,6 +123,17 @@ std::vector<const FileInfo*> filterFilesByTableHandle(
     if (bucketFilter && file->bucketNumber.has_value() &&
         !bucketFilter->testInt64(file->bucketNumber.value())) {
       continue;
+    }
+    if (allowed.has_value() && file->bucketNumber.has_value()) {
+      const int32_t bucket = file->bucketNumber.value();
+      VELOX_CHECK_LT(
+          bucket,
+          static_cast<int32_t>(allowed->size()),
+          "Bucket number of a file must be less than the bucket count: {}",
+          file->path);
+      if (!(*allowed)[bucket]) {
+        continue;
+      }
     }
     selectedFiles.push_back(file.get());
   }
@@ -552,7 +582,6 @@ std::pair<int64_t, int64_t> LocalHiveTableLayout::sample(
       ? std::optional<int64_t>{static_cast<int64_t>(*numRows * (pct / 100))}
       : std::nullopt;
 
-  // Filter files based on $path and $bucket filters from tableHandle.
   const auto* hiveTableHandle =
       tableHandle->asChecked<velox::connector::hive::HiveTableHandle>();
   auto selectedFiles = filterFilesByTableHandle(files_, *hiveTableHandle);

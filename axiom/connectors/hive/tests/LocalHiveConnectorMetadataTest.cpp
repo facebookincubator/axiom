@@ -165,17 +165,15 @@ class LocalHiveConnectorMetadataTest
         velox::exec::test::kHiveConnectorId);
   }
 
-  /// Write the specified data to the table with a TableWrite operation. The
-  /// 'kind' specifies the type of write, for which only kCreate (new table) and
-  /// kInsert (existing table) writes are supported. 'format' specifies the
-  /// storage format to write with. A write to a partitioned table reports one
-  /// stats group per partition, as the engine's does (see
-  /// ConnectorMetadata::finishWrite).
+  /// Write the specified data to the table with a TableWrite operation, in the
+  /// table's file format. The 'kind' specifies the type of write, for which
+  /// only kCreate (new table) and kInsert (existing table) writes are
+  /// supported. A write to a partitioned table reports one stats group per
+  /// partition, as the engine's does (see ConnectorMetadata::finishWrite).
   void writeToTable(
       const TablePtr& table,
       const RowVectorPtr& values,
-      WriteKind kind,
-      dwio::common::FileFormat format) {
+      WriteKind kind) {
     std::string outputPath = localTablePath(table->name());
     auto groupingKeys = partitionGroups(table, values);
     auto session = makeSession();
@@ -190,7 +188,6 @@ class LocalHiveConnectorMetadataTest
                     .outputDirectoryPath(outputPath)
                     .targetColumns(table->type())
                     .insertHandle(handle->veloxHandle())
-                    .fileFormat(format)
                     .endTableWriter()
                     .planNode();
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -203,6 +200,14 @@ class LocalHiveConnectorMetadataTest
             std::vector<std::vector<ColumnStatistics>>(
                 groupingKeys == nullptr ? 0 : groupingKeys->size()))
         .get();
+  }
+
+  /// Inserts 'values' into the existing table 'name'.
+  void insertInto(std::string_view name, const RowVectorPtr& values) {
+    writeToTable(
+        metadata_->findTable(qualifiedName(std::string(name))),
+        values,
+        WriteKind::kInsert);
   }
 
   // Returns the stats groups of writing 'values' to 'table': for a partitioned
@@ -227,27 +232,24 @@ class LocalHiveConnectorMetadataTest
 
   /// Read the specified files from the table. All the files must belong to
   /// the same partition, or the table must be unpartitioned. 'partitionKeys'
-  /// provides the values of any partition keys for the files. 'format' provides
-  /// the storage format of the specified files, which must all have the same
-  /// format.
+  /// provides the values of any partition keys for the files.
   velox::RowVectorPtr readFiles(
       const TablePtr& table,
       const std::vector<std::string>& files,
       const std::unordered_map<std::string, std::optional<std::string>>&
-          partitionKeys,
-      dwio::common::FileFormat format) {
+          partitionKeys) {
+    const auto* layout = getLayout(table);
     std::vector<std::shared_ptr<velox::connector::ConnectorSplit>> splits;
     splits.reserve(files.size());
     for (const auto& file : files) {
       auto hiveSplits = makeHiveConnectorSplits(
-          file, /*splitCount=*/1, format, partitionKeys);
+          file, /*splitCount=*/1, layout->fileFormat(), partitionKeys);
       EXPECT_EQ(hiveSplits.size(), 1);
       splits.push_back(std::move(hiveSplits.front()));
     }
 
     auto tableType = table->type();
     velox::connector::ColumnHandleMap assignments;
-    const auto* layout = getLayout(table);
     for (auto i = 0; i < tableType->size(); ++i) {
       assignments[tableType->nameOf(i)] = layout->createColumnHandle(
           /*session=*/nullptr, tableType->nameOf(i));
@@ -267,18 +269,16 @@ class LocalHiveConnectorMetadataTest
   /// Compare the data present in the table given by 'tableName' against the
   /// provided data, failing the test if the data does not match.
   /// 'partitionKeys' specifies the value of any partition columns in the data
-  /// to be read, for which all data must belong to the same partition. 'format'
-  /// specifies the storage format of the table.
+  /// to be read, for which all data must belong to the same partition.
   void compareTableData(
       const std::string& tableName,
       const RowVectorPtr& expectedData,
       const std::unordered_map<std::string, std::optional<std::string>>&
-          partitionKeys,
-      dwio::common::FileFormat format) {
+          partitionKeys) {
     std::string path = localTablePath(qualifiedName(tableName));
     auto files = getDataFiles(path);
     auto table = metadata_->findTable(qualifiedName(tableName));
-    auto results = readFiles(table, files, partitionKeys, format);
+    auto results = readFiles(table, files, partitionKeys);
     exec::test::assertEqualResults({expectedData}, {results});
   }
 
@@ -563,8 +563,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   EXPECT_EQ(expected->fileFormat(), dwio::common::toFileFormat("parquet"));
   EXPECT_EQ(expected->table().options().at("compression_kind"), "zstd");
 
-  writeToTable(
-      table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
+  writeToTable(table, data, WriteKind::kCreate);
 
   std::string tablePath = localTablePath(qualifiedName("test"));
   std::string partition = "2022-09-01";
@@ -582,8 +581,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
     auto pos = file.find(partition);
     ASSERT_NE(pos, std::string::npos);
     auto bucket = stoi(file.substr(pos + partition.size() + 1, 6));
-    auto result = readFiles(
-        table, {file}, {{"ds", partition}}, dwio::common::FileFormat::PARQUET);
+    auto result = readFiles(table, {file}, {{"ds", partition}});
     buckets.insert(bucket);
 
     std::vector<uint32_t> partitions;
@@ -598,8 +596,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   }
 
   compareTableLayout(table, metadata_->findTable(qualifiedName("test")));
-  compareTableData(
-      "test", data, {{"ds", partition}}, dwio::common::FileFormat::PARQUET);
+  compareTableData("test", data, {{"ds", partition}});
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, invalidSortedBy) {
@@ -628,6 +625,66 @@ TEST_F(LocalHiveConnectorMetadataTest, invalidSortedBy) {
       "Invalid sort direction: BACKWARDS");
 }
 
+// A filter on the bucket column limits the splits to the buckets its values
+// hash to. A filter on another column doesn't.
+TEST_F(LocalHiveConnectorMetadataTest, bucketPruning) {
+  constexpr int32_t kNumBuckets{4};
+  const auto tableType = ROW({"key", "data"}, BIGINT());
+  createEmptyTable(
+      "bucketed",
+      TableDefinition::create(
+          tableType,
+          {{HiveWriteOptions::kBucketedBy, velox::Variant::array({"key"})},
+           {HiveWriteOptions::kBucketCount, int64_t{kNumBuckets}}}));
+  insertInto(
+      "bucketed",
+      makeRowVector(
+          tableType->names(),
+          {
+              makeFlatIdentityVector<int64_t>(100),
+              makeFlatIdentityVector<int64_t>(100),
+          }));
+
+  // Returns the buckets of the splits of a scan with 'filter', if any.
+  const auto splitBuckets = [&](std::optional<std::string_view> filter) {
+    const auto* layout =
+        metadata_->findTable(qualifiedName("bucketed"))->primaryLayout();
+    std::vector<core::TypedExprPtr> filters;
+    if (filter.has_value()) {
+      filters.push_back(parseExpr(std::string(*filter), tableType));
+    }
+    auto source = metadata_->splitManager()->getSplitSource(
+        /*session=*/nullptr,
+        makeTableHandle(*layout, "key", filters),
+        /*partitions=*/{},
+        /*partitionType=*/nullptr,
+        /*samplePercentage=*/std::nullopt);
+    auto batch = folly::coro::blockingWait(source->co_getSplits(1'000));
+    folly::coro::blockingWait(source->co_close());
+    EXPECT_TRUE(batch.noMoreSplits);
+    std::set<int32_t> buckets;
+    for (const auto& split : batch.splits) {
+      buckets.insert(split.groupId.value());
+    }
+    return buckets;
+  };
+
+  std::vector<uint32_t> keyBuckets(2);
+  velox::connector::hive::HivePartitionFunction(
+      kNumBuckets, std::vector<velox::column_index_t>{0})
+      .partition(*makeRowVector({makeFlatVector<int64_t>({1, 5})}), keyBuckets);
+  const std::set<int32_t> expected(keyBuckets.begin(), keyBuckets.end());
+  ASSERT_LT(expected.size(), static_cast<size_t>(kNumBuckets));
+
+  std::set<int32_t> allBuckets;
+  for (int32_t bucket = 0; bucket < kNumBuckets; ++bucket) {
+    allBuckets.insert(bucket);
+  }
+  EXPECT_EQ(splitBuckets(std::nullopt), allBuckets);
+  EXPECT_EQ(splitBuckets("key IN (1, 5)"), expected);
+  EXPECT_EQ(splitBuckets("data IN (1, 5)"), allBuckets);
+}
+
 TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
   auto tableType =
       ROW({{"id", BIGINT()}, {"name", VARCHAR()}, {"ds", VARCHAR()}});
@@ -653,8 +710,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addColumn) {
           makeFlatVector<StringView>(
               100, [](auto /*row*/) { return "2025-01-01"; }),
       });
-  writeToTable(
-      table, data, WriteKind::kCreate, dwio::common::FileFormat::PARQUET);
+  writeToTable(table, data, WriteKind::kCreate);
 
   // Add a column.
   auto added = folly::coro::blockingWait(metadata_->co_addColumn(
@@ -877,14 +933,12 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
   EXPECT_EQ(expected->fileFormat(), dwio::common::toFileFormat("dwrf"));
   EXPECT_EQ(expected->table().options().count("compression_kind"), 0);
 
-  writeToTable(
-      table, emptyData, WriteKind::kCreate, dwio::common::FileFormat::DWRF);
+  writeToTable(table, emptyData, WriteKind::kCreate);
   compareTableLayout(table, metadata_->findTable(qualifiedName("test_empty")));
   compareTableData(
       "test_empty",
       emptyData,
-      /*partitionKeys=*/{},
-      dwio::common::FileFormat::DWRF);
+      /*partitionKeys=*/{});
 }
 
 // Table and column comments, including the comment of a column added later,
@@ -956,11 +1010,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
     created = metadata_->findTable(qualifiedName(name));
     compareTableLayout(staged, created);
 
-    writeToTable(
-        created,
-        insertData,
-        WriteKind::kInsert,
-        dwio::common::FileFormat::DWRF);
+    writeToTable(created, insertData, WriteKind::kInsert);
     EXPECT_EQ(
         metadata_->findTable(qualifiedName(name))->numRows(), kInsertSize);
 
@@ -968,8 +1018,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
     if (partitioned) {
       partitionKeys.emplace("ds", "2022-09-01");
     }
-    compareTableData(
-        name, insertData, partitionKeys, dwio::common::FileFormat::DWRF);
+    compareTableData(name, insertData, partitionKeys);
   }
 
   VELOX_ASSERT_THROW(
@@ -988,6 +1037,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
 // value of the first partition column with an existing one. An insert into a
 // partition that exists fails and adds none of its partitions.
 TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
+  const std::string tableName{"test_insert_partitions"};
   const auto tableType =
       ROW({{"key", BIGINT()}, {"ds", VARCHAR()}, {"hr", VARCHAR()}});
   constexpr int32_t kInsertSize{10};
@@ -1002,26 +1052,19 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
   };
 
   createEmptyTable(
-      "test_insert_partitions",
+      tableName,
       TableDefinition::create(
           tableType,
           {{HiveWriteOptions::kPartitionedBy,
             velox::Variant::array({"ds", "hr"})}}));
-  const auto write = [&](const std::string& hr) {
-    writeToTable(
-        metadata_->findTable(qualifiedName("test_insert_partitions")),
-        makeData(hr),
-        WriteKind::kInsert,
-        dwio::common::FileFormat::DWRF);
-  };
-
-  write("01");
-  write("02");
+  insertInto(tableName, makeData("01"));
+  insertInto(tableName, makeData("02"));
   EXPECT_EQ(
-      metadata_->findTable(qualifiedName("test_insert_partitions"))->numRows(),
+      metadata_->findTable(qualifiedName(tableName))->numRows(),
       2 * kInsertSize);
 
-  VELOX_ASSERT_THROW(write("01"), "Partition already exists");
+  VELOX_ASSERT_THROW(
+      insertInto(tableName, makeData("01")), "Partition already exists");
 
   // A write of new partitions and an existing one moves none of them.
   const std::vector<std::string> hours{"03", "04", "01", "05", "06"};
@@ -1034,15 +1077,9 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
           makeFlatVector<std::string>(
               numRows, [&](auto row) { return hours[row / kInsertSize]; }),
       });
-  VELOX_ASSERT_THROW(
-      writeToTable(
-          metadata_->findTable(qualifiedName("test_insert_partitions")),
-          mixed,
-          WriteKind::kInsert,
-          dwio::common::FileFormat::DWRF),
-      "Partition already exists");
-  const auto dsPath = localTablePath(qualifiedName("test_insert_partitions")) +
-      "/ds=2022-09-01";
+  VELOX_ASSERT_THROW(insertInto(tableName, mixed), "Partition already exists");
+  const auto dsPath =
+      localTablePath(qualifiedName(tableName)) + "/ds=2022-09-01";
   for (const auto* hour : {"03", "04", "05", "06"}) {
     SCOPED_TRACE(hour);
     EXPECT_FALSE(
@@ -1058,13 +1095,7 @@ TEST_F(LocalHiveConnectorMetadataTest, failedInsert) {
 
   createEmptyTable(
       "test_failed_insert", TableDefinition::create(tableType, {}));
-  const auto insert = [&]() {
-    writeToTable(
-        metadata_->findTable(qualifiedName("test_failed_insert")),
-        data,
-        WriteKind::kInsert,
-        dwio::common::FileFormat::DWRF);
-  };
+  const auto insert = [&]() { insertInto("test_failed_insert", data); };
   insert();
 
   const auto tablePath = localTablePath(qualifiedName("test_failed_insert"));
@@ -1645,17 +1676,15 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexWriteCleanup) {
 // partition. A scan of a storage table is an ordinary scan, never checked.
 TEST_F(LocalHiveConnectorMetadataTest, vectorIndexCoverage) {
   createProducts("products", {"id"}, {vectorIndex("i")});
-  writeToTable(
-      metadata_->findTable(qualifiedName("products")),
+  insertInto(
+      "products",
       makeRowVector(
           {"id", "embedding", "ds"},
           {
               makeFlatVector<int64_t>({1}),
               makeArrayVector<float>({{1, 0}}),
               makeFlatVector<std::string>({"2026-09-30"}),
-          }),
-      WriteKind::kInsert,
-      dwio::common::FileFormat::DWRF);
+          }));
   metadata_->reloadTableFromPath(qualifiedName("products"));
 
   // Builds a handle of the table 'name' with 'filter', if any.
@@ -1687,8 +1716,7 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexCoverage) {
     writeToTable(
         table,
         makeRowVector(table->type()->names(), columns),
-        WriteKind::kInsert,
-        dwio::common::FileFormat::DWRF);
+        WriteKind::kInsert);
     metadata_->reloadTableFromPath(table->name());
   };
 
@@ -1744,16 +1772,14 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexCoverage) {
           .vectorIndexes = {vectorIndex("i")},
       });
   const auto insertPoint = [&](int64_t id) {
-    writeToTable(
-        metadata_->findTable(qualifiedName("points")),
+    insertInto(
+        "points",
         makeRowVector(
             {"id", "embedding"},
             {
                 makeFlatVector<int64_t>({id}),
                 makeArrayVector<float>({{1, 0}}),
-            }),
-        WriteKind::kInsert,
-        dwio::common::FileFormat::DWRF);
+            }));
     metadata_->reloadTableFromPath(qualifiedName("points"));
   };
   const auto checkPointsCoverage = [&] {
