@@ -661,6 +661,148 @@ TEST_P(HiveBucketedExecutionTest, copartitionedJoinIndivisibleWorkers) {
           .build());
 }
 
+// A vector search runs where the rows of its index table are: the index table
+// is bucketed by cluster_id, and each query's clusters are sent to the workers
+// holding their buckets. A worker skips the files of the buckets that hold no
+// probed cluster.
+TEST_P(HiveBucketedExecutionTest, vectorSearch) {
+  // Only the v2 optimizer plans a refresh.
+  if (!useV2_) {
+    return;
+  }
+  // Dropping the table drops its index's tables too.
+  tablesToDrop_.emplace_back("t");
+  runCreateTable(
+      "CREATE TABLE t ("
+      "   id BIGINT, "
+      "   embedding ARRAY(REAL), "
+      "   ds VARCHAR, "
+      "   VECTOR INDEX i (embedding) KEY (id) WITH ("
+      "       distance_metric = 'cosine', "
+      "       index_type = 'flat', "
+      "       num_clusters = 16, "
+      "       dimension = 2, "
+      "       bucket_count = 4)) "
+      "WITH (partitioned_by = ARRAY['ds'])");
+
+  // 64 unit vectors, evenly spaced around the circle.
+  runVelox(parseInsert(
+      "INSERT INTO t "
+      "SELECT x, "
+      "    ARRAY[CAST(cos(radians(x * 5.625)) AS REAL), "
+      "        CAST(sin(radians(x * 5.625)) AS REAL)], "
+      "    'a' "
+      "FROM UNNEST(sequence(0, 63)) AS _(x)"));
+  refreshVectorIndex("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'");
+
+  // The 16 clusters are in 4 buckets.
+  const auto* indexLayout = hiveMetadata()
+                                .findTable({kDefaultSchema, "t__i__index"})
+                                ->primaryLayout()
+                                ->as<connector::hive::HiveTableLayout>();
+  ASSERT_EQ(indexLayout->numBuckets(), 4);
+
+  // The query is point 0, so the cluster it probes holds it.
+  createRegularTable(
+      "queries", "SELECT ARRAY[REAL '1', REAL '0'] AS embedding");
+  const auto search = parseSelect(
+      "SELECT id "
+      "FROM TABLE(vector_search("
+      "   queries => TABLE(SELECT embedding FROM queries), "
+      "   corpus => TABLE(SELECT * FROM t WHERE ds = 'a'), "
+      "   embeddings => DESCRIPTOR(embedding), "
+      "   metric => 'cosine', "
+      "   k => 1, "
+      "   hints => MAP(ARRAY['num_probes'], ARRAY['1'])))");
+
+  // Matches the search, capturing the id of the index table's scan in
+  // 'indexScanId'. The queries are assigned to their nearest cluster where the
+  // codec table is read, then searched against the cluster's local indexes.
+  // With 'distributed', the queries go to every worker reading the codec table,
+  // and each assignment goes to the worker holding its cluster's bucket.
+  const auto matchSearch = [&](bool distributed,
+                               core::PlanNodeId& indexScanId) {
+    auto matcher = core::PlanMatcherBuilder()
+                       .tableScan(
+                           "t__i__index",
+                           [&](const core::PlanNodePtr& node) {
+                             indexScanId = node->id();
+                           })
+                       .aliases(
+                           {"index_codec_id",
+                            "index_cluster_id",
+                            "local_index",
+                            "index_ds"})
+                       .vectorSearchJoin(
+                           matchHiveScan("t__i__codecs")
+                               .aliases({"codec", "codec_id", "ds"})
+                               .vectorSearchJoin(
+                                   matchHiveScan("queries")
+                                       .aliases({"embedding"})
+                                       .assignUniqueId("query_id")
+                                       .broadcastIf(distributed),
+                                   core::JoinType::kInner,
+                                   {},
+                                   "embedding",
+                                   "codec",
+                                   1)
+                               .aliases(
+                                   {"embedding",
+                                    "query_id",
+                                    "codec_id",
+                                    "ds",
+                                    "cluster_id"})
+                               .shuffleIf(distributed, {"cluster_id"}),
+                           core::JoinType::kInner,
+                           {"index_ds = ds",
+                            "index_codec_id = codec_id",
+                            "index_cluster_id = cluster_id"},
+                           "embedding",
+                           "local_index",
+                           1)
+                       .aliases({"query_id", "id", "score"});
+    if (distributed) {
+      matcher.partialTopNRowNumber({"query_id"}, {"score DESC"}, 1)
+          .fragment({.width = 4, .bucketedScans = 1, .bucketedExchanges = 1})
+          .shuffle({"query_id"})
+          .localPartition({"query_id"});
+    }
+    matcher.topNRowNumber({"query_id"}, {"score DESC"}, 1, /*rankColumn=*/false)
+        .project({"id"});
+    return matcher;
+  };
+
+  // Each worker is assigned one bucket, and gets the queries of its clusters.
+  // Only the worker whose bucket holds the probed cluster reads its file; the
+  // others get no queries and read nothing.
+  {
+    core::PlanNodeId indexScanId;
+    auto plan = planDistributed(search);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        plan.plan,
+        matchSearch(/*distributed=*/true, indexScanId).gather().build());
+    const auto result = runFragmentedPlan(plan);
+    EXPECT_EQ(result.getOnlyResult<int64_t>(), 0);
+    const auto stats = result.planNodeStats(indexScanId);
+    EXPECT_EQ(stats.customStats.at("processedSplits").sum, 1);
+    EXPECT_FALSE(stats.customStats.contains("skippedSplits"));
+  }
+
+  // One worker reads every bucket, and skips the files of the 3 whose clusters
+  // no query probes.
+  {
+    core::PlanNodeId indexScanId;
+    const auto plan = toSingleNodePlan(search);
+    AXIOM_ASSERT_PLAN(
+        plan, matchSearch(/*distributed=*/false, indexScanId).build());
+    const auto result = runVelox(plan);
+    EXPECT_EQ(result.getOnlyResult<int64_t>(), 0);
+    const auto stats = result.planNodeStats(indexScanId);
+    EXPECT_EQ(stats.customStats.at("processedSplits").sum, 1);
+    EXPECT_EQ(stats.customStats.at("skippedSplits").sum, 3);
+  }
+}
+
 TEST_P(HiveBucketedExecutionTest, unionall) {
   // The two inputs bucket on different keys, so they cannot co-partition; the
   // union reshuffles on the grouping key before aggregating.

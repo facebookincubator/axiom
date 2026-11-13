@@ -49,6 +49,17 @@ using namespace facebook::velox;
 
 namespace facebook::axiom::optimizer::test {
 
+exec::PlanNodeStats TestResult::planNodeStats(
+    const core::PlanNodeId& nodeId) const {
+  const auto& stages = runner->stages();
+  for (size_t i = 0; i < stages.size(); ++i) {
+    if (core::PlanNode::findNodeById(stages[i].plan.get(), nodeId)) {
+      return exec::PlanNodeStats::extract(stats[i], nodeId);
+    }
+  }
+  VELOX_FAIL("No stage runs plan node {}", nodeId);
+}
+
 // static
 void QueryTestBase::SetUpTestCase() {
   HiveConnectorTestBase::SetUpTestCase();
@@ -182,13 +193,57 @@ logical_plan::LogicalPlanNodePtr QueryTestBase::parseDelete(
   return statement->as<::axiom::sql::presto::DeleteStatement>()->plan();
 }
 
+namespace {
+::axiom::sql::presto::SqlStatementPtr parseRefreshStatement(
+    std::string_view sql,
+    const std::string& defaultConnectorId) {
+  auto statement = parseStatement(sql, defaultConnectorId, "default");
+  VELOX_CHECK(statement->isRefreshVectorIndex());
+  return statement;
+}
+} // namespace
+
 ::axiom::sql::presto::RefreshVectorIndexStatement::Plans
 QueryTestBase::parseRefresh(std::string_view sql) {
-  auto statement = parseStatement(sql, defaultConnectorId_, "default");
-
-  VELOX_CHECK(statement->isRefreshVectorIndex());
-  return statement->as<::axiom::sql::presto::RefreshVectorIndexStatement>()
+  return parseRefreshStatement(sql, defaultConnectorId_)
+      ->as<::axiom::sql::presto::RefreshVectorIndexStatement>()
       ->plans();
+}
+
+std::pair<int64_t, int64_t> QueryTestBase::refreshVectorIndex(
+    std::string_view sql) {
+  return refreshVectorIndex(
+      *parseRefreshStatement(sql, defaultConnectorId_)
+           ->as<::axiom::sql::presto::RefreshVectorIndexStatement>());
+}
+
+connector::VectorIndexWriteHandlePtr QueryTestBase::trainVectorIndex(
+    const ::axiom::sql::presto::RefreshVectorIndexStatement& refresh) {
+  auto handle = folly::coro::blockingWait(
+      connector::ConnectorMetadataRegistry::get(refresh.connectorId())
+          ->co_beginVectorIndexWrite(
+              makeConnectorContext("test")->sessionFor(refresh.connectorId()),
+              refresh.index()));
+  auto plan = planVeloxWithPlaceholders(
+      refresh.plans().trainPlan, {velox::Variant(handle->codecId())}, "test");
+  runFragmentedPlan(plan);
+  return handle;
+}
+
+std::pair<int64_t, int64_t> QueryTestBase::refreshVectorIndex(
+    const ::axiom::sql::presto::RefreshVectorIndexStatement& refresh) {
+  const auto handle = trainVectorIndex(refresh);
+  auto plan = planVeloxWithPlaceholders(
+      refresh.plans().buildPlan, {velox::Variant(handle->codecId())}, "test");
+  runFragmentedPlan(plan);
+  return {
+      folly::coro::blockingWait(
+          connector::ConnectorMetadataRegistry::get(refresh.connectorId())
+              ->co_finishVectorIndexWrite(
+                  makeConnectorContext("test")->sessionFor(
+                      refresh.connectorId()),
+                  handle)),
+      handle->codecId()};
 }
 
 namespace {
@@ -381,16 +436,17 @@ PlannedQuery QueryTestBase::planVelox(
       plan, schemaResolver, options, optimizerOptions, planFilePathPrefix);
 }
 
-optimizer::PlanAndStats QueryTestBase::planVeloxWithPlaceholders(
+PlannedQuery QueryTestBase::planVeloxWithPlaceholders(
     const logical_plan::LogicalPlanNodePtr& plan,
-    const std::vector<velox::Variant>& placeholderValues) {
+    const std::vector<velox::Variant>& placeholderValues,
+    const std::string& queryId) {
   connector::SchemaResolver schemaResolver{
       connector::ConnectorMetadataRegistry::global()};
   return planVelox(
       plan,
       placeholderValues,
       schemaResolver,
-      {.maxRemotePartitions = 4, .maxLocalPartitions = 4},
+      {.queryId = queryId, .maxRemotePartitions = 4, .maxLocalPartitions = 4},
       /*optimizerOptions=*/std::nullopt,
       /*planFilePathPrefix=*/std::nullopt);
 }

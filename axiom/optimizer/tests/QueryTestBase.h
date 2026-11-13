@@ -28,6 +28,7 @@
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -93,6 +94,11 @@ struct TestResult {
   T getOnlyResult() const {
     return getOnlyResult().template value<T>();
   }
+
+  /// Returns the stats of plan node 'nodeId', summed over the tasks of the
+  /// stage that runs it. Throws if no stage runs the node.
+  velox::exec::PlanNodeStats planNodeStats(
+      const velox::core::PlanNodeId& nodeId) const;
 };
 
 class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
@@ -145,6 +151,21 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   ::axiom::sql::presto::RefreshVectorIndexStatement::Plans parseRefresh(
       std::string_view sql);
 
+  /// Begins a write of the index that 'refresh' refreshes and runs its train
+  /// plan, which writes codecs. Returns the write.
+  connector::VectorIndexWriteHandlePtr trainVectorIndex(
+      const ::axiom::sql::presto::RefreshVectorIndexStatement& refresh);
+
+  /// Runs the refresh 'refresh'. Returns the number of embeddings it wrote and
+  /// the id of its codecs.
+  std::pair<int64_t, int64_t> refreshVectorIndex(
+      const ::axiom::sql::presto::RefreshVectorIndexStatement& refresh);
+
+  /// Runs REFRESH VECTOR INDEX 'sql', resolving its table name with
+  /// 'defaultConnectorId_'. Returns the number of embeddings it wrote and the
+  /// id of its codecs.
+  std::pair<int64_t, int64_t> refreshVectorIndex(std::string_view sql);
+
   /// @param options If 'options.queryId' is set, it names the query's contexts
   /// and plan; otherwise a unique ID is generated.
   /// @param planFilePathPrefix If specified, writes the query graph, optimized
@@ -171,10 +192,12 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
       const std::optional<std::string>& planFilePathPrefix = std::nullopt);
 
   /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
-  /// order of position, with the default options.
-  optimizer::PlanAndStats planVeloxWithPlaceholders(
+  /// order of position, with the default options. A non-empty 'queryId' names
+  /// the query's contexts and plan; otherwise a unique ID is generated.
+  PlannedQuery planVeloxWithPlaceholders(
       const logical_plan::LogicalPlanNodePtr& plan,
-      const std::vector<velox::Variant>& placeholderValues);
+      const std::vector<velox::Variant>& placeholderValues,
+      const std::string& queryId = "");
 
   /// Plans 'plan' with 'placeholderValues', the values of its placeholders in
   /// order of position. Only the v2 optimizer binds placeholders.

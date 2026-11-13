@@ -359,8 +359,10 @@ ALTER TABLE products DROP VECTOR INDEX product_index;
 ```
 
 Any property other than the index's own is a table property of both of its
-storage tables. The index's partitions are its table's, so `partitioned_by`,
-`bucketed_by`, `bucket_count` and `sorted_by` are not supported.
+storage tables, except `bucket_count`, which buckets the index table by
+`cluster_id` into that many buckets; without it, the index table is unbucketed.
+The index's partitions are its table's, so `partitioned_by`, `bucketed_by` and
+`sorted_by` are not supported.
 
 The table's `.schema` records each index's settings. The index is stored as two
 tables named after the table and the index:
@@ -370,7 +372,8 @@ tables named after the table and the index:
   - the partition columns (partition keys)
   - `codec_id BIGINT` (partition key)
 - `products__product_index__index` holds one local index per group of a
-  cluster:
+  cluster, bucketed by `cluster_id` if bucketed, so a search reads only the
+  buckets of the clusters it probes:
   - `codec_id BIGINT`
   - `cluster_id BIGINT`
   - `group_id BIGINT`
