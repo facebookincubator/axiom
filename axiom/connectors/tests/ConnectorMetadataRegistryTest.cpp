@@ -163,5 +163,32 @@ TEST_F(ConnectorMetadataRegistryTest, duplicateRegistration) {
   EXPECT_EQ(result->label(), "first");
 }
 
+class PoolOwningMetadata : public StubConnectorMetadata {
+ public:
+  explicit PoolOwningMetadata(std::shared_ptr<memory::MemoryPool> pool)
+      : StubConnectorMetadata{"pool-owner"}, pool_{std::move(pool)} {}
+
+ private:
+  std::shared_ptr<memory::MemoryPool> pool_;
+};
+
+// A static constructed after the registry is destroyed before it at exit. The
+// registry must not release its entries' pools into that destroyed manager.
+TEST_F(ConnectorMetadataRegistryTest, exitAfterMemoryManagerDestroyed) {
+  EXPECT_EXIT(
+      {
+        ConnectorMetadataRegistry::global();
+        memory::MemoryManager::Options options;
+        options.checkUsageLeak = false;
+        static memory::MemoryManager manager{options};
+        ConnectorMetadataRegistry::global().insert(
+            "pool-owner",
+            std::make_shared<PoolOwningMetadata>(manager.addRootPool()));
+        std::exit(0);
+      },
+      ::testing::ExitedWithCode(0),
+      "");
+}
+
 } // namespace
 } // namespace facebook::axiom::connector
