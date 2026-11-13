@@ -162,7 +162,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define AXIOM_PRESTO_SYNTAX_CHECK(condition, location, token, fmt_str, ...) \
   do {                                                                      \
-    if (FOLLY_UNLIKELY(!(condition))) {                                     \
+    if (!(condition)) [[unlikely]] {                                        \
       assert((location).line > 0 && "Location must have 1-based line");     \
       throw ::axiom::sql::presto::PrestoSqlError(                           \
           fmt::format(fmt_str, ##__VA_ARGS__),                              \
@@ -193,7 +193,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define AXIOM_PRESTO_SYNTAX_CHECK_NULL(value, location, token, fmt_str, ...) \
   do {                                                                       \
-    if (FOLLY_UNLIKELY((value) != nullptr)) {                                \
+    if ((value) != nullptr) [[unlikely]] {                                   \
       assert((location).line > 0 && "Location must have 1-based line");      \
       throw ::axiom::sql::presto::PrestoSqlError(                            \
           fmt::format(fmt_str, ##__VA_ARGS__),                               \
@@ -210,7 +210,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define AXIOM_PRESTO_SEMANTIC_CHECK(condition, location, token, fmt_str, ...) \
   do {                                                                        \
-    if (FOLLY_UNLIKELY(!(condition))) {                                       \
+    if (!(condition)) [[unlikely]] {                                          \
       assert((location).line > 0 && "Location must have 1-based line");       \
       throw ::axiom::sql::presto::PrestoSqlError(                             \
           fmt::format(fmt_str, ##__VA_ARGS__),                                \
@@ -241,7 +241,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define AXIOM_PRESTO_SEMANTIC_CHECK_NULL(value, location, token, fmt_str, ...) \
   do {                                                                         \
-    if (FOLLY_UNLIKELY((value) != nullptr)) {                                  \
+    if ((value) != nullptr) [[unlikely]] {                                     \
       assert((location).line > 0 && "Location must have 1-based line");        \
       throw ::axiom::sql::presto::PrestoSqlError(                              \
           fmt::format(fmt_str, ##__VA_ARGS__),                                 \
@@ -261,7 +261,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
   do {                                                                  \
     const auto _axiom_v1 = (val1);                                      \
     const auto _axiom_v2 = (val2);                                      \
-    if (FOLLY_UNLIKELY(_axiom_v1 != _axiom_v2)) {                       \
+    if (_axiom_v1 != _axiom_v2) [[unlikely]] {                          \
       assert((location).line > 0 && "Location must have 1-based line"); \
       throw ::axiom::sql::presto::PrestoSqlError(                       \
           fmt::format(fmt_str, ##__VA_ARGS__) +                         \
@@ -282,7 +282,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
   do {                                                                  \
     const auto _axiom_v1 = (val1);                                      \
     const auto _axiom_v2 = (val2);                                      \
-    if (FOLLY_UNLIKELY(_axiom_v1 >= _axiom_v2)) {                       \
+    if (_axiom_v1 >= _axiom_v2) [[unlikely]] {                          \
       assert((location).line > 0 && "Location must have 1-based line"); \
       throw ::axiom::sql::presto::PrestoSqlError(                       \
           fmt::format(fmt_str, ##__VA_ARGS__) +                         \
@@ -303,7 +303,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
   do {                                                                  \
     const auto _axiom_v1 = (val1);                                      \
     const auto _axiom_v2 = (val2);                                      \
-    if (FOLLY_UNLIKELY(_axiom_v1 > _axiom_v2)) {                        \
+    if (_axiom_v1 > _axiom_v2) [[unlikely]] {                           \
       assert((location).line > 0 && "Location must have 1-based line"); \
       throw ::axiom::sql::presto::PrestoSqlError(                       \
           fmt::format(fmt_str, ##__VA_ARGS__) +                         \
@@ -324,7 +324,7 @@ PrestoErrorClassification classify(PrestoSqlErrorKind kind);
   do {                                                                  \
     const auto _axiom_v1 = (val1);                                      \
     const auto _axiom_v2 = (val2);                                      \
-    if (FOLLY_UNLIKELY(_axiom_v1 < _axiom_v2)) {                        \
+    if (_axiom_v1 < _axiom_v2) [[unlikely]] {                           \
       assert((location).line > 0 && "Location must have 1-based line"); \
       throw ::axiom::sql::presto::PrestoSqlError(                       \
           fmt::format(fmt_str, ##__VA_ARGS__) +                         \
