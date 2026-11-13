@@ -16,7 +16,13 @@
 
 #include "axiom/optimizer/JoinPredicatePlacement.h"
 
+#include <optional>
+#include <utility>
+
+#include <folly/container/F14Map.h>
+
 #include "axiom/optimizer/AppendAll.h"
+#include "axiom/optimizer/EquivalenceClosure.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/ImpliedFilters.h"
 #include "axiom/optimizer/JoinCondition.h"
@@ -143,6 +149,45 @@ JoinPredicatePlacement::filterPropagation(
   VELOX_UNREACHABLE();
 }
 
+std::optional<std::pair<ColumnCP, ColumnCP>>
+JoinPredicatePlacement::columnEquality(ExprCP conjunct) {
+  if (!conjunct->is(PlanType::kCallExpr)) {
+    return std::nullopt;
+  }
+  const Call* call = conjunct->as<Call>();
+  if (call->name() != toName(queryCtx()->functionRegistry().equality()) ||
+      !call->args()[0]->isColumn() || !call->args()[1]->isColumn()) {
+    return std::nullopt;
+  }
+  return std::pair{
+      call->args()[0]->as<Column>(),
+      call->args()[1]->as<Column>(),
+  };
+}
+
+namespace {
+
+// Calls 'add' with the two columns of each column key pair of 'join' and of
+// each `column = column` conjunct of its filter.
+template <typename Add>
+void forEachColumnEquality(JoinCP join, Add add) {
+  for (size_t i = 0; i < join->leftKeys().size(); ++i) {
+    ExprCP leftKey = join->leftKeys()[i];
+    ExprCP rightKey = join->rightKeys()[i];
+    if (leftKey->isColumn() && rightKey->isColumn()) {
+      add(leftKey->as<Column>(), rightKey->as<Column>());
+    }
+  }
+  for (ExprCP conjunct : join->filter()) {
+    if (const auto equality =
+            JoinPredicatePlacement::columnEquality(conjunct)) {
+      add(equality->first, equality->second);
+    }
+  }
+}
+
+} // namespace
+
 std::pair<ColumnVector, ColumnVector> JoinPredicatePlacement::equiColumnPairs(
     JoinCP join,
     const PlanObjectSet& leftColumns,
@@ -150,58 +195,93 @@ std::pair<ColumnVector, ColumnVector> JoinPredicatePlacement::equiColumnPairs(
     const ExprVector& extraConjuncts) {
   ColumnVector leftKeys;
   ColumnVector rightKeys;
-  const auto addPair = [&](ColumnCP left, ColumnCP right) {
+  const auto addPair = [&](ColumnCP first, ColumnCP second) {
+    if (leftColumns.contains(second) && rightColumns.contains(first)) {
+      std::swap(first, second);
+    }
+    if (!leftColumns.contains(first) || !rightColumns.contains(second)) {
+      return;
+    }
     for (size_t i = 0; i < leftKeys.size(); ++i) {
-      if (leftKeys[i] == left && rightKeys[i] == right) {
+      if (leftKeys[i] == first && rightKeys[i] == second) {
         return;
       }
     }
-    leftKeys.push_back(left);
-    rightKeys.push_back(right);
+    leftKeys.push_back(first);
+    rightKeys.push_back(second);
   };
-
-  for (size_t i = 0; i < join->leftKeys().size(); ++i) {
-    ExprCP leftKey = join->leftKeys()[i];
-    ExprCP rightKey = join->rightKeys()[i];
-    if (leftKey->is(PlanType::kColumnExpr) &&
-        rightKey->is(PlanType::kColumnExpr)) {
-      addPair(leftKey->as<Column>(), rightKey->as<Column>());
-    }
-  }
-
-  const Name equalityName = toName(queryCtx()->functionRegistry().equality());
-  const auto addEqualityPair = [&](ExprCP conjunct) {
-    if (!conjunct->is(PlanType::kCallExpr)) {
-      return;
-    }
-    const Call* call = conjunct->as<Call>();
-    if (call->name() != equalityName) {
-      return;
-    }
-    ExprCP first = call->args()[0];
-    ExprCP second = call->args()[1];
-    if (!first->is(PlanType::kColumnExpr) ||
-        !second->is(PlanType::kColumnExpr)) {
-      return;
-    }
-    ColumnCP firstColumn = first->as<Column>();
-    ColumnCP secondColumn = second->as<Column>();
-    if (leftColumns.contains(firstColumn) &&
-        rightColumns.contains(secondColumn)) {
-      addPair(firstColumn, secondColumn);
-    } else if (
-        leftColumns.contains(secondColumn) &&
-        rightColumns.contains(firstColumn)) {
-      addPair(secondColumn, firstColumn);
-    }
-  };
-  for (ExprCP conjunct : join->filter()) {
-    addEqualityPair(conjunct);
-  }
+  forEachColumnEquality(join, addPair);
   for (ExprCP conjunct : extraConjuncts) {
-    addEqualityPair(conjunct);
+    if (const auto equality = columnEquality(conjunct)) {
+      addPair(equality->first, equality->second);
+    }
   }
   return {std::move(leftKeys), std::move(rightKeys)};
+}
+
+JoinPredicatePlacement::EqualColumns JoinPredicatePlacement::equalColumns(
+    JoinCP join,
+    const PlanObjectSet& leftColumns,
+    const PlanObjectSet& rightColumns,
+    const ExprVector& conjuncts,
+    const ExprVector& guaranteed) {
+  EquivalenceClosure<ColumnCP> closure;
+  PlanObjectSet columns;
+  // Columns of an equality between the two inputs.
+  PlanObjectSet crossColumns;
+  const auto addEquality = [&](ColumnCP first, ColumnCP second) {
+    closure.merge(first, second);
+    columns.add(first);
+    columns.add(second);
+    if (leftColumns.contains(first) != leftColumns.contains(second)) {
+      crossColumns.add(first);
+      crossColumns.add(second);
+    }
+  };
+  forEachColumnEquality(join, addEquality);
+
+  const auto isInput = [&](ColumnCP column) {
+    return leftColumns.contains(column) || rightColumns.contains(column);
+  };
+  PlanObjectSet equalities;
+  for (ExprCP conjunct : conjuncts) {
+    const auto equality = columnEquality(conjunct);
+    if (equality.has_value() && isInput(equality->first) &&
+        isInput(equality->second)) {
+      addEquality(equality->first, equality->second);
+      equalities.add(conjunct);
+    }
+  }
+  for (ExprCP conjunct : guaranteed) {
+    if (const auto equality = columnEquality(conjunct)) {
+      addEquality(equality->first, equality->second);
+    }
+  }
+
+  // The targets of each class on each input, by the class's root.
+  folly::F14FastMap<ColumnCP, ColumnVector> leftTargets;
+  folly::F14FastMap<ColumnCP, ColumnVector> rightTargets;
+  crossColumns.forEach<Column>([&](ColumnCP column) {
+    auto& targets = leftColumns.contains(column) ? leftTargets : rightTargets;
+    targets[closure.find(column)].push_back(column);
+  });
+
+  EqualColumns result{.equalities = std::move(equalities)};
+  columns.forEach<Column>([&](ColumnCP column) {
+    const bool left = leftColumns.contains(column);
+    const auto& targets = left ? rightTargets : leftTargets;
+    const auto it = targets.find(closure.find(column));
+    if (it == targets.end()) {
+      return;
+    }
+    auto& pairs = left ? result.toRight : result.toLeft;
+    for (ColumnCP target : it->second) {
+      pairs.sources.push_back(column);
+      pairs.targets.push_back(target);
+    }
+    result.columns.add(column);
+  });
+  return result;
 }
 
 JoinPredicatePlacement::Routed JoinPredicatePlacement::route(
