@@ -103,6 +103,7 @@ TableAccessHandle buildTableAccess(
   velox::connector::ConnectorTableHandlePtr tableHandle =
       layout->createTableHandle(
           connectorSession,
+          baseTable.id(),
           std::move(readSchema),
           evaluator,
           std::move(typedFilters),

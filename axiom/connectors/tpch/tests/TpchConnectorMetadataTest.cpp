@@ -156,6 +156,7 @@ TEST_F(TpchConnectorMetadataTest, createTableHandle) {
       nullptr, nullptr);
   auto tableHandle = layouts[0]->createTableHandle(
       /*session=*/nullptr,
+      /*tableReferenceId=*/0,
       columnHandles,
       *evaluator,
       empty,
@@ -219,6 +220,7 @@ CO_TEST_F(TpchConnectorMetadataTest, splitGeneration) {
       nullptr, nullptr);
   auto tableHandle = layouts[0]->createTableHandle(
       /*session=*/nullptr,
+      /*tableReferenceId=*/0,
       columnHandles,
       *evaluator,
       empty,

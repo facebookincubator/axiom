@@ -859,6 +859,9 @@ class TableLayout {
   /// specify casting from maps to structs by giving a struct in the place of a
   /// map.
   ///
+  /// 'tableReferenceId' identifies one logical table reference within the
+  /// query. Separate references to the same table have separate IDs.
+  ///
   /// The optimizer normalizes 'filters' into a canonical form a connector may
   /// rely on:
   /// - A top-level conjunction is flattened: 'filters' holds one entry per
@@ -882,6 +885,7 @@ class TableLayout {
   /// ARRAY encoding.
   virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
+      int32_t tableReferenceId,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
