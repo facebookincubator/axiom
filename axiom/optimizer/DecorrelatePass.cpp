@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/DecorrelatePass.h"
 
+#include <ranges>
+
 #include "axiom/optimizer/AggregateRecovery.h"
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/ExprFactory.h"
@@ -1366,8 +1368,8 @@ class Decorrelator : public NodeRewriter<> {
 
   // Reduces 'chain' to the outer Apply's contract: every row 'matchedExpr'
   // accepts survives, and an outer with no such row keeps exactly one
-  // NULL-padded row. 'rowId', from an AssignUniqueId over 'input', identifies
-  // the outer a row belongs to.
+  // NULL-padded row. 'rowId', unique per row of 'input', identifies the outer
+  // a row belongs to.
   NodeCP collapsePadRows(
       ApplyCP node,
       NodeCP input,
@@ -2380,7 +2382,7 @@ class Decorrelator : public NodeRewriter<> {
   //                            ++ arbitrary(L.col) for each L.col)
   //       - Apply (kLeft, filter = F_pre)  ← recurses
   //         - body  = Project(agg.input, [..., _include := true])
-  //         - input = AssignUniqueId(L) → tagged_L
+  //         - input = tagged_L: AssignUniqueId(L), or L reusing a row id
   //
   // A non-empty gby leaves an outer one row per group, and F_post drops the
   // groups it rejects, so an outer it rejects every group of needs a pad row
@@ -2480,8 +2482,18 @@ class Decorrelator : public NodeRewriter<> {
     AggregateRecovery recovery(builder(), exprFactory_);
 
     // Build the recovered chain bottom-up.
+    // A grouped body under the single-row check keys that check on its row id,
+    // so the id is its own. An enclosing Apply that lifts its EnforceDistinct
+    // on the id applies after it every conjunct on a column computed above the
+    // id's AssignUniqueId, so a reused id would move a filter on an earlier
+    // subquery's value after the check.
+    const bool rowIdKeysSingleRowCheck =
+        numGroupingKeys > 0 && node->enforceSingleRow();
     auto innerApply = buildAggregateInnerApply(
-        input, aggregate, std::move(filterPreConjuncts));
+        input,
+        aggregate,
+        std::move(filterPreConjuncts),
+        /*reuseRowId=*/!rowIdKeysSingleRowCheck);
     NodeCP decorrelatedInner = rewrite(innerApply.apply);
 
     auto wraps = buildAggregateWraps(
@@ -2683,19 +2695,82 @@ class Decorrelator : public NodeRewriter<> {
     ExprVector outputs;
   };
 
-  // Builds the inner Apply (kLeft, filter = F_pre) over
-  // AssignUniqueId(input) with body = aggregate's input. The Apply's
-  // includeMarker is consumed by the lifted Aggregate's FILTER.
-  // The driver recurses on this inner Apply to handle any remaining
-  // peels in the Aggregate's input chain. enforceSingleRow is false:
-  // the lifted Aggregate above guarantees ≤1 row per row-id by
-  // grouping on it, so no separate per-row assertion is needed.
+  // An input rebuilt to output a column that tells its rows apart.
+  struct TaggedInput {
+    NodeCP node;
+    ColumnCP rowId;
+  };
+
+  // Returns 'input' rebuilt to also output a row id it already carries, or
+  // nullopt if it carries none or already outputs it. The id is the first
+  // single-column unique key from an AssignUniqueId, found by descending
+  // through Filters and Projects. Those keep a subset of the rows or every
+  // row, so the result is unique on the id too. It replaces 'input'.
+  std::optional<TaggedInput> passUpRowId(NodeCP input) {
+    const auto idKey = [](NodeCP node) -> ColumnCP {
+      for (const PlanObjectSet& key : node->relationalProperties().unique) {
+        if (key.size() == 1 &&
+            findAssignUniqueId(node, key.onlyObject<Column>()) != nullptr) {
+          return key.onlyObject<Column>();
+        }
+      }
+      return nullptr;
+    };
+
+    std::vector<NodeCP> walked;
+    NodeCP node = input;
+    ColumnCP rowId = idKey(node);
+    while (rowId == nullptr) {
+      if (!node->is(NodeType::kFilter) && !node->is(NodeType::kProject)) {
+        return std::nullopt;
+      }
+      walked.push_back(node);
+      node = node->inputs().front();
+      rowId = idKey(node);
+    }
+    // The lifted Aggregate would output the id twice: as its grouping key and
+    // through 'arbitrary'.
+    if (std::ranges::find(input->outputColumns(), rowId) !=
+        input->outputColumns().end()) {
+      return std::nullopt;
+    }
+
+    for (NodeCP above : walked | std::views::reverse) {
+      if (above->is(NodeType::kFilter)) {
+        node =
+            builder().make<Filter>({node, above->as<Filter>()->predicates()});
+        continue;
+      }
+      const auto* project = above->as<Project>();
+      ExprVector exprs = project->exprs();
+      exprs.push_back(rowId);
+      ColumnVector outputs = project->outputColumns();
+      outputs.push_back(rowId);
+      node =
+          builder().make<Project>({node, std::move(exprs), std::move(outputs)});
+    }
+    return TaggedInput{node, rowId};
+  }
+
+  // Builds the inner Apply (kLeft, filter = F_pre) over 'input' tagged with a
+  // row id that tells its rows apart, with body = aggregate's input. With
+  // 'reuseRowId' the id is one the rows already carry, when there is one;
+  // otherwise AssignUniqueId(input) adds one. The Apply's includeMarker is
+  // consumed by the lifted Aggregate's FILTER. The driver recurses on this
+  // inner Apply to handle any remaining peels in the Aggregate's input chain.
+  // enforceSingleRow is false: the caller asserts any single-row bound over
+  // the lifted Aggregate.
   InnerApplyResult buildAggregateInnerApply(
       NodeCP input,
       AggregationCP aggregate,
-      ExprVector filterPre) {
-    ColumnCP rowIdColumn = makeIdColumn();
-    NodeCP taggedInput = builder().make<AssignUniqueId>({input, rowIdColumn});
+      ExprVector filterPre,
+      bool reuseRowId) {
+    std::optional<TaggedInput> reused =
+        reuseRowId ? passUpRowId(input) : std::nullopt;
+    ColumnCP rowIdColumn = reused ? reused->rowId : makeIdColumn();
+    NodeCP taggedInput = reused
+        ? reused->node
+        : builder().make<AssignUniqueId>({input, rowIdColumn});
 
     NodeCP body = aggregate->input();
 
@@ -3605,7 +3680,10 @@ class Decorrelator : public NodeRewriter<> {
 
     AggregateRecovery recovery(builder(), exprFactory_);
     auto innerApply = buildAggregateInnerApply(
-        input, aggregate, std::move(filterPreConjuncts));
+        input,
+        aggregate,
+        std::move(filterPreConjuncts),
+        /*reuseRowId=*/true);
     NodeCP decorrelatedInner = rewrite(innerApply.apply);
 
     // Case 6a: non-empty gby with no HAVING. Single Aggregate per
@@ -3856,7 +3934,10 @@ class Decorrelator : public NodeRewriter<> {
 
     AggregateRecovery recovery(builder(), exprFactory_);
     auto innerApply = buildAggregateInnerApply(
-        input, aggregate, std::move(filterPreConjuncts));
+        input,
+        aggregate,
+        std::move(filterPreConjuncts),
+        /*reuseRowId=*/true);
     NodeCP decorrelatedInner = rewrite(innerApply.apply);
 
     // Stage 1 Aggregate:

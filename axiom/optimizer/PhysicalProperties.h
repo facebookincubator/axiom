@@ -268,9 +268,9 @@ AXIOM_DECLARE_ENUM_NAME(DriverOrderKind);
 /// `orders[i]` is the direction of `columns[i]`.
 ///
 /// Driver order describes each driver's stream on its own and says nothing
-/// about which driver a row is on; co-location comes from partitioning and
-/// global uniqueness (see `PhysicalProperties::coLocates`). Equality is
-/// grouping equality: NULL equals NULL.
+/// about which driver a row is on; co-location comes from partitioning,
+/// global uniqueness and colocated sets (see `PhysicalProperties::coLocates`).
+/// Equality is grouping equality: NULL equals NULL.
 struct DriverOrder {
   DriverOrderKind kind{DriverOrderKind::kGrouped};
   ColumnVector columns;
@@ -308,20 +308,35 @@ struct PhysicalProperties {
   /// is unique within each driver too, and is not repeated here.
   QGVector<PlanObjectSet> driverUnique;
 
+  /// Column sets whose equal values are on one task, though they repeat: every
+  /// row with a given value descends from one row of a relation unique on the
+  /// set, through operators that keep a row's outputs on that row's task. Never
+  /// holds the empty set, a set that contains a non-empty global unique key, or
+  /// a set that contains another one here. Empty for a replicated relation,
+  /// whose rows repeat on every task. Not a partitioning: two relations
+  /// colocated on their join keys are not co-partitioned.
+  QGVector<PlanObjectSet> globalColocated;
+
   /// Returns true when the partitioning at `scope` or global uniqueness
   /// guarantees equal `keys` occur on one task (`kGlobal`) or one driver
-  /// (`kDriver`). Empty `keys` asks whether all rows are on one task or driver.
-  /// A broadcast puts a copy of every row on every task, so global uniqueness
-  /// does not place a key on one task.
+  /// (`kDriver`); at `kGlobal`, a colocated set does too. Empty `keys` asks
+  /// whether all rows are on one task or driver. A broadcast puts a copy of
+  /// every row on every task, so global uniqueness does not place a key on one
+  /// task.
   bool coLocates(PropertyScope scope, const ExprVector& keys) const;
+
+  /// Drops the colocated sets that another set implies: one that contains a
+  /// non-empty global unique key, or one that contains another colocated set.
+  /// Of equal colocated sets one stays.
+  void pruneColocated();
 
   /// Checks the invariant that these properties are expressed over the node's
   /// own `outputColumns`. A partitioning's keys and merge order may be computed
   /// expressions (the partition function's input), but every column they depend
   /// on must be an output column, so the partitioning is evaluable here.
-  /// Local-property columns and unique keys must themselves be output
-  /// columns. Fails (`VELOX_CHECK`) on violation. Called by the `Node` base
-  /// constructor.
+  /// Local-property columns, unique keys and colocated sets must themselves be
+  /// output columns. Fails (`VELOX_CHECK`) on violation. Called by the `Node`
+  /// base constructor.
   void checkReferencesColumns(const PlanObjectSet& outputColumns) const;
 };
 

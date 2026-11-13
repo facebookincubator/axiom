@@ -15,6 +15,7 @@
  */
 
 #include <fmt/core.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/optimizer/tests/PlanMatcher.h"
@@ -766,6 +767,547 @@ TEST_P(AggregationTest, innerJoinPartitioning) {
             .gather()
             .build());
   }
+}
+
+// A join keeps each row of a side it preserves and does not replicate on that
+// row's task, so a key unique on that side keeps its groups on one task even
+// where the join repeats its rows, and grouping on it needs no shuffle. A
+// padded side's key does not, and neither does a key after a later shuffle.
+TEST_P(AggregationTest, joinColocation) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
+  testConnector_->addTable("w", ROW({"e", "f"}, BIGINT()));
+  testConnector_->addTable("small", ROW({"a", "b"}, BIGINT()))
+      ->setStats(10, {{"a", {.numDistinct = 10}}, {"b", {.numDistinct = 10}}});
+  testConnector_->addTable("large", ROW({"c", "d"}, BIGINT()))
+      ->setStats(
+          1'000'000,
+          {{"c", {.numDistinct = 1'000'000}}, {"d", {.numDistinct = 10}}});
+  optimizerOptions_.broadcastSizeLimit = 0;
+
+  // The key 'a' of the aggregated side, before the join.
+  const auto matchKeyed = [&]() {
+    return matchScan("t")
+        .partialAggregation({"a"}, {"max(b) as v"})
+        .shuffle({"a"})
+        .localPartition({"a"})
+        .finalAggregation({"a"}, {"max(v) as v"})
+        .shuffle({"v"});
+  };
+
+  // Grouping on a key whose rows sit on several tasks shuffles.
+  const auto matchShuffledGroups = [&](auto joined, std::string_view key) {
+    return joined.partialAggregation({std::string(key)}, {"count(*) as count"})
+        .shuffle({std::string(key)})
+        .localPartition({std::string(key)})
+        .finalAggregation({std::string(key)}, {"count(count) as count"});
+  };
+
+  {
+    SCOPED_TRACE("INNER");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, count(*) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "JOIN u ON x.v = u.d "
+        "GROUP BY x.k");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"v = d"}}})
+            .streamingAggregation({"a"}, {"count(*) as count"})
+            .project({"a as k", "count"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchKeyed()
+            .hashJoinInner(matchScan("u").shuffle({"d"}), {.keys = {{"v = d"}}})
+            .streamingAggregation({"a"}, {"count(*) as count"})
+            .project({"a as k", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("INNER, both sides keyed");
+    auto logicalPlan = parseSelect(
+        "SELECT y.m, count(*) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "JOIN (SELECT c AS m, max(d) AS w FROM u GROUP BY c) y "
+        "ON x.v = y.w "
+        "GROUP BY y.m");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(
+                matchScan("u").singleAggregation({"c"}, {"max(d) as w"}),
+                {.keys = {{"v = w"}}})
+            .singleAggregation({"c"}, {"count(*) as count"})
+            .project({"c as m", "count"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchKeyed()
+            .hashJoinInner(
+                matchScan("u")
+                    .partialAggregation({"c"}, {"max(d) as w"})
+                    .shuffle({"c"})
+                    .localPartition({"c"})
+                    .finalAggregation({"c"}, {"max(w) as w"})
+                    .shuffle({"w"}),
+                {.keys = {{"v = w"}}})
+            .partialAggregation({"c"}, {"count(*) as count"})
+            .localPartition({"c"})
+            .finalAggregation({"c"}, {"count(count) as count"})
+            .project({"c as m", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("RIGHT");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, count(*) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "RIGHT JOIN u ON x.v = u.d "
+        "GROUP BY x.k");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoin(
+                matchScan("u"), core::JoinType::kRight, {.keys = {{"v = d"}}})
+            .singleAggregation({"a"}, {"count(*) as count"})
+            .project({"a as k", "count"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        planVelox(logicalPlan).plan,
+        matchShuffledGroups(
+            matchKeyed().hashJoin(
+                matchScan("u").shuffle({"d"}),
+                core::JoinType::kRight,
+                {.keys = {{"v = d"}}}),
+            "a")
+            .project({"a as k", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("LEFT, keyed build side");
+    auto logicalPlan = parseSelect(
+        "SELECT y.m, count(*) "
+        "FROM u "
+        "LEFT JOIN (SELECT a AS m, max(b) AS w FROM t GROUP BY a) y "
+        "ON u.d = y.w "
+        "GROUP BY y.m");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("u")
+            .hashJoin(
+                matchScan("t").singleAggregation({"a"}, {"max(b) as w"}),
+                core::JoinType::kLeft,
+                {.keys = {{"d = w"}}})
+            .singleAggregation({"a"}, {"count(*) as count"})
+            .project({"a as m", "count"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        planVelox(logicalPlan).plan,
+        matchShuffledGroups(
+            matchScan("u").shuffle({"d"}).hashJoin(
+                matchScan("t")
+                    .partialAggregation({"a"}, {"max(b) as w"})
+                    .shuffle({"a"})
+                    .localPartition({"a"})
+                    .finalAggregation({"a"}, {"max(w) as w"})
+                    .shuffle({"w"}),
+                core::JoinType::kLeft,
+                {.keys = {{"d = w"}}}),
+            "a")
+            .project({"a as m", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("a shuffle in between");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, count(*) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "JOIN u ON x.v = u.d "
+        "JOIN w ON u.c = w.e "
+        "GROUP BY x.k");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"v = d"}}})
+            .hashJoinInner(matchScan("w"), {.keys = {{"c = e"}}})
+            .streamingAggregation({"a"}, {"count(*) as count"})
+            .project({"a as k", "count"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(
+        planVelox(logicalPlan).plan,
+        matchShuffledGroups(
+            matchKeyed()
+                .hashJoinInner(
+                    matchScan("u").shuffle({"d"}), {.keys = {{"v = d"}}})
+                .shuffle({"c"})
+                .hashJoinInner(
+                    matchScan("w").shuffle({"e"}), {.keys = {{"c = e"}}}),
+            "a")
+            .project({"a as k", "count"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("replicated side");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, count(*) "
+        "FROM (SELECT a AS k, max(b) AS v FROM small GROUP BY a) x "
+        "JOIN large ON x.v = large.d "
+        "GROUP BY x.k");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("large")
+            .hashJoinInner(
+                matchScan("small").singleAggregation({"a"}, {"max(b) as v"}),
+                {.keys = {{"d = v"}}})
+            .singleAggregation({"a"}, {"count(*) as count"})
+            .project({"a as k", "count"})
+            .build());
+    // Every task holds a copy of the aggregated side, so its key repeats
+    // across tasks.
+    optimizerOptions_.broadcastSizeLimit =
+        OptimizerOptions{}.broadcastSizeLimit;
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchShuffledGroups(
+            matchScan("large").hashJoinInner(
+                matchScan("small")
+                    .partialAggregation({"a"}, {"max(b) as v"})
+                    .shuffle({"a"})
+                    .localPartition({"a"})
+                    .finalAggregation({"a"}, {"max(v) as v"})
+                    .broadcast(),
+                {.keys = {{"d = v"}}}),
+            "a")
+            .project({"a as k", "count"})
+            .gather()
+            .build());
+  }
+}
+
+// Grouping on the element an Unnest produces shuffles. The Unnest keeps no
+// colocated set here: it replicates no column, and its input's set is over the
+// array it unnests.
+TEST_P(AggregationTest, unnestColocation) {
+  testConnector_->addTable("v", ROW("a", ARRAY(BIGINT())));
+  optimizerOptions_.broadcastSizeLimit = 0;
+  auto logicalPlan = parseSelect(
+      "SELECT e, count(*) "
+      "FROM (SELECT DISTINCT a FROM v) x "
+      "CROSS JOIN UNNEST(x.a) AS w(e) "
+      "GROUP BY e");
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(logicalPlan),
+      matchScan("v")
+          .singleAggregation({"a"}, {})
+          .unnest({}, {"a"})
+          .aliases({"e"})
+          .singleAggregation({"e"}, {"count(*) as count"})
+          .build());
+  AXIOM_ASSERT_DISTRIBUTED_PLAN(
+      planVelox(logicalPlan).plan,
+      matchScan("v")
+          .partialAggregation({"a"}, {})
+          .shuffle({"a"})
+          .localPartition({"a"})
+          .finalAggregation({"a"}, {})
+          .unnest({}, {"a"})
+          .aliases({"e"})
+          .partialAggregation({"e"}, {"count(*) as count"})
+          .shuffle({"e"})
+          .localPartition({"e"})
+          .finalAggregation({"e"}, {"count(count) as count"})
+          .gather()
+          .build());
+}
+
+// A consumer that needs each key's rows on one task runs without a shuffle over
+// a join that keeps the key's rows on one task: the single-row check of a
+// scalar subquery on each outer row's ID, also behind a row numbering and
+// behind an aggregation whose keys contain the ID, and a window, a per-key
+// top-n and a DISTINCT with a LIMIT on a key unique on one side of the join.
+TEST_P(AggregationTest, colocatedConsumers) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
+  optimizerOptions_.broadcastSizeLimit = 0;
+
+  // The key 'a' of the aggregated side, before the join.
+  const auto matchKeyed = [&]() {
+    return matchScan("t")
+        .partialAggregation({"a"}, {"max(b) as v"})
+        .shuffle({"a"})
+        .localPartition({"a"})
+        .finalAggregation({"a"}, {"max(v) as v"});
+  };
+
+  // Each row of the aggregated side gets an ID, and a LEFT join keeps the rows
+  // of an ID on its task.
+  const auto matchLeftJoined = [&]() {
+    return matchKeyed().assignUniqueId("row_id").shuffle({"v"}).hashJoin(
+        matchScan("u").shuffle({"d"}),
+        core::JoinType::kLeft,
+        {.keys = {{"v = d"}}});
+  };
+
+  // An inner join keeps the rows of each key of the aggregated side on its
+  // task.
+  const auto matchJoined = [&]() {
+    return matchKeyed().shuffle({"v"}).hashJoinInner(
+        matchScan("u").shuffle({"d"}), {.keys = {{"v = d"}}});
+  };
+
+  {
+    SCOPED_TRACE("scalar subquery");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, (SELECT u.c FROM u WHERE u.d = x.v) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .assignUniqueId("row_id")
+            .hashJoin(
+                matchScan("u"), core::JoinType::kLeft, {.keys = {{"v = d"}}})
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "c"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchLeftJoined()
+            .localPartition({"row_id"})
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "c"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("window");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, u.c, sum(u.c) OVER (PARTITION BY x.k) AS s "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "JOIN u ON x.v = u.d");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"v = d"}}})
+            .window({"sum(c) OVER (PARTITION BY a) as s"})
+            .project({"a as k", "c", "s"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchJoined()
+            .window({"sum(c) OVER (PARTITION BY a) as s"})
+            .project({"a as k", "c", "s"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("per-key top-n");
+    auto logicalPlan = parseSelect(
+        "SELECT k, c "
+        "FROM ("
+        "  SELECT x.k, u.c, "
+        "    row_number() OVER (PARTITION BY x.k ORDER BY u.c) AS rn "
+        "  FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "  JOIN u ON x.v = u.d"
+        ") "
+        "WHERE rn <= 2");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"v = d"}}})
+            .topNRowNumber({"a"}, {"c"}, 2, false)
+            .project({"a as k", "c"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchJoined()
+            .topNRowNumber({"a"}, {"c"}, 2, false)
+            .project({"a as k", "c"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("DISTINCT with a LIMIT");
+    auto logicalPlan = parseSelect(
+        "SELECT DISTINCT x.k, u.c "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x "
+        "JOIN u ON x.v = u.d "
+        "LIMIT 5");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"v = d"}}})
+            .singleAggregation({"a", "c"}, {})
+            .finalLimit(0, 5)
+            .project({"a as k", "c"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchJoined()
+            .singleAggregation({"a", "c"}, {})
+            .partialLimit(0, 5)
+            .localGather()
+            .finalLimit(0, 5)
+            .gather()
+            .finalLimit(0, 5)
+            .project({"a as k", "c"})
+            .build());
+  }
+
+  // v1 fails to plan the shapes below.
+  if (!useV2_) {
+    return;
+  }
+
+  {
+    SCOPED_TRACE("row numbering, then the single-row check");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, (SELECT u.c FROM u WHERE u.d = x.v LIMIT 2) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .assignUniqueId("row_id")
+            .hashJoin(
+                matchScan("u"), core::JoinType::kLeft, {.keys = {{"v = d"}}})
+            .rowNumber({"row_id"}, 2)
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "c"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchLeftJoined()
+            .localPartition({"row_id"})
+            .rowNumber({"row_id"}, 2)
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "c"})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("grouped body, then the single-row check");
+    auto logicalPlan = parseSelect(
+        "SELECT x.k, (SELECT count(*) FROM u WHERE u.d < x.v GROUP BY u.c) "
+        "FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a"}, {"max(b) as v"})
+            .assignUniqueId("row_id")
+            .nestedLoopJoin(
+                matchScan("u").project({"c", "d", "true as marker"}),
+                core::JoinType::kLeft,
+                "v > d")
+            .singleAggregation(
+                {"row_id", "c"},
+                {"count() filter (where marker) as n",
+                 "arbitrary(a) as a",
+                 "arbitrary(marker) as real_group"})
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "if(real_group, n, null)"})
+            .build());
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchKeyed()
+            .assignUniqueId("row_id")
+            .nestedLoopJoin(
+                matchScan("u")
+                    .project({"c", "d", "true as marker"})
+                    .broadcast(),
+                core::JoinType::kLeft,
+                "v > d")
+            .partialAggregation(
+                {"row_id", "c"},
+                {"count() filter (where marker) as n",
+                 "arbitrary(a) as a",
+                 "arbitrary(marker) as real_group"})
+            .localPartition({"row_id", "c"})
+            .finalAggregation(
+                {"row_id", "c"},
+                {"count(n) as n",
+                 "arbitrary(a) as a",
+                 "arbitrary(real_group) as real_group"})
+            .localPartition({"row_id"})
+            .enforceDistinct({"row_id"})
+            .project({"a as k", "if(real_group, n, null)"})
+            .gather()
+            .build());
+  }
+}
+
+// A colocated set that another set implies is not kept: one that contains a
+// non-empty unique key or another colocated set. Of equal sets one stays, and
+// unique keys are kept. A unique empty key drops no set.
+TEST_P(AggregationTest, colocatedSetPruning) {
+  if (!useV2_) {
+    return;
+  }
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  verifyOptimization(
+      *parseSelect("SELECT a, b FROM t"),
+      Optimizer::Pass::kPlanPhysical,
+      [&](NodeCP root) {
+        const auto a = PlanObjectSet::single(root->outputColumns()[0]);
+        const auto b = PlanObjectSet::single(root->outputColumns()[1]);
+        auto both = a;
+        both.unionSet(b);
+        const auto pruned = [](PhysicalProperties properties) {
+          properties.pruneColocated();
+          return properties;
+        };
+        {
+          SCOPED_TRACE("contains a unique key");
+          EXPECT_THAT(
+              pruned({.globalUnique = {a}, .globalColocated = {both}})
+                  .globalColocated,
+              testing::IsEmpty());
+        }
+        {
+          SCOPED_TRACE("contains another colocated set");
+          EXPECT_THAT(
+              pruned({.globalColocated = {both, b, b}}).globalColocated,
+              testing::ElementsAre(b));
+        }
+        {
+          SCOPED_TRACE("inside a unique key");
+          const auto properties =
+              pruned({.globalUnique = {both}, .globalColocated = {b}});
+          EXPECT_THAT(properties.globalColocated, testing::ElementsAre(b));
+          EXPECT_THAT(properties.globalUnique, testing::ElementsAre(both));
+        }
+        {
+          SCOPED_TRACE("unique empty key");
+          EXPECT_THAT(
+              pruned(
+                  {.globalUnique = {PlanObjectSet{}}, .globalColocated = {b}})
+                  .globalColocated,
+              testing::ElementsAre(b));
+        }
+      });
 }
 
 TEST_P(AggregationTest, bucketedAggregation) {

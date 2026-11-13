@@ -111,11 +111,22 @@ std::vector<Partitioning> Node::globalPartitions(
   return partitions;
 }
 
+namespace {
+
+Node::Properties withPrunedColocated(Node::Properties properties) {
+  if (auto* physical = std::get_if<PhysicalProperties>(&properties)) {
+    physical->pruneColocated();
+  }
+  return properties;
+}
+
+} // namespace
+
 Node::Node(NodeType nodeType, ColumnVector outputColumns, Properties properties)
     : PlanObject(PlanType::kV2Node),
       nodeType_(nodeType),
       outputColumns_(std::move(outputColumns)),
-      properties_(std::move(properties)) {
+      properties_(withPrunedColocated(std::move(properties))) {
   const auto columns = PlanObjectSet::fromObjects(outputColumns_);
   std::visit(
       [&](const auto& nodeProperties) {
@@ -344,6 +355,26 @@ QGVector<PlanObjectSet> remapKeySets(
   return result;
 }
 
+// The column sets whose equal values are on one task: the unique keys and the
+// colocated sets, without the empty set. None for a replicated relation, whose
+// rows repeat on every task.
+QGVector<PlanObjectSet> colocatedSets(const PhysicalProperties& properties) {
+  if (properties.globalPartition.is(PartitionKind::kBroadcast) ||
+      properties.globalPartition.replicateNullsAndAny) {
+    return {};
+  }
+  QGVector<PlanObjectSet> result;
+  for (const auto* sets :
+       {&properties.globalUnique, &properties.globalColocated}) {
+    for (const PlanObjectSet& set : *sets) {
+      if (!set.empty()) {
+        result.push_back(set);
+      }
+    }
+  }
+  return result;
+}
+
 // A projection emits each input row once: it keeps the input's single row and
 // the unique keys it projects as bare columns.
 RelationalProperties projectRelational(
@@ -512,7 +543,8 @@ PhysicalProperties passThroughPhysical(NodeCP input) {
       .driverPartition = inheritedPartition(props.driverPartition),
       .driverOrder = props.driverOrder,
       .globalUnique = props.globalUnique,
-      .driverUnique = props.driverUnique};
+      .driverUnique = props.driverUnique,
+      .globalColocated = props.globalColocated};
 }
 
 // An exact Limit runs on one driver. It preserves the input's global
@@ -535,7 +567,8 @@ PhysicalProperties rankedPhysical(
       .globalPartition = inheritedPartition(props.globalPartition),
       .driverPartition = keptDriverPartition(props, partitionKeys),
       .globalUnique = props.globalUnique,
-      .driverUnique = props.driverUnique};
+      .driverUnique = props.driverUnique,
+      .globalColocated = props.globalColocated};
 }
 
 // A window keeps rows on their task and driver and emits each partition
@@ -555,7 +588,8 @@ PhysicalProperties windowPhysical(
       .driverPartition = keptDriverPartition(props, partitionKeys),
       .driverOrder = groupedDriverOrder(partitionColumns),
       .globalUnique = props.globalUnique,
-      .driverUnique = props.driverUnique};
+      .driverUnique = props.driverUnique,
+      .globalColocated = props.globalColocated};
 }
 
 // Sorting preserves placement and uniqueness while establishing local order.
@@ -569,7 +603,8 @@ PhysicalProperties sortedPhysical(
       .driverPartition = inheritedPartition(props.driverPartition),
       .driverOrder = sortedDriverOrder(orderKeys, orderTypes),
       .globalUnique = props.globalUnique,
-      .driverUnique = props.driverUnique};
+      .driverUnique = props.driverUnique,
+      .globalColocated = props.globalColocated};
 }
 
 // Remaps the input partitioning through a Project's column map: each partition
@@ -632,9 +667,8 @@ ExprCP survivingEquiKey(ExprCP key, const PlanObjectSet& outputColumns) {
 // partitioning — but only when that partitioning's keys are all grouping keys
 // (the only input values the aggregate keeps): then those keys are a
 // co-location of the groups and survive in the output, re-expressed on the
-// grouping output columns they map to. An input partitioned on anything else
-// does not co-locate the groups (it should not feed the aggregate at all) and
-// could not be expressed on the output, so the partitioning is unknown. A
+// grouping output columns they map to. A partitioning on anything else cannot
+// be expressed on the output, so the partitioning is unknown. A
 // grouping-set aggregate reads its GroupId, which has no known partitioning, so
 // it falls into the unknown case. A non-hash distribution (gather / broadcast /
 // arbitrary) is inherited by kind only, with its merge order dropped (see
@@ -1073,6 +1107,10 @@ Project::Project(Key key)
                     .driverUnique = remapKeySets(
                         key.input->physicalProperties().driverUnique,
                         key.exprs,
+                        key.outputColumns),
+                    .globalColocated = remapKeySets(
+                        key.input->physicalProperties().globalColocated,
+                        key.exprs,
                         key.outputColumns)};
               },
               [&] {
@@ -1382,16 +1420,22 @@ PhysicalProperties aggregatePhysical(const Aggregation::Key& key) {
       key.step, input.globalPartition, key.groupingKeys, groupingColumns);
   const Partitioning driverPartition = aggregatePartition(
       key.step, input.driverPartition, key.groupingKeys, groupingColumns);
+  // Every step computes a group on the task that holds its rows.
+  QGVector<PlanObjectSet> colocated =
+      remapKeySets(colocatedSets(input), key.groupingKeys, groupingColumns);
   if (key.step == AggregateStep::kPartial) {
     // A group may be emitted more than once, so this is not a Grouped local
     // property.
     return PhysicalProperties{
-        .globalPartition = globalPartition, .driverPartition = driverPartition};
+        .globalPartition = globalPartition,
+        .driverPartition = driverPartition,
+        .globalColocated = std::move(colocated)};
   }
   PhysicalProperties properties{
       .globalPartition = globalPartition,
       .driverPartition = driverPartition,
-      .driverOrder = groupedDriverOrder(groupingColumns)};
+      .driverOrder = groupedDriverOrder(groupingColumns),
+      .globalColocated = std::move(colocated)};
   // Without grouping keys the key is the empty set: one row per driver, and
   // one in all when the input is gathered. A grouping-set aggregate's group-id
   // is one of the keys, so distinct key sets stay distinct.
@@ -1841,7 +1885,13 @@ Unnest::Unnest(Key key)
                         key.input->physicalProperties().driverPartition,
                         key.replicatedColumns),
                     .driverOrder =
-                        retainedDriverOrder(key.input, key.replicatedColumns)};
+                        retainedDriverOrder(key.input, key.replicatedColumns),
+                    .globalColocated = remapKeySets(
+                        colocatedSets(key.input->physicalProperties()),
+                        ExprVector{
+                            key.replicatedColumns.begin(),
+                            key.replicatedColumns.end()},
+                        key.replicatedColumns)};
               },
               [] { return RelationalProperties{}; })),
       input_(key.input),
@@ -2253,33 +2303,53 @@ Partitioning joinDriverPartitioning(const Join::Key& key, Builder& builder) {
   return result;
 }
 
-// The unique keys of each side the join emits each row of at most once hold
-// for the output, re-expressed on the output columns. 'sideKeys' returns a
-// side's unique keys.
-template <typename SideKeys>
-QGVector<PlanObjectSet> joinUniqueKeys(
+// The key sets of the join's 'sides', re-expressed on the output columns.
+// 'sideSets' returns a side's key sets.
+template <typename SideSets>
+QGVector<PlanObjectSet> joinSideSets(
     const Join::Key& key,
-    const SideKeys& sideKeys) {
+    Join::Sides sides,
+    const SideSets& sideSets) {
   ExprVector sources;
   for (ColumnCP source : key.effectiveSourceColumns()) {
     sources.push_back(source);
   }
   QGVector<PlanObjectSet> result;
-  const auto keepUniqueOf = [&](NodeCP side) {
-    for (PlanObjectSet& unique :
-         remapKeySets(sideKeys(side), sources, key.outputColumns)) {
-      result.push_back(std::move(unique));
+  const auto keepSetsOf = [&](NodeCP side) {
+    for (PlanObjectSet& set :
+         remapKeySets(sideSets(side), sources, key.outputColumns)) {
+      result.push_back(std::move(set));
     }
   };
-  const Join::Sides emittedOnce = Join::emittedOnceSides(
-      key.joinType, key.left, key.right, key.leftKeys, key.rightKeys);
-  if (emittedOnce.left) {
-    keepUniqueOf(key.left);
+  if (sides.left) {
+    keepSetsOf(key.left);
   }
-  if (emittedOnce.right) {
-    keepUniqueOf(key.right);
+  if (sides.right) {
+    keepSetsOf(key.right);
   }
   return result;
+}
+
+// The unique keys of each side the join emits each row of at most once hold
+// for the output. 'sideKeys' returns a side's unique keys.
+template <typename SideKeys>
+QGVector<PlanObjectSet> joinUniqueKeys(
+    const Join::Key& key,
+    const SideKeys& sideKeys) {
+  return joinSideSets(
+      key,
+      Join::emittedOnceSides(
+          key.joinType, key.left, key.right, key.leftKeys, key.rightKeys),
+      sideKeys);
+}
+
+// The colocated sets of each side the join preserves and does not replicate
+// hold for the output: a row of such a side is on one task, and the join emits
+// all of that row's outputs there.
+QGVector<PlanObjectSet> joinColocatedSets(const Join::Key& key) {
+  return joinSideSets(key, Join::preservedSides(key.joinType), [](NodeCP side) {
+    return colocatedSets(side->physicalProperties());
+  });
 }
 
 RelationalProperties joinRelational(const Join::Key& key) {
@@ -2313,9 +2383,12 @@ Join::Join(Key key, Builder& builder)
                         key.joinType, key.left, key.outputColumns),
                     // A side's driver-scoped keys need not survive the
                     // join's redistribution of rows across drivers.
-                    .globalUnique = joinUniqueKeys(key, [](NodeCP side) {
-                      return side->physicalProperties().globalUnique;
-                    })};
+                    .globalUnique = joinUniqueKeys(
+                        key,
+                        [](NodeCP side) {
+                          return side->physicalProperties().globalUnique;
+                        }),
+                    .globalColocated = joinColocatedSets(key)};
               },
               [&] { return joinRelational(key); })),
       inputs_{key.left, key.right},
@@ -3874,7 +3947,9 @@ AssignUniqueId::AssignUniqueId(Key key)
                     .globalUnique =
                         key.input->physicalProperties().globalUnique,
                     .driverUnique =
-                        key.input->physicalProperties().driverUnique};
+                        key.input->physicalProperties().driverUnique,
+                    .globalColocated =
+                        key.input->physicalProperties().globalColocated};
                 properties.globalUnique.push_back(
                     PlanObjectSet::single(key.idColumn));
                 return properties;
@@ -4117,7 +4192,9 @@ Exchange::Exchange(Key key)
               [&] {
                 // An exchange keeps the global unique keys, a broadcast too:
                 // each task holds a full copy of the relation. It drops the
-                // driver-scoped ones, whose duplicates it may bring together.
+                // driver-scoped keys, whose duplicates it may bring together. A
+                // global exchange moves rows across tasks, so only a driver
+                // exchange keeps the colocated sets.
                 const PhysicalProperties& input =
                     key.input->physicalProperties();
                 return key.partitioning.isGlobal()
@@ -4132,7 +4209,8 @@ Exchange::Exchange(Key key)
                       .globalPartition = input.globalPartition.dropOrder(),
                       .driverPartition = key.partitioning,
                       .driverOrder = exchangeDriverOrder(key.partitioning),
-                      .globalUnique = input.globalUnique};
+                      .globalUnique = input.globalUnique,
+                      .globalColocated = input.globalColocated};
               })),
       input_(key.input),
       partitioning_(std::move(key.partitioning)),
