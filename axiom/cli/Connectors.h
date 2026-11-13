@@ -22,14 +22,11 @@
 #include <string_view>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
-#include "axiom/connectors/system/SystemConnector.h"
 #include "folly/executors/IOThreadPoolExecutor.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::axiom {
-
-class SessionConfig;
 
 /**
  * Populates application-owned Axiom and Velox connector registries.
@@ -51,7 +48,6 @@ class Connectors {
   static constexpr const char* kTpchConnectorId = "tpch";
   static constexpr const char* kLocalHiveConnectorId = "hive";
   static constexpr const char* kTestConnectorId = "test";
-  static constexpr const char* kSystemConnectorId = "system";
 
   /// Registers catalogs into the supplied registries, which must outlive this
   /// helper.
@@ -113,12 +109,6 @@ class Connectors {
   std::shared_ptr<velox::connector::Connector> registerTestConnector(
       const std::string& connectorId = kTestConnectorId,
       const folly::F14FastMap<std::string, std::string>& connectorConfig = {});
-
-  /// Registers the system connector for the runtime.queries and
-  /// metadata.session_properties tables.
-  void registerSystemConnector(
-      const SessionConfig& sessionConfig,
-      const std::string& connectorId = kSystemConnectorId);
 
   /// Registers the file connector for querying raw files via SQL.
   void registerFileConnector(const std::string& connectorId = "file");

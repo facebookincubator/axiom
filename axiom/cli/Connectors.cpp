@@ -17,15 +17,12 @@
 #include "axiom/cli/Connectors.h"
 
 #include <folly/system/HardwareConcurrency.h>
-#include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/file/FileConnector.h"
 #include "axiom/connectors/file/core/FileConnectorMetadata.h"
 #include "axiom/connectors/file/parquet/ParquetFileHandler.h"
 #include "axiom/connectors/hive/HiveMetadataConfig.h"
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
-#include "axiom/connectors/system/SystemConnector.h"
-#include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
 #include "velox/common/base/Exceptions.h"
@@ -39,7 +36,6 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
-#include "velox/functions/prestosql/types/PrestoTypes.h"
 
 namespace facebook::axiom {
 
@@ -54,38 +50,6 @@ void initializeFileFormats() {
   velox::text::registerTextReaderFactory();
   velox::text::registerTextWriterFactory();
 }
-
-// Adapts SessionConfig to the SessionPropertiesProvider interface for the
-// system connector's metadata.session_properties table.
-class SessionConfigPropertiesProvider
-    : public connector::system::SessionPropertiesProvider {
- public:
-  explicit SessionConfigPropertiesProvider(const SessionConfig& sessionConfig)
-      : sessionConfig_(sessionConfig) {}
-
-  std::vector<connector::system::SessionPropertyInfo> getSessionProperties()
-      const override {
-    using velox::config::ConfigPropertyTypeName;
-
-    auto entries = sessionConfig_.all();
-    std::vector<connector::system::SessionPropertyInfo> result;
-    result.reserve(entries.size());
-    for (const auto& entry : entries) {
-      result.push_back({
-          entry.prefix,
-          entry.property.name,
-          std::string(ConfigPropertyTypeName::toName(entry.property.type)),
-          entry.property.defaultValue.value_or(""),
-          entry.currentValue.value_or(""),
-          entry.property.description,
-      });
-    }
-    return result;
-  }
-
- private:
-  const SessionConfig& sessionConfig_;
-};
 
 } // namespace
 
@@ -216,27 +180,6 @@ std::shared_ptr<velox::connector::Connector> Connectors::registerTestConnector(
   metadataRegistry().insert(connectorId, testConnector->metadata());
 
   return connector;
-}
-
-void Connectors::registerSystemConnector(
-    const SessionConfig& sessionConfig,
-    const std::string& connectorId) {
-  auto sessionPropertiesProvider =
-      std::make_shared<SessionConfigPropertiesProvider>(sessionConfig);
-
-  // The CLI speaks Presto SQL, so information_schema spells types the way
-  // Presto does.
-  auto connector = std::make_shared<connector::system::SystemConnector>(
-      connectorId,
-      metadataRegistry(),
-      /*queryInfoProvider=*/nullptr,
-      std::move(sessionPropertiesProvider),
-      velox::PrestoTypes::displayName);
-  connectorRegistry().insert(connectorId, connector);
-  metadataRegistry().insert(
-      connectorId,
-      std::make_shared<connector::system::SystemConnectorMetadata>(
-          connector.get()));
 }
 
 void Connectors::registerFileConnector(const std::string& connectorId) {

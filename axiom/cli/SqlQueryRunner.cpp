@@ -42,6 +42,8 @@
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
+#include "axiom/connectors/system/SystemConnector.h"
+#include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/functions/prestosql/PrestoFunctions.h"
 #include "axiom/graphviz/DerivedTableDotPrinter.h"
 #include "axiom/graphviz/LogicalPlanDotPrinter.h"
@@ -77,6 +79,7 @@
 #include "velox/functions/prestosql/PrestoQueryConfig.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -252,10 +255,47 @@ SqlQueryRunner::SqlResult::SqlResult(velox::RowTypePtr resultType)
   VELOX_CHECK_NOT_NULL(this->resultType);
 }
 
+namespace {
+
+// Adapts SessionConfig to the SessionPropertiesProvider interface for the
+// system connector's metadata.session_properties table.
+class SessionConfigPropertiesProvider
+    : public connector::system::SessionPropertiesProvider {
+ public:
+  explicit SessionConfigPropertiesProvider(
+      std::shared_ptr<const SessionConfig> sessionConfig)
+      : sessionConfig_(std::move(sessionConfig)) {}
+
+  std::vector<connector::system::SessionPropertyInfo> getSessionProperties()
+      const override {
+    using velox::config::ConfigPropertyTypeName;
+
+    auto entries = sessionConfig_->all();
+    std::vector<connector::system::SessionPropertyInfo> result;
+    result.reserve(entries.size());
+    for (const auto& entry : entries) {
+      result.push_back({
+          entry.prefix,
+          entry.property.name,
+          std::string(ConfigPropertyTypeName::toName(entry.property.type)),
+          entry.property.defaultValue.value_or(""),
+          entry.currentValue.value_or(""),
+          entry.property.description,
+      });
+    }
+    return result;
+  }
+
+ private:
+  const std::shared_ptr<const SessionConfig> sessionConfig_;
+};
+
+} // namespace
+
 SqlQueryRunner::SqlQueryRunner(
     std::string user,
     velox::connector::ConnectorRegistry::Registry& connectorRegistry,
-    const connector::ConnectorMetadataRegistry::Registry& metadataRegistry,
+    connector::ConnectorMetadataRegistry::Registry& metadataRegistry,
     folly::FunctionScheduler* progressScheduler,
     bool useOptimizerV2)
     : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
@@ -274,6 +314,11 @@ void SqlQueryRunner::initialize(
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck,
     std::function<std::string()> queryIdGenerator) {
+  // registerSystemCatalog() reports the session this creates, so a second
+  // call would leave it reporting a replaced one.
+  VELOX_CHECK_NULL(
+      sessionConfig_, "SqlQueryRunner::initialize() must be called only once");
+
   static folly::once_flag kInitialized;
 
   folly::call_once(kInitialized, []() {
@@ -378,6 +423,35 @@ void SqlQueryRunner::initialize(
       velox::functions::prestosql::PrestoQueryConfig::kPrefix,
       velox::functions::prestosql::PrestoQueryConfig::kArrayAggIgnoreNulls,
       "true");
+}
+
+void SqlQueryRunner::registerSystemCatalog() {
+  VELOX_CHECK_NOT_NULL(
+      sessionConfig_,
+      "SqlQueryRunner::initialize() must be called before "
+      "registerSystemCatalog()");
+  VELOX_USER_CHECK_NULL(
+      metadataRegistry_.find(kSystemCatalog),
+      "The registries already hold a catalog named {}",
+      kSystemCatalog);
+  VELOX_USER_CHECK_NULL(
+      connectorRegistry_.find(kSystemCatalog),
+      "The registries already hold an execution connector for catalog {}",
+      kSystemCatalog);
+
+  // The CLI speaks Presto SQL, so information_schema spells types the way
+  // Presto does.
+  auto connector = std::make_shared<connector::system::SystemConnector>(
+      kSystemCatalog,
+      metadataRegistry_,
+      /*queryInfoProvider=*/nullptr,
+      std::make_shared<SessionConfigPropertiesProvider>(sessionConfig_),
+      velox::PrestoTypes::displayName);
+  connectorRegistry_.insert(kSystemCatalog, connector);
+  metadataRegistry_.insert(
+      kSystemCatalog,
+      std::make_shared<connector::system::SystemConnectorMetadata>(
+          connector.get()));
 }
 
 namespace {

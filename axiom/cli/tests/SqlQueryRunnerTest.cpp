@@ -125,7 +125,7 @@ TEST_F(SqlQueryRunnerTest, independentCatalogs) {
     connectors.registerTestConnector("first_only");
     return std::make_pair(std::string{"test"}, kDefaultSchema);
   });
-  first.connectors().registerSystemConnector(first->sessionConfig());
+  first->registerSystemCatalog();
   ASSERT_NE(firstConnector, nullptr);
   firstConnector->addTable("t", ROW("a", BIGINT()))
       ->addData(makeRowVector({makeFlatVector<int64_t>({11})}));
@@ -138,7 +138,7 @@ TEST_F(SqlQueryRunnerTest, independentCatalogs) {
     connectors.registerTestConnector("second_only");
     return std::make_pair(std::string{"test"}, kDefaultSchema);
   });
-  second.connectors().registerSystemConnector(second->sessionConfig());
+  second->registerSystemCatalog();
   ASSERT_NE(secondConnector, nullptr);
   secondConnector->addTable("u", ROW("a", BIGINT()))
       ->addData(makeRowVector({makeFlatVector<int64_t>({22})}));
@@ -178,6 +178,73 @@ TEST_F(SqlQueryRunnerTest, independentCatalogs) {
   test::assertEqualVectors(
       second->run("SELECT a FROM u", {}).results.at(0),
       makeRowVector({makeFlatVector<int64_t>({22})}));
+}
+
+// Runners over child registries of shared ones each report their own session
+// from their own system catalog, which the shared registries never hold.
+TEST_F(SqlQueryRunnerTest, systemCatalog) {
+  auto sharedConnectors = connector::ConnectorRegistry::create();
+  auto sharedMetadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create();
+  facebook::axiom::Connectors{*sharedConnectors, *sharedMetadata}
+      .registerTestConnector("test");
+
+  auto tokyoConnectors =
+      connector::ConnectorRegistry::create(sharedConnectors.get());
+  auto tokyoMetadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create(
+          sharedMetadata.get());
+  auto parisConnectors =
+      connector::ConnectorRegistry::create(sharedConnectors.get());
+  auto parisMetadata =
+      facebook::axiom::connector::ConnectorMetadataRegistry::create(
+          sharedMetadata.get());
+
+  const auto newRunner = [](auto& connectors, auto& metadata) {
+    auto runner =
+        std::make_unique<SqlQueryRunner>("test_user", connectors, metadata);
+    runner->initialize(
+        []() { return std::make_pair(std::string{"test"}, kDefaultSchema); });
+    runner->registerSystemCatalog();
+    return runner;
+  };
+  const auto sessionTimezone = [](SqlQueryRunner& runner) {
+    return runner
+        .run(
+            "SELECT current_value "
+            "FROM system.metadata.session_properties "
+            "WHERE component = 'execution' AND name = 'session_timezone'",
+            {})
+        .results.at(0);
+  };
+
+  auto tokyo = newRunner(*tokyoConnectors, *tokyoMetadata);
+  tokyo->run("SET SESSION execution.session_timezone = 'Asia/Tokyo'", {});
+  auto paris = newRunner(*parisConnectors, *parisMetadata);
+  paris->run("SET SESSION execution.session_timezone = 'Europe/Paris'", {});
+
+  test::assertEqualVectors(
+      sessionTimezone(*tokyo),
+      makeRowVector({makeFlatVector<std::string>({"Asia/Tokyo"})}));
+  test::assertEqualVectors(
+      sessionTimezone(*paris),
+      makeRowVector({makeFlatVector<std::string>({"Europe/Paris"})}));
+  EXPECT_EQ(sharedConnectors->find(SqlQueryRunner::kSystemCatalog), nullptr);
+  EXPECT_EQ(sharedMetadata->find(SqlQueryRunner::kSystemCatalog), nullptr);
+
+  VELOX_ASSERT_THROW(
+      tokyo->registerSystemCatalog(),
+      "The registries already hold a catalog named system");
+}
+
+// A runner initializes once.
+TEST_F(SqlQueryRunnerTest, initializeOnce) {
+  const auto initializeConnectors = []() {
+    return std::make_pair(std::string{"test"}, kDefaultSchema);
+  };
+  VELOX_ASSERT_THROW(
+      runner_->initialize(initializeConnectors),
+      "SqlQueryRunner::initialize() must be called only once");
 }
 
 TEST_F(SqlQueryRunnerTest, runSingleStatement) {

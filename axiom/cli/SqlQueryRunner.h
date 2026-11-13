@@ -206,6 +206,9 @@ class SqlQueryRunner {
   /// "execution.session_timezone").
   static constexpr const char* kExecutionPrefix = "execution";
 
+  /// Name of the catalog registerSystemCatalog() registers.
+  static constexpr const char* kSystemCatalog = "system";
+
   /// Constructs a runner that resolves catalogs only through the given
   /// registries. Both registries must outlive this runner. The connector
   /// registry is installed on every Velox query context the runner creates.
@@ -222,7 +225,7 @@ class SqlQueryRunner {
       std::string user,
       facebook::velox::connector::ConnectorRegistry::Registry&
           connectorRegistry,
-      const facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
+      facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
           metadataRegistry,
       folly::FunctionScheduler* progressScheduler = nullptr,
       bool useOptimizerV2 = true);
@@ -245,13 +248,27 @@ class SqlQueryRunner {
   /// Initializes the runner with connectors, an optional permission check, an
   /// optional logical plan check that rejects plans the deployment cannot
   /// execute, and a query ID generator (defaults to QueryIdGenerator if not
-  /// provided). Call once before running queries.
+  /// provided). Call once before running queries; a second call fails.
   void initialize(
       const std::function<std::pair<std::string, std::string>()>&
           initializeConnectors,
       PermissionCheck permissionCheck = {},
       LogicalPlanCheck logicalPlanCheck = {},
       std::function<std::string()> queryIdGenerator = {});
+
+  /// Registers a `system` catalog in the registries given at construction. It
+  /// reports this runner's session properties and the information_schema of
+  /// every catalog in those registries. Call after initialize(). Fails if the
+  /// registries, or the registries they are layered over, already hold a
+  /// `system` catalog.
+  ///
+  /// The catalog stays in the registries after this runner is destroyed and
+  /// keeps reporting the runner's last session. Every runner over the same
+  /// registries sees it, so an application with several runners gives each one
+  /// child registries over the shared ones, created after the shared catalogs
+  /// are registered. The catalog's connector and metadata refer to each other,
+  /// so the application removes both or neither.
+  void registerSystemCatalog();
 
   struct RunOptions {
     int32_t numWorkers{1};
@@ -830,8 +847,9 @@ class SqlQueryRunner {
   // Execution connectors installed on each QueryCtx.
   facebook::velox::connector::ConnectorRegistry::Registry& connectorRegistry_;
 
-  // Catalog metadata used by ConnectorContext.
-  const facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
+  // Catalog metadata used by ConnectorContext. registerSystemCatalog() adds
+  // to it.
+  facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
       metadataRegistry_;
 };
 
