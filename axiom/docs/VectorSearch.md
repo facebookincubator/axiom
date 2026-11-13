@@ -165,8 +165,9 @@ WITH (distance_metric = 'cosine', index_type = 'ivf_flat',
 - The properties choose the metric, the local index type, the number of
   clusters per partition and the embeddings' length. `index_options`, a map,
   sets options of each local index, such as `ivf.nlist`. Any other property is a
-  table property of both storage tables, which the connector defines, e.g.
-  Local Hive's `format` and `compression_kind`.
+  property of the storage tables, which the connector defines, e.g. Local
+  Hive's `format` and `compression_kind`, or its `bucket_count`, which applies
+  to the index table only.
 - The engine validates the definition, then the connector creates the storage
   tables and records the link.
 - A new index covers no partition. REFRESH builds it.
@@ -298,6 +299,26 @@ Filter rank <= k
 The partition filters are pushed into both scans, so the search reads only the
 selected partitions. The scans are plan nodes with real columns: the optimizer
 costs them and places their exchanges.
+
+A connector may group the index table's rows by `cluster_id`, e.g. into
+buckets (see `VectorIndex.h`). The search then runs where the index rows are:
+each assignment goes to the worker holding its cluster's group, and the worker
+skips the groups that hold no probed cluster.
+
+The benefit depends on the search. A search of few queries probes few
+clusters and reads only their groups, so it reads less of the index from
+storage. A search of many queries probes every cluster and reads the whole
+index either way. Over an ungrouped index, it has too many queries to send to
+every worker reading the index, so it shuffles both the queries and the index
+by `cluster_id`. Grouping saves the shuffle of the index.
+
+The bucket count sets the width of the search. A bucketed fragment runs one
+task per bucket, at most one per worker, so fewer buckets than workers caps the
+search's parallelism, and such a search can be slower than an unbucketed one.
+The count is fixed when the index is built, while the cluster it runs on can
+grow. The best count also depends on the size of the index's data, which is
+unknown when the index is added. Hive therefore leaves the index table
+unbucketed unless `bucket_count` sets the count.
 
 The output has the probe's columns, `t`'s key and partition columns of each
 match, and the score. For cosine, the score is the cosine similarity: larger
@@ -492,11 +513,6 @@ also prunes files by cluster.
 
 ## Follow-ups
 
-- **Read only the probed clusters.** The search reads every local index of
-  the selected partitions, however few clusters the queries probe.
-  Bucketing or sorting the index table by `cluster_id`, and passing the
-  probed clusters to the index scan as a dynamic filter, lets the scan skip
-  the rest.
 - **Rebuild a covered partition.** Add INSERT OVERWRITE to the engine and the
   connectors, and have REFRESH use it: write a new codec and overwrite the
   partition's local indexes in one swap. Finish already drops the old codec.

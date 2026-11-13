@@ -256,6 +256,16 @@ std::string HiveQueriesTestBase::localTablePath(std::string_view tableName) {
   return fmt::format("{}/{}", localDataPath_, tableName);
 }
 
+void HiveQueriesTestBase::runCreateTable(const std::string& sql) {
+  auto statement = prestoParser_->parse(sql);
+  VELOX_CHECK(statement->isCreateTable());
+  const auto* create =
+      statement->as<::axiom::sql::presto::CreateTableStatement>();
+  createEmptyTable(
+      create->tableName().table,
+      create->definition(ConstantExprEvaluator::evaluateProperties));
+}
+
 void HiveQueriesTestBase::runCtas(const std::string& sql) {
   auto statement = prestoParser_->parse(sql);
   VELOX_CHECK(statement->isCreateTableAsSelect());

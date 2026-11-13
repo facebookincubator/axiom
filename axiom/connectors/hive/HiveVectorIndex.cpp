@@ -95,7 +95,6 @@ HiveVectorIndex::make(
   for (const auto* property : {
            HiveWriteOptions::kPartitionedBy,
            HiveWriteOptions::kBucketedBy,
-           HiveWriteOptions::kBucketCount,
            HiveWriteOptions::kSortedBy,
        }) {
     VELOX_USER_CHECK(
@@ -121,18 +120,24 @@ std::array<std::pair<SchemaTableName, TableDefinition>, 2>
 HiveVectorIndex::storageTableDefinitions(
     const VectorIndex& index,
     const folly::F14FastMap<std::string, velox::Variant>& storageProperties) {
-  const auto partitionedBy = [](std::vector<std::string> names) {
+  const auto columnList = [](std::vector<std::string> names) {
     return velox::Variant::array(
         std::vector<velox::Variant>(names.begin(), names.end()));
   };
+  auto codecProperties = storageProperties;
+  codecProperties.erase(HiveWriteOptions::kBucketCount);
   auto codecDefinition = VectorIndex::codecTableDefinition(
-      index.partitionColumns, storageProperties);
+      index.partitionColumns, std::move(codecProperties));
   codecDefinition.properties[HiveWriteOptions::kPartitionedBy] =
-      partitionedBy(codecDefinition.primaryKey);
+      columnList(codecDefinition.primaryKey);
   auto indexProperties = storageProperties;
   if (index.partitionColumns->size() > 0) {
     indexProperties[HiveWriteOptions::kPartitionedBy] =
-        partitionedBy(index.partitionColumns->names());
+        columnList(index.partitionColumns->names());
+  }
+  if (indexProperties.contains(HiveWriteOptions::kBucketCount)) {
+    indexProperties[HiveWriteOptions::kBucketedBy] =
+        columnList({std::string(VectorIndex::kClusterId)});
   }
   return {{
       {

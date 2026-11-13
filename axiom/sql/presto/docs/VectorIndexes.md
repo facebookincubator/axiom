@@ -72,8 +72,9 @@ The index's properties:
 - `index_options`, optional: a `MAP(VARCHAR, VARCHAR)` of local index
   settings, listed below.
 
-Any other property applies to the tables that store the index, which the
-connector defines.
+Any other property applies to the tables that store the index, as the
+connector defines. For example, Hive's `bucket_count` sets the number of buckets
+of the table of local indexes.
 
 The local index settings take positive integer values. Each applies only to
 the index types listed. An unset setting takes a default that depends on the

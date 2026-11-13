@@ -181,6 +181,15 @@ struct ResolvedVectorIndex {
 ///   cluster 'cluster_id' of the codec its partition columns and 'codec_id'
 ///   identify.
 ///
+/// To improve performance, a connector may choose a physical layout that
+/// leverages the fact that a search reads only the rows of the clusters it
+/// probes: it may group the index table's rows by 'cluster_id', e.g. into
+/// buckets, with many clusters in each group. The number of groups is the
+/// connector's choice. The engine relies only on what the index table's layout
+/// reports: a layout partitioned by 'cluster_id' sends each query's clusters
+/// to the worker holding their group, and that worker skips the groups that
+/// hold no probed cluster.
+///
 /// A partition with no valid rows has a NULL codec and one index row with a
 /// NULL cluster_id, group_id and local_index. It matches nothing, and the
 /// index covers the partition.

@@ -124,6 +124,10 @@ class HiveQueriesTestBase : public QueryTestBase {
   /// populates it with data. Drops the table first if it already exists.
   void runCtas(const std::string& sql);
 
+  /// Parses a CREATE TABLE statement and creates the table, as
+  /// createEmptyTable() does.
+  void runCreateTable(const std::string& sql);
+
   /// Matches a TableScan of 'tableName' without asserting anything about the
   /// scan's filters.
   static velox::core::PlanMatcherBuilder matchHiveScan(

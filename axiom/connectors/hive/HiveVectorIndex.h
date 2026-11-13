@@ -57,8 +57,10 @@ class HiveVectorIndex {
 
   /// Returns the index 'resolved' of 'table', with the partition columns
   /// 'partitionColumns', and the properties of its storage tables. Throws a
-  /// user error for a partitioning, bucketing or sorting property: the storage
-  /// tables take the table's partitions.
+  /// user error for a partitioning, bucketing or sorting property other than
+  /// 'bucket_count': the storage tables take the table's partitions, and a
+  /// bucketed index table is bucketed by VectorIndex::kClusterId (see
+  /// storageTableDefinitions()).
   static std::
       pair<VectorIndexPtr, folly::F14FastMap<std::string, velox::Variant>>
       make(
@@ -69,7 +71,11 @@ class HiveVectorIndex {
   /// Returns the definitions of the codec table and the index table of
   /// 'index', with the properties 'storageProperties'. The codec table is
   /// partitioned by the index's partition columns and VectorIndex::kCodecId,
-  /// the index table by the index's partition columns.
+  /// and is not bucketed. The index table is partitioned by the index's
+  /// partition columns. With a 'bucket_count' in 'storageProperties', the
+  /// index table has that many buckets by VectorIndex::kClusterId, so a search
+  /// reads only the buckets of the clusters it probes; otherwise it is
+  /// unbucketed. 'bucket_count' applies to the index table only.
   static std::array<std::pair<SchemaTableName, TableDefinition>, 2>
   storageTableDefinitions(
       const VectorIndex& index,

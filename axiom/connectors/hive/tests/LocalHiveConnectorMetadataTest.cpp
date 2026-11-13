@@ -1306,7 +1306,8 @@ TEST_F(LocalHiveConnectorMetadataTest, dropTableExplain) {
 
 // An index of a table is recorded in the table's '.schema' and listed by the
 // table, which keeps its one layout. Its storage tables are named after the
-// table and the index, and partitioned as the table is.
+// table and the index, and partitioned as the table is. The index of 10
+// clusters is unbucketed.
 TEST_F(LocalHiveConnectorMetadataTest, addVectorIndex) {
   createProducts("products");
   ASSERT_EQ(addVectorIndex("products", vectorIndex("i")), true);
@@ -1341,6 +1342,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addVectorIndex) {
   EXPECT_THAT(
       partitionColumnNames(codecTable), testing::ElementsAre("ds", "codec_id"));
   EXPECT_THAT(codecTable->primaryKey(), testing::ElementsAre("ds", "codec_id"));
+  EXPECT_EQ(getLayout(codecTable)->numBuckets(), std::nullopt);
 
   auto indexTable = metadata_->findTable(qualifiedName("products__i__index"));
   ASSERT_NE(indexTable, nullptr);
@@ -1353,6 +1355,7 @@ TEST_F(LocalHiveConnectorMetadataTest, addVectorIndex) {
            {"local_index", VECTOR_INDEX()},
            {"ds", VARCHAR()}}));
   EXPECT_THAT(partitionColumnNames(indexTable), testing::ElementsAre("ds"));
+  EXPECT_EQ(getLayout(indexTable)->numBuckets(), std::nullopt);
 
   EXPECT_EQ(
       addVectorIndex("products", vectorIndex("i"), /*ifNotExists=*/true),
@@ -1518,7 +1521,7 @@ TEST_F(LocalHiveConnectorMetadataTest, dropVectorIndex) {
 }
 
 // The properties of an index's storage tables may not name the table's columns
-// or partitions.
+// or partitions. They may set the index table's bucket count.
 TEST_F(LocalHiveConnectorMetadataTest, vectorIndexStorageProperties) {
   createProducts("products");
   for (const auto& properties :
@@ -1533,6 +1536,52 @@ TEST_F(LocalHiveConnectorMetadataTest, vectorIndexStorageProperties) {
         addVectorIndex(
             "products", vectorIndex("i", "embedding", {"id"}, properties)),
         "Unsupported property for a vector index");
+  }
+
+  // An invalid bucket count fails the add, and no storage table is created.
+  VELOX_ASSERT_THROW(
+      addVectorIndex(
+          "products",
+          vectorIndex(
+              "i",
+              "embedding",
+              {"id"},
+              {{"bucket_count", Variant(int32_t{3})}})),
+      "bucket_count must be power of 2");
+  expectNoStorageTables("products", "i");
+
+  // 'bucket_count' buckets the index table by cluster_id; without it, the
+  // index table is unbucketed. The codec table is never bucketed.
+  struct TestCase {
+    std::string name;
+    std::optional<int32_t> bucketCount;
+  };
+  for (const auto& testCase : std::vector<TestCase>{
+           {"unbucketed", std::nullopt},
+           {"bucketed", 8},
+       }) {
+    SCOPED_TRACE(testCase.name);
+    folly::F14FastMap<std::string, Variant> properties{
+        {"num_clusters", Variant(int64_t{1'024})}};
+    if (testCase.bucketCount.has_value()) {
+      properties.emplace("bucket_count", Variant(testCase.bucketCount.value()));
+    }
+    addVectorIndex(
+        "products",
+        vectorIndex(testCase.name, "embedding", {"id"}, std::move(properties)));
+    const auto* indexLayout = getLayout(metadata_->findTable(
+        qualifiedName(fmt::format("products__{}__index", testCase.name))));
+    EXPECT_EQ(indexLayout->numBuckets(), testCase.bucketCount);
+    if (testCase.bucketCount.has_value()) {
+      EXPECT_THAT(
+          indexLayout->bucketProperty()->bucketedBy(),
+          testing::ElementsAre("cluster_id"));
+    }
+    EXPECT_EQ(
+        getLayout(metadata_->findTable(qualifiedName(
+                      fmt::format("products__{}__codecs", testCase.name))))
+            ->numBuckets(),
+        std::nullopt);
   }
 }
 
