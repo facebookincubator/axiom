@@ -1462,6 +1462,63 @@ TEST_P(SubqueryTest, correlatedNotExists) {
   }
 }
 
+// A conjunct of a correlated subquery that reads only the outer row filters the
+// outer rows below a filtering semi join. NOT EXISTS and a projected EXISTS
+// keep it on the join, where it decides the result.
+TEST_P(SubqueryTest, outerOnlyConjunct) {
+  {
+    SCOPED_TRACE("EXISTS");
+    auto plan = toSingleNodePlan(
+        "SELECT * FROM nation "
+        "WHERE EXISTS ("
+        "    SELECT 1 FROM region "
+        "    WHERE r_regionkey = n_regionkey AND n_nationkey < 10)");
+    auto matcher =
+        matchHiveScan("nation", test::lt("n_nationkey", int64_t{10}))
+            .hashJoinLeftSemiFilter(
+                matchHiveScan("region"),
+                {.keys = {{"n_regionkey = r_regionkey"}}, .filter = ""})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("NOT EXISTS");
+    auto plan = toSingleNodePlan(
+        "SELECT * FROM nation "
+        "WHERE NOT EXISTS ("
+        "    SELECT 1 FROM region "
+        "    WHERE r_regionkey = n_regionkey AND n_nationkey < 10)");
+    auto matcher = matchHiveScan("nation", {})
+                       .hashJoinAnti(
+                           matchHiveScan("region"),
+                           {.nullAware = false,
+                            .keys = {{"n_regionkey = r_regionkey"}},
+                            .filter = "n_nationkey < 10"})
+                       .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("Projected EXISTS");
+    auto plan = toSingleNodePlan(
+        "SELECT n_name, EXISTS ("
+        "    SELECT 1 FROM region "
+        "    WHERE r_regionkey = n_regionkey AND n_nationkey < 10) "
+        "FROM nation");
+    auto matcher = matchHiveScan("nation", {})
+                       .hashJoinLeftSemiProject(
+                           matchHiveScan("region"),
+                           {.nullAware = false,
+                            .keys = {{"n_regionkey = r_regionkey"}},
+                            .filter = "n_nationkey < 10"})
+                       .aliases({std::nullopt, "m"})
+                       .project({"n_name", "m"})
+                       .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+}
+
 TEST_P(SubqueryTest, unnest) {
   testConnector_->addTable("t", ROW({"a"}, ARRAY(BIGINT())));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));
@@ -2636,29 +2693,100 @@ TEST_P(SubqueryTest, nestedInSubqueries) {
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
-// EXISTS (SELECT 1 WHERE <condition>) with no FROM clause is equivalent to
-// just <condition>. The optimizer should simplify this and not attempt
-// subquery decorrelation.
+// An EXISTS whose body is one row without columns is its condition. In WHERE it
+// filters the outer rows, and an equality across two tables becomes a join key.
+// NOT EXISTS, a projected EXISTS and an EXISTS under OR read the condition with
+// NULL as false; the mark is a column, so a nondeterministic condition is
+// evaluated once per row for all its readers. A projected IN whose subquery
+// selects an expression of the outer row keeps its null-aware join.
 TEST_P(SubqueryTest, existsWithNoFromClause) {
   testConnector_->addTable("t", ROW("a", BIGINT()));
   testConnector_->addTable("u", ROW("x", BIGINT()));
 
-  auto query =
-      "WITH matched AS ("
-      "    SELECT t.a FROM t, u"
-      "    WHERE EXISTS (SELECT 1 WHERE t.a = u.x)"
-      ") "
-      "SELECT (SELECT count(*) FROM matched) FROM t";
+  {
+    SCOPED_TRACE("Equality across tables");
+    auto plan = toSingleNodePlan(parseSelect(
+        "WITH matched AS ("
+        "    SELECT t.a FROM t, u"
+        "    WHERE EXISTS (SELECT 1 WHERE t.a = u.x)"
+        ") "
+        "SELECT (SELECT count(*) FROM matched) FROM t",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .aliases({"a"})
+            .hashJoin(
+                matchScan("u"),
+                core::JoinType::kInner,
+                {.keys = {{"a = x"}}, .filter = ""})
+            .singleAggregation({}, {"count(*) as c"})
+            .nestedLoopJoin(matchScan("t"), core::JoinType::kInner, "")
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
 
-  auto matcher =
-      matchScan("t")
-          .nestedLoopJoin(matchScan("t")
-                              .hashJoin(matchScan("u"), core::JoinType::kInner)
-                              .aggregation())
-          .build();
+  {
+    SCOPED_TRACE("NOT EXISTS");
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT t.a FROM t, u WHERE NOT EXISTS (SELECT 1 WHERE t.a = u.x)",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
+            .filter("NOT coalesce(a = x, false)")
+            .project({"a"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
 
-  auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  {
+    SCOPED_TRACE("Projected");
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT t.a, EXISTS (SELECT 1 WHERE t.a = u.x) FROM t, u",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
+            .project({"a", "coalesce(a = x, false)"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("Nondeterministic, read several times");
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT a, e, NOT e "
+        "FROM ("
+        "    SELECT a, EXISTS (SELECT 1 WHERE a >= 0 AND rand() < 0.5) AS e "
+        "    FROM t) "
+        "WHERE e OR a = 0",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .project({"a", "coalesce(a >= 0 AND rand() < 0.5, false) AS e"})
+            .filter("e OR a = 0")
+            .project({"a", "e", "NOT e"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  {
+    SCOPED_TRACE("IN, key reading the outer row");
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT a, nullif(a, 1) IN (SELECT x) FROM t, u", kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
+            .project({"a", "x = nullif(a, 1) AS matches"})
+            .nestedLoopJoin(
+                matchValues(makeRowVector(ROW({}, {}), 1)),
+                core::JoinType::kLeftSemiProject,
+                "matches")
+            .aliases({std::nullopt, "m"})
+            .project({"a", "m"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
 }
 
 // EXISTS and NOT EXISTS with LIMIT 0 should fold to Boolean Values because the

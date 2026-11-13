@@ -38,11 +38,14 @@ enum class FilterTarget { kKeep, kLeft, kRight };
 
 // A join-condition predicate can move to the input whose rows are not
 // independently preserved. Semi and anti joins use their existence-check
-// input.
+// input. A filtering semi join emits a probe row only where its condition
+// holds, so a predicate on the probe alone moves to the probe, as for an inner
+// join.
 FilterTarget
 filterTarget(velox::core::JoinType joinType, bool leftOnly, bool rightOnly) {
   switch (joinType) {
     case velox::core::JoinType::kInner:
+    case velox::core::JoinType::kLeftSemiFilter:
       if (leftOnly) {
         return FilterTarget::kLeft;
       }
@@ -53,7 +56,6 @@ filterTarget(velox::core::JoinType joinType, bool leftOnly, bool rightOnly) {
       return leftOnly ? FilterTarget::kLeft : FilterTarget::kKeep;
     case velox::core::JoinType::kFull:
       return FilterTarget::kKeep;
-    case velox::core::JoinType::kLeftSemiFilter:
     case velox::core::JoinType::kCountingLeftSemiFilter:
     case velox::core::JoinType::kLeftSemiProject:
     case velox::core::JoinType::kAnti:

@@ -17,8 +17,12 @@
 #include <fmt/core.h>
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <tuple>
+#include "axiom/optimizer/Node.h"
+#include "axiom/optimizer/Optimize.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/tests/HiveQueriesTestBase.h"
 
@@ -340,6 +344,46 @@ TEST_P(FilteredTableStatsTest, emptyPartition) {
       }) {
     SCOPED_TRACE(query);
     AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
+  }
+
+  // The case below inspects the plan after a v2 pass.
+  if (!useV2_) {
+    return;
+  }
+
+  // An EXISTS whose body is one row once its scan is known empty becomes its
+  // condition, with NULL as false. Only estimation knows the scan is empty, so
+  // the join survives pushdown.
+  {
+    SCOPED_TRACE("EXISTS over a known-empty scan");
+    const std::function<bool(NodeCP)> hasSemiJoin = [&](NodeCP node) {
+      return (node->is(NodeType::kJoin) &&
+              node->as<Join>()->joinType() ==
+                  core::JoinType::kLeftSemiProject) ||
+          std::ranges::any_of(node->inputs(), hasSemiJoin);
+    };
+    bool joinAfterPushdown{false};
+    afterPass_ = [&](Optimizer::Pass pass, NodeCP root) {
+      if (pass == Optimizer::Pass::kPushdownAndPrune) {
+        joinAfterPushdown = hasSemiJoin(root);
+      }
+    };
+    auto plan = toSingleNodePlan(
+        "SELECT n_name, EXISTS ("
+        "    SELECT 1 "
+        "    FROM (VALUES 1) w(c) "
+        "    LEFT JOIN (SELECT a FROM t WHERE k = 7) x ON true "
+        "    WHERE nullif(n_nationkey, 21) > 20) AS e "
+        "FROM nation");
+    afterPass_ = nullptr;
+    EXPECT_TRUE(joinAfterPushdown);
+    auto matcher =
+        matchHiveScan("nation")
+            .project(
+                {"n_name",
+                 "coalesce(nullif(n_nationkey, 21) > 20, false) as e"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 }
 
