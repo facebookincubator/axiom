@@ -35,6 +35,7 @@
 #include "axiom/runner/LocalRunner.h"
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/runner/QueryProgress.h"
+#include "axiom/sql/presto/CentroidPlanner.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
@@ -218,6 +219,10 @@ class SqlQueryRunner {
   /// fail if the scheduler is null.
   /// @param useOptimizerV2 Routes all queries through the v2 optimizer by
   /// default. `EXPLAIN (TYPE GRAPH)` is supported only under v1.
+  /// @param centroidPlanner Optional planner of REFRESH VECTOR INDEX's
+  /// centroids, given to every query (see presto::CentroidPlanner). Requires
+  /// the v2 optimizer, which runs the plans a planner returns. Without one,
+  /// REFRESH trains each codec with vector_index_train.
   SqlQueryRunner(
       std::string user,
       facebook::velox::connector::ConnectorRegistry::Registry&
@@ -225,7 +230,8 @@ class SqlQueryRunner {
       const facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
           metadataRegistry,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true);
+      bool useOptimizerV2 = true,
+      std::shared_ptr<const presto::CentroidPlanner> centroidPlanner = nullptr);
 
   virtual ~SqlQueryRunner() = default;
 
@@ -822,6 +828,9 @@ class SqlQueryRunner {
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
   const bool useOptimizerV2_{true};
+
+  // Given to every query's ParserSession (see constructor).
+  const std::shared_ptr<const presto::CentroidPlanner> centroidPlanner_;
 
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.

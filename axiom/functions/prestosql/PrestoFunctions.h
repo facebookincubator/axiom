@@ -45,7 +45,8 @@ class PrestoFunctions {
   static std::shared_ptr<optimizer::FunctionRegistry> makeRegistry();
 
   /// Returns the formats of the vector indexes Presto functions build: "faiss",
-  /// the format of vector_index_build and vector_index_train. A query that
+  /// the format of vector_index_build, vector_index_pack and
+  /// vector_index_train. A query that
   /// searches such indexes has them on its QueryCtx (see
   /// velox::common::vectorindex::LocalVectorIndexFormat::kRegistryKey).
   static std::shared_ptr<velox::common::vectorindex::LocalVectorIndexFormats>

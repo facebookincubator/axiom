@@ -183,7 +183,10 @@ void PrestoFunctions::registerAll(
   registerDrawnFrom(registry, fullName);
 
   for (std::string_view name :
-       {"multimap_agg", "vector_index_build", "vector_index_train"}) {
+       {"multimap_agg",
+        "vector_index_build",
+        "vector_index_pack",
+        "vector_index_train"}) {
     auto metadata = std::make_unique<FunctionMetadata>();
     metadata->partialAggregationReduces = false;
     registry.registerFunction(fullName(name), std::move(metadata));

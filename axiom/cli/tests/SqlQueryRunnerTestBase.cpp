@@ -58,7 +58,8 @@ SqlQueryRunnerTestHandle<> SqlQueryRunnerTestBase::makeRunner(
     std::function<std::string()> queryIdGenerator,
     PermissionCheck permissionCheck,
     LogicalPlanCheck logicalPlanCheck) {
-  SqlQueryRunnerTestHandle runner{"test_user", &progressScheduler_, useV2_};
+  SqlQueryRunnerTestHandle runner{
+      "test_user", &progressScheduler_, useV2_, centroidPlanner_};
   auto& connectors = runner.connectors();
 
   runner->initialize(

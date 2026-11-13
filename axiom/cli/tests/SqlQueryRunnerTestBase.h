@@ -107,6 +107,9 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Selects the optimizer makeRunner() builds; a parameterized fixture sets
   // this before calling makeRunner() and branches its expectations on v1 vs v2.
   bool useV2_{true};
+
+  // The centroid planner of the runners makeRunner() builds, or null.
+  std::shared_ptr<const presto::CentroidPlanner> centroidPlanner_;
 };
 
 } // namespace axiom::sql

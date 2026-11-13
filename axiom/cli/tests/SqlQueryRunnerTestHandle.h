@@ -50,11 +50,13 @@ class SqlQueryRunnerTestHandle {
   explicit SqlQueryRunnerTestHandle(
       std::string user,
       folly::FunctionScheduler* progressScheduler = nullptr,
-      bool useOptimizerV2 = true)
+      bool useOptimizerV2 = true,
+      std::shared_ptr<const presto::CentroidPlanner> centroidPlanner = nullptr)
       : state_{std::make_unique<State>(
             std::move(user),
             progressScheduler,
-            useOptimizerV2)} {}
+            useOptimizerV2,
+            std::move(centroidPlanner))} {}
 
   SqlQueryRunnerTestHandle(const SqlQueryRunnerTestHandle&) = delete;
   SqlQueryRunnerTestHandle& operator=(const SqlQueryRunnerTestHandle&) = delete;
@@ -83,7 +85,8 @@ class SqlQueryRunnerTestHandle {
     State(
         std::string user,
         folly::FunctionScheduler* progressScheduler,
-        bool useOptimizerV2)
+        bool useOptimizerV2,
+        std::shared_ptr<const presto::CentroidPlanner> centroidPlanner)
         : connectorRegistry{facebook::velox::connector::ConnectorRegistry::
                                 create()},
           metadataRegistry{
@@ -94,7 +97,8 @@ class SqlQueryRunnerTestHandle {
               *connectorRegistry,
               *metadataRegistry,
               progressScheduler,
-              useOptimizerV2)} {}
+              useOptimizerV2,
+              std::move(centroidPlanner))} {}
 
     // Supplies execution connectors to the runner.
     std::shared_ptr<facebook::velox::connector::ConnectorRegistry::Registry>

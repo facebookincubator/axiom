@@ -217,6 +217,12 @@ TableWrite <codec table>, codec_id = ?1
   sample with FAISS's spherical k-means and returns the codec of the
   clusters. It orders the sample by key first, so the codec does not depend
   on the order rows arrive in.
+- **Engine training.** When the parser session has a `CentroidPlanner`, the
+  engine plans each partition's centroids over the sample instead, and
+  `vector_index_pack(cluster_id, centroid, metric, num_clusters, dimension)`
+  packs them into the codec, checking the cluster IDs and the centroids. The
+  sample the planner sees is numbered by key hash and capped at 256 rows per
+  cluster (see `CentroidPlanner.h`).
 - The left join writes a NULL codec for a selected partition with no valid
   rows.
 
