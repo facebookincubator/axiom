@@ -224,7 +224,12 @@ CO_TEST_F(TestConnectorTest, splitManager) {
   std::vector<int32_t> rejectedFilterIndices;
   auto session = makeSession();
   auto tableHandle = layout.createTableHandle(
-      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+      session,
+      /*tableReferenceId=*/0,
+      std::move(columns),
+      *evaluator,
+      empty,
+      rejectedFilterIndices);
 
   auto partitions = co_await splitManager->co_listPartitions(
       session, tableHandle, *evaluator);
@@ -348,7 +353,12 @@ TEST_F(TestConnectorTest, dataSource) {
   std::vector<int32_t> rejectedFilterIndices;
   auto session = makeSession();
   auto tableHandle = layout.createTableHandle(
-      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+      session,
+      /*tableReferenceId=*/0,
+      std::move(columns),
+      *evaluator,
+      empty,
+      rejectedFilterIndices);
 
   auto vector1 = makeRowVector(
       {makeFlatVector<int>({0, 1}), makeFlatVector<StringView>({"a", "b"})});
@@ -702,7 +712,12 @@ velox::connector::ConnectorTableHandlePtr makeScanHandle(
   std::vector<core::TypedExprPtr> empty;
   std::vector<int32_t> rejectedFilterIndices;
   return layout.createTableHandle(
-      session, std::move(columns), *evaluator, empty, rejectedFilterIndices);
+      session,
+      /*tableReferenceId=*/0,
+      std::move(columns),
+      *evaluator,
+      empty,
+      rejectedFilterIndices);
 }
 
 } // namespace

@@ -1178,6 +1178,7 @@ velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
+    int32_t /*tableReferenceId*/,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,

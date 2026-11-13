@@ -366,6 +366,7 @@ class LocalHiveConnectorMetadataTest
     std::vector<int32_t> rejectedFilterIndices;
     auto tableHandle = layout.createTableHandle(
         /*session=*/nullptr,
+        /*tableReferenceId=*/0,
         {layout.createColumnHandle(/*session=*/nullptr, std::string(column))},
         *metadata_->connectorQueryCtx()->expressionEvaluator(),
         filters,

@@ -175,6 +175,7 @@ void ToVelox::filterUpdated(
   auto allConjuncts = filterConjuncts;
   auto handle = layout->createTableHandle(
       connectorSession,
+      table->id(),
       std::move(columns),
       *evaluator,
       std::move(filterConjuncts),
