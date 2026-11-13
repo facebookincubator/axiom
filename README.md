@@ -57,6 +57,22 @@ VELOX_BUILD_SHARED=ON PROMPT_ALWAYS_RESPOND=y velox/scripts/setup-ubuntu.sh
 `VELOX_BUILD_SHARED=ON` ensures dependencies are built for shared linking,
 which is required by the Velox mono library used in Axiom.
 
+The Iceberg connector has an additional iceberg-cpp dependency, which needs a
+C++23 compiler (gcc 14+ or clang 18+). Build Axiom with the same compiler, for
+example by setting `CC` and `CXX` for both: iceberg-cpp's libraries need that
+compiler's C++ standard library. Install iceberg-cpp before building with
+`AXIOM_ENABLE_ICEBERG_CPP=ON`:
+
+```
+scripts/setup-iceberg-cpp.sh
+```
+
+The script installs iceberg-cpp into `deps-install/iceberg-cpp`, and the newer
+Arrow and Parquet release it needs into `deps-install/iceberg-cpp/arrow`, apart
+from the Arrow that Velox uses. To install elsewhere, set
+`ICEBERG_CPP_INSTALL_PREFIX` for the script and pass the same path to CMake as
+`AXIOM_ICEBERG_CPP_PREFIX`.
+
 ### Building
 
 On macOS, pass the path to the installed dependencies via `EXTRA_CMAKE_FLAGS`:
@@ -64,6 +80,9 @@ On macOS, pass the path to the installed dependencies via `EXTRA_CMAKE_FLAGS`:
 ```
 EXTRA_CMAKE_FLAGS="-DCMAKE_PREFIX_PATH=$(pwd)/deps-install" make debug
 ```
+
+To build with iceberg-cpp, add `-DAXIOM_ENABLE_ICEBERG_CPP=ON` to
+`EXTRA_CMAKE_FLAGS`.
 
 Other build targets:
 
