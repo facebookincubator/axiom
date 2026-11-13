@@ -298,6 +298,90 @@ SELECT
     (SELECT count(*) FROM u WHERE u.a < t.c) AS z
 FROM t
 ----
+-- A count in WHERE, then a count in the SELECT list.
+SELECT a, c, (SELECT count(*) FROM v WHERE v.a < t.c) AS y
+FROM t
+WHERE (SELECT count(*) FROM u WHERE u.a < t.a) > 0
+----
+-- A count, then an IN over a max: NULL when the max has no input rows.
+-- error_v1: IN over a correlated global aggregate is not supported yet
+SELECT b,
+    (SELECT count(*) FROM u WHERE u.a < t.a) AS x,
+    t.a * 2 IN (SELECT max(v.a) FROM v WHERE v.a * 10 < t.b) AS y
+FROM t
+----
+-- A count, then an EXISTS over a count with HAVING.
+-- error_v1: EXISTS over a global aggregate with HAVING
+SELECT b,
+    (SELECT count(*) FROM u WHERE u.a < t.a) AS x,
+    EXISTS (
+        SELECT count(*)
+        FROM v
+        WHERE v.a * 10 < t.b
+        HAVING count(*) > 2
+    ) AS y
+FROM t
+----
+-- A count, a grouped LEFT JOIN LATERAL that gives each row of t with a = 3 two
+-- rows, and a later count that keeps both rows. DuckDB rejects LEFT JOIN
+-- LATERAL ... ON true, so the reference joins the groups on b, which is unique.
+-- duckdb: SELECT q.a, q.x, l.c, (SELECT count(*) FROM v WHERE v.a < q.a)
+--   FROM (
+--     SELECT a, b, (SELECT count(*) FROM u WHERE u.a < t.a) AS x
+--     FROM t
+--   ) q
+--   LEFT JOIN (
+--     SELECT w.b, count(*) AS c
+--     FROM t w
+--     JOIN u ON u.a < w.a
+--     GROUP BY w.b, u.a % 2
+--   ) l ON l.b = q.b
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+SELECT q.a, q.x, l.c, (SELECT count(*) FROM v WHERE v.a < q.a) AS y
+FROM (
+    SELECT a, b, (SELECT count(*) FROM u WHERE u.a < t.a) AS x
+    FROM t
+) q
+LEFT JOIN LATERAL (
+    SELECT count(*) AS c
+    FROM u
+    WHERE u.a < q.a
+    GROUP BY u.a % 2
+) l ON true
+----
+-- A count, then a max over a correlated count.
+-- error_v1: expr references column not available at this layer
+SELECT b,
+    (SELECT count(*) FROM u WHERE u.a < t.a) AS x,
+    (SELECT max(c) FROM (SELECT count(*) AS c FROM v WHERE v.a < t.a)) AS y
+FROM t
+----
+-- A grouped scalar subquery after a plain one, in a LEFT JOIN LATERAL whose
+-- filter on the plain one drops every row the grouped one has two groups for.
+-- Expected rows are written out because DuckDB does not support nested lateral
+-- joins.
+-- duckdb: VALUES (1, 10, 2), (2, 10, NULL), (3, NULL, NULL), (4, NULL, NULL),
+--   (5, NULL, NULL)
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+SELECT u.a, l.b, l.m
+FROM u
+LEFT JOIN LATERAL (
+    SELECT q.b, q.m
+    FROM (
+        SELECT b,
+            (SELECT count(*) FROM v WHERE v.a > t.a * 4) AS n,
+            (
+                SELECT max(v.a)
+                FROM v
+                WHERE v.a > u.a AND v.a < t.a * 4
+                GROUP BY v.a % 4
+            ) AS m
+        FROM t
+        WHERE b <= 30
+    ) q
+    WHERE q.n > u.a
+) l ON true
+----
 -- Multiple subqueries in a SELECT list — pairwise shape coverage. Shapes:
 -- U   = uncorrelated scalar
 -- CE  = correlated equality, returns a value (no aggregation)
