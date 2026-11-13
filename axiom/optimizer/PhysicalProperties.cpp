@@ -214,8 +214,8 @@ bool Partitioning::sameClassAs(const Partitioning& other) const {
 
 bool PhysicalProperties::coLocates(PropertyScope scope, const ExprVector& keys)
     const {
-  const Partitioning& partition =
-      scope == PropertyScope::kGlobal ? globalPartition : driverPartition;
+  const bool global = scope == PropertyScope::kGlobal;
+  const Partitioning& partition = global ? globalPartition : driverPartition;
   if (partition.is(PartitionKind::kGather)) {
     return true;
   }
@@ -223,14 +223,42 @@ bool PhysicalProperties::coLocates(PropertyScope scope, const ExprVector& keys)
     return true;
   }
 
-  if (scope == PropertyScope::kGlobal &&
-      globalPartition.is(PartitionKind::kBroadcast)) {
+  if (global && globalPartition.is(PartitionKind::kBroadcast)) {
     return false;
   }
   const auto keySet = PlanObjectSet::fromObjects(keys);
-  return std::ranges::any_of(globalUnique, [&](const PlanObjectSet& key) {
+  const auto inKeys = [&](const PlanObjectSet& key) {
     return key.isSubset(keySet);
-  });
+  };
+  return std::ranges::any_of(globalUnique, inKeys) ||
+      (global && std::ranges::any_of(globalColocated, inKeys));
+}
+
+void PhysicalProperties::pruneColocated() {
+  QGVector<PlanObjectSet> kept;
+  for (size_t i = 0; i < globalColocated.size(); ++i) {
+    const PlanObjectSet& set = globalColocated[i];
+    // A unique empty key implies every set too, but the derivations skip the
+    // empty set, so a set dropped for it could not be derived again after an
+    // operator that loses that key.
+    const auto impliesSet = [&](const PlanObjectSet& unique) {
+      return !unique.empty() && unique.isSubset(set);
+    };
+    if (std::ranges::any_of(globalUnique, impliesSet)) {
+      continue;
+    }
+    bool implied = false;
+    for (size_t j = 0; j < globalColocated.size() && !implied; ++j) {
+      const PlanObjectSet& other = globalColocated[j];
+      // Of equal sets the first one stays.
+      implied =
+          j != i && other.isSubset(set) && (j < i || !set.isSubset(other));
+    }
+    if (!implied) {
+      kept.push_back(set);
+    }
+  }
+  globalColocated = std::move(kept);
 }
 
 void PhysicalProperties::checkReferencesColumns(
@@ -267,6 +295,12 @@ void PhysicalProperties::checkReferencesColumns(
           key.isSubset(outputColumns),
           "Unique key references a column that is not in the node's output");
     }
+  }
+  for (const PlanObjectSet& key : globalColocated) {
+    VELOX_CHECK(!key.empty(), "Colocated key set must not be empty");
+    VELOX_CHECK(
+        key.isSubset(outputColumns),
+        "Colocated key references a column that is not in the node's output");
   }
 }
 

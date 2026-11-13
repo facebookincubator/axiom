@@ -1653,24 +1653,23 @@ TEST_P(SubqueryTest, nonEquiCorrelatedScalar) {
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
                              matchHiveScan("nation")
-                                 .project({"true as marker", "n_regionkey"})
+                                 .project({"n_regionkey", "true as marker"})
                                  .broadcast(),
-                             velox::core::JoinType::kLeft)
+                             velox::core::JoinType::kLeft,
+                             "r_regionkey > n_regionkey")
                          .streamingAggregation(
                              {"unique_id"},
                              {
                                  "count(*) filter (where marker) as cnt",
-                                 "arbitrary(r_regionkey)",
-                                 "arbitrary(r_name)",
-                                 "arbitrary(r_comment)",
+                                 "arbitrary(r_regionkey) as r_regionkey",
+                                 "arbitrary(r_name) as r_name",
+                                 "arbitrary(r_comment) as r_comment",
                              })
                          .filter("cnt > 3")
-                         .project()
+                         .project({"r_regionkey", "r_name", "r_comment"})
                          .gather()
                          .build();
-
-      auto distributedPlan = planVelox(logicalPlan);
-      AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+      AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
     }
   }
 
@@ -1785,25 +1784,90 @@ TEST_P(SubqueryTest, nonEquiCorrelatedProject) {
                          .assignUniqueId("unique_id")
                          .nestedLoopJoin(
                              matchHiveScan("nation")
-                                 .project({"true as marker", "n_regionkey"})
+                                 .project({"n_regionkey", "true as marker"})
                                  .broadcast(),
-                             velox::core::JoinType::kLeft)
+                             velox::core::JoinType::kLeft,
+                             "r_regionkey > n_regionkey")
                          .streamingAggregation(
                              {"unique_id"},
                              {
                                  "count(*) filter (where marker) as cnt",
-                                 "arbitrary(r_regionkey)",
                                  "arbitrary(r_name) as r_name",
                              })
                          .project({"length(r_name)", "cnt"})
                          .gather()
-                         .project()
                          .build();
-
-      auto distributedPlan = planVelox(logicalPlan);
-      AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+      AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
     }
   }
+}
+
+// A row ID's rows stay on the task of the outer row that got the ID through an
+// Unnest, so the aggregation by it needs no shuffle. It splits locally where
+// the driver placement does not prove the rows of an ID are on one driver. Its
+// final step is unique on the ID across tasks, so a later aggregation by the
+// same ID needs no shuffle either.
+TEST_P(SubqueryTest, unnestRowIdColocation) {
+  // v1 fails to plan this query.
+  if (!useV2_) {
+    return;
+  }
+  testConnector_->addTable("t", ROW({"k", "a"}, {BIGINT(), ARRAY(BIGINT())}));
+  testConnector_->addTable("u", ROW({"c", "d"}, BIGINT()));
+  const auto logicalPlan = parseSelect(
+      "SELECT k, "
+      "  EXISTS (SELECT 1 FROM UNNEST(a) AS w(e) WHERE e > 15), "
+      "  (SELECT count(*) FROM u WHERE u.c < t.k) "
+      "FROM t",
+      kTestConnectorId);
+  const auto matchMarked = [&]() {
+    return matchScan("t")
+        .assignUniqueId("row_id")
+        .unnest({"k", "row_id"}, {"a"})
+        .aliases({std::nullopt, std::nullopt, "e", "present"})
+        .project({"k", "row_id", "coalesce(present AND e > 15, false) AS m"});
+  };
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(logicalPlan),
+      matchMarked()
+          .streamingAggregation(
+              {"row_id"}, {"bool_or(m) as matched", "arbitrary(k) as k"})
+          .nestedLoopJoin(
+              matchScan("u").project({"c", "true as marker"}),
+              velox::core::JoinType::kLeft,
+              "k > c")
+          .streamingAggregation(
+              {"row_id"},
+              {
+                  "count(*) filter (where marker) as cnt",
+                  "arbitrary(k) as k",
+                  "arbitrary(matched) as matched",
+              })
+          .project({"k", "matched", "cnt"})
+          .build());
+  // The count over 'u' groups by the same ID.
+  AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+      planVelox(logicalPlan).plan,
+      matchMarked()
+          .partialAggregation(
+              {"row_id"}, {"bool_or(m) as matched", "arbitrary(k) as k"})
+          .localPartition({"row_id"})
+          .finalAggregation(
+              {"row_id"}, {"bool_or(matched) as matched", "arbitrary(k) as k"})
+          .nestedLoopJoin(
+              matchScan("u").project({"c", "true as marker"}).broadcast(),
+              velox::core::JoinType::kLeft,
+              "k > c")
+          .streamingAggregation(
+              {"row_id"},
+              {
+                  "count(*) filter (where marker) as cnt",
+                  "arbitrary(k) as k",
+                  "arbitrary(matched) as matched",
+              })
+          .project({"k", "matched", "cnt"})
+          .gather()
+          .build());
 }
 
 // Stacked correlated subqueries with non-equi predicates share one row ID: an
@@ -1849,6 +1913,40 @@ TEST_P(SubqueryTest, rowIdReuse) {
                     "arbitrary(x) as x",
                 })
             .project({"x", "y"})
+            .build());
+
+    // Distributed, the region rows stay on their tasks, so neither aggregation
+    // by the ID shuffles.
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(parseSelect(query)).plan,
+        matchHiveScan("region")
+            .assignUniqueId("unique_id")
+            .nestedLoopJoin(
+                matchHiveScan("nation")
+                    .project({"n_regionkey", "true as marker1"})
+                    .broadcast(),
+                velox::core::JoinType::kLeft,
+                "r_regionkey > n_regionkey")
+            .streamingAggregation(
+                {"unique_id"},
+                {
+                    "count(*) filter (where marker1) as x",
+                    "arbitrary(r_regionkey) as r_regionkey",
+                })
+            .nestedLoopJoin(
+                matchHiveScan("supplier")
+                    .project({"s_suppkey", "true as marker2"})
+                    .broadcast(),
+                velox::core::JoinType::kLeft,
+                "r_regionkey > s_suppkey")
+            .streamingAggregation(
+                {"unique_id"},
+                {
+                    "count(*) filter (where marker2) as y",
+                    "arbitrary(x) as x",
+                })
+            .project({"x", "y"})
+            .gather()
             .build());
   }
 

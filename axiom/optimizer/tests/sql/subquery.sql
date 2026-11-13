@@ -562,3 +562,9 @@ SELECT 1 WHERE NOT EXISTS (SELECT a FROM t GROUP BY a LIMIT 1)
 ----
 -- The same, over a subquery with no rows.
 SELECT 1 WHERE NOT EXISTS (SELECT a FROM t WHERE a > 100 GROUP BY a LIMIT 1)
+----
+-- An EXISTS over an array built from each outer row.
+-- duckdb: SELECT a, b, a > 1 FROM t
+-- error_v1: Cannot resolve column name: a
+SELECT a, b, EXISTS (SELECT 1 FROM UNNEST(sequence(1, a)) AS w(e) WHERE e > 1)
+FROM t

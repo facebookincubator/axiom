@@ -210,3 +210,54 @@ FROM t WHERE a = 1 GROUP BY GROUPING SETS ((a, b), (a))
 -- A grouping set that omits the filtered key emits NULL for that key.
 SELECT CASE WHEN a = 1 THEN 10 ELSE 20 END
 FROM t WHERE a = 1 GROUP BY GROUPING SETS ((a), ())
+----
+-- Grouping on a key unique on one side of a join that repeats that side's rows:
+-- one row per key.
+SELECT x.k, count(*), sum(u.b)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+JOIN t u ON x.v / 10 % 3 = u.a % 3
+GROUP BY x.k
+----
+-- The same side padded by a RIGHT join.
+SELECT x.k, count(*), sum(u.b)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+RIGHT JOIN t u ON x.v / 10 % 3 = u.a % 3 AND u.b > 100
+GROUP BY x.k
+----
+-- Grouping on the key of the side a LEFT join pads.
+SELECT y.m, count(*), sum(u.b)
+FROM t u
+LEFT JOIN (SELECT a AS m, max(b) AS w FROM t GROUP BY a) y
+ON u.b = y.w
+GROUP BY y.m
+----
+-- A window partitioned by the key.
+SELECT x.k, u.b, sum(u.b) OVER (PARTITION BY x.k)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+JOIN t u ON x.v / 10 % 3 = u.a % 3
+----
+-- An ordered and a distinct aggregate by the key.
+SELECT x.k, array_agg(u.b ORDER BY u.b), count(DISTINCT u.b % 40)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+JOIN t u ON x.v / 10 % 3 = u.a % 3
+GROUP BY x.k
+----
+-- A scalar subquery per row of the side.
+SELECT x.k, (SELECT u.a FROM t u WHERE u.b = x.v)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+----
+-- The same where a row matches several rows: the single-row check fails.
+-- error: Scalar sub-query has returned multiple rows
+SELECT x.k, (SELECT u.b FROM t u WHERE u.a = x.k)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+----
+-- A scalar subquery with a LIMIT per row of the side.
+-- error_v1: LIMIT in a correlated scalar subquery is not supported yet
+SELECT x.k, (SELECT u.a FROM t u WHERE u.b = x.v LIMIT 2)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
+----
+-- A grouped subquery per row of the side, with one group per row. v1 fails an
+-- internal size check on this shape.
+-- error_v1: (0 vs. 1)
+SELECT x.k, (SELECT count(*) FROM t u WHERE u.b < x.v GROUP BY u.b < 0)
+FROM (SELECT a AS k, max(b) AS v FROM t GROUP BY a) x
