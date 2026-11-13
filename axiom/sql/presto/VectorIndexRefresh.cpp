@@ -18,15 +18,18 @@
 #include <fmt/format.h>
 #include <map>
 
+#include "axiom/sql/presto/CentroidPlanner.h"
 #include "axiom/sql/presto/ColumnExprs.h"
 
 namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
 using facebook::axiom::connector::VectorIndex;
+using facebook::velox::ARRAY;
 using facebook::velox::BIGINT;
 using facebook::velox::DOUBLE;
 using facebook::velox::MAP;
+using facebook::velox::REAL;
 using facebook::velox::TypePtr;
 using facebook::velox::VARCHAR;
 using facebook::velox::Variant;
@@ -35,6 +38,9 @@ using facebook::velox::common::vectorindex::VectorIndexKindName;
 using facebook::velox::common::vectorindex::VectorIndexMetricName;
 
 namespace {
+
+// The points each partition's codec is trained on, per cluster.
+constexpr int64_t kSamplesPerCluster{256};
 
 // The plans name the query's columns by these names and partitionNames(), so
 // they never collide with the plans' own columns.
@@ -161,6 +167,11 @@ lp::PlanBuilder selectedPartitions(
       .aggregate(ColumnExprs::of(partitions), {});
 }
 
+// Returns the key hash used for sampling and centroid seed order.
+lp::ExprApi keyHash() {
+  return lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey)));
+}
+
 // Returns a stratified sample of 'rows': about kSamplesPerCluster times the
 // number of clusters points of each partition, chosen by a hash of their keys,
 // so the sample is the same on every run. 'sizes' is partitionSizes(). The
@@ -171,11 +182,7 @@ lp::PlanBuilder sample(
     const std::vector<std::string>& partitions,
     const lp::PlanBuilder& sizes,
     const lp::PlanBuilder& rows) {
-  // The points each partition's codec is trained on, per cluster.
-  constexpr int64_t kSamplesPerCluster{256};
-  const auto hash = lp::Call(
-      "from_big_endian_64",
-      lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey))));
+  const auto hash = lp::Call("from_big_endian_64", keyHash());
   // The hashes are uniform over [-2^63, 2^63). The cutoff passes a share of
   // numSamples / num_rows of them.
   const double numSamples = kSamplesPerCluster * index.properties.numClusters;
@@ -187,32 +194,111 @@ lp::PlanBuilder sample(
       .filter(lp::Cast(DOUBLE(), hash) < cutoff);
 }
 
-// Returns the plan that trains a codec for each partition of 'rows' and writes
+// Returns the centroids 'planner' plans for each partition of the sample
+// 'makeSample' plans, with their columns named 'partitions', centroid_id and
+// coordinates.
+lp::PlanBuilder planCentroids(
+    const CentroidPlanner& planner,
+    const VectorIndex& index,
+    const std::vector<std::string>& partitions,
+    const std::function<lp::PlanBuilder()>& makeSample) {
+  // The planner sees the partition columns, key, embedding and sample_row, by
+  // position. Only the hash-filtered sample is ordered, and it is capped.
+  auto centroids = planner.plan(index.properties, [&] {
+    return makeSample()
+        .with({lp::Call("row_number")
+                   .over(
+                       lp::WindowSpec()
+                           .partitionBy(ColumnExprs::of(partitions))
+                           .orderBy(
+                               {lp::SortKey(keyHash()),
+                                lp::SortKey(lp::Col(kKey))}))
+                   .as("sample_row")})
+        .filter(
+            lp::Col("sample_row") <=
+            lp::Lit(kSamplesPerCluster * index.properties.numClusters))
+        .project(
+            ColumnExprs::concat(
+                ColumnExprs::of(partitions),
+                {lp::Col(kKey), lp::Col(kEmbedding), lp::Col("sample_row")}));
+  });
+
+  const auto types = centroids.outputTypes();
+  VELOX_CHECK_EQ(
+      types.size(),
+      partitions.size() + 2,
+      "Centroid planner must return the partition columns, a cluster ID and a centroid");
+  for (uint32_t i = 0; i < partitions.size(); ++i) {
+    VELOX_CHECK(
+        types[i]->equivalent(*index.partitionColumns->childAt(i)),
+        "Centroid planner changed a partition column's type");
+  }
+  VELOX_CHECK(
+      types[partitions.size()]->equivalent(*BIGINT()),
+      "Centroid planner must return BIGINT cluster IDs");
+  VELOX_CHECK(
+      types.back()->equivalent(*ARRAY(REAL())),
+      "Centroid planner must return ARRAY(REAL) centroids");
+
+  const auto columns = centroids.findOrAssignOutputNames();
+  std::vector<lp::ExprApi> named;
+  named.reserve(columns.size());
+  for (size_t i = 0; i < partitions.size(); ++i) {
+    named.push_back(columns[i].toCol().as(partitions[i]));
+  }
+  named.push_back(columns[partitions.size()].toCol().as("centroid_id"));
+  named.push_back(columns.back().toCol().as("coordinates"));
+  return centroids.project(named);
+}
+
+// Returns one codec per sampled partition: trained with vector_index_train,
+// or packed with vector_index_pack from the centroids of 'planner' if set.
+lp::PlanBuilder trainCodecs(
+    const VectorIndex& index,
+    const std::vector<std::string>& partitions,
+    const std::function<lp::PlanBuilder()>& makeSample,
+    const CentroidPlanner* planner) {
+  const auto metric =
+      std::string(VectorIndexMetricName::toName(index.properties.metric));
+  if (planner == nullptr) {
+    return makeSample().aggregate(
+        ColumnExprs::of(partitions),
+        {lp::Call(
+             "vector_index_train",
+             lp::Col(kEmbedding),
+             lp::Col(kKey),
+             lp::Lit(index.properties.numClusters),
+             lp::Lit(metric),
+             lp::Lit(Variant::map({}), MAP(VARCHAR(), VARCHAR())))
+             .as("codec")});
+  }
+
+  return planCentroids(*planner, index, partitions, makeSample)
+      .aggregate(
+          ColumnExprs::of(partitions),
+          {lp::Call(
+               "vector_index_pack",
+               lp::Col("centroid_id"),
+               lp::Col("coordinates"),
+               lp::Lit(metric),
+               lp::Lit(index.properties.numClusters),
+               lp::Lit(index.properties.dimension))
+               .as("codec")});
+}
+
+// Returns the plan that trains a codec for each sampled partition and writes
 // it to the codec table with the id 'codecId', with a NULL codec for each of
-// 'selected' that has no rows. 'sizes' is partitionSizes().
+// 'selected' that has no rows.
 lp::LogicalPlanNodePtr planTrain(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
-    const lp::PlanBuilder& sizes,
-    const lp::PlanBuilder& rows,
-    const lp::PlanBuilder& selected) {
+    const std::function<lp::PlanBuilder()>& makeSample,
+    const lp::PlanBuilder& selected,
+    const CentroidPlanner* planner) {
   auto codecs =
-      sample(index, partitions, sizes, rows)
-          .aggregate(
-              ColumnExprs::of(partitions),
-              {lp::Call(
-                   "vector_index_train",
-                   lp::Col(kEmbedding),
-                   lp::Col(kKey),
-                   lp::Lit(index.properties.numClusters),
-                   lp::Lit(
-                       VectorIndexMetricName::toName(index.properties.metric)),
-                   lp::Lit(
-                       Variant::map(std::map<Variant, Variant>{}),
-                       MAP(VARCHAR(), VARCHAR())))
-                   .as("codec")})
+      trainCodecs(index, partitions, makeSample, planner)
           .project(
               ColumnExprs::concat(
                   ColumnExprs::renamed(partitions, "t_"), lp::Col("codec")));
@@ -395,7 +481,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::function<lp::PlanBuilder()>& makeQuery,
-    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition) {
+    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition,
+    const CentroidPlanner* planner) {
   const auto& partitionColumns = index.partitionColumns->names();
   VELOX_CHECK(!partitionColumns.empty());
   const auto codecId = lp::Placeholder(BIGINT(), 1);
@@ -403,15 +490,22 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
   const auto makeRows = [&]() {
     return validRows(index, partitions, namedRows(partitions, makeQuery()));
   };
+  const auto makeSample = [&]() {
+    return sample(
+        index,
+        partitions,
+        partitionSizes(partitions, "n_", makeQuery()),
+        makeRows());
+  };
   return {
       .trainPlan = planTrain(
           index,
           connectorId,
           partitions,
           codecId,
-          partitionSizes(partitions, "n_", makeQuery()),
-          makeRows(),
-          selectedPartitions(partitions, makeQuery())),
+          makeSample,
+          selectedPartitions(partitions, makeQuery()),
+          planner),
       .buildPlan = planBuild(
           table,
           index,

@@ -202,6 +202,30 @@ TEST_F(VectorIndexRefreshTest, sample) {
       3'000);
 }
 
+// Partitions with fewer points than clusters use one centroid per point;
+// partitions at or above the cluster count have exactly that many centroids.
+TEST_F(VectorIndexRefreshTest, smallPartitions) {
+  createTable();
+  run("INSERT INTO t VALUES "
+      "(1, ARRAY[REAL '2', REAL '0'], 'a'), "
+      "(2, ARRAY[REAL '2', REAL '0'], 'b'), "
+      "(3, ARRAY[REAL '0', REAL '2'], 'b'), "
+      "(4, ARRAY[REAL '-2', REAL '0'], 'b'), "
+      "(5, ARRAY[REAL '2', REAL '0'], 'c'), "
+      "(6, ARRAY[REAL '2', REAL '1'], 'c'), "
+      "(7, ARRAY[REAL '0', REAL '2'], 'c'), "
+      "(8, ARRAY[REAL '-2', REAL '0'], 'c'), "
+      "(9, ARRAY[REAL '0', REAL '-2'], 'c')");
+  EXPECT_EQ(
+      fetchSingleInt64(
+          "REFRESH VECTOR INDEX i ON t WHERE ds IN ('a', 'b', 'c')"),
+      9);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT vector_count(codec) FROM t__i__codecs"), 7);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT vector_count(local_index) FROM t__i__index"), 9);
+}
+
 // A table partitioned by several columns gets a codec and local indexes for
 // each combination of their values, and a NULL codec and local index for a
 // combination with no valid rows.

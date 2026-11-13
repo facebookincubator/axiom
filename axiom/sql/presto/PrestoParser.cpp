@@ -3023,7 +3023,8 @@ SqlStatementPtr parseRefreshVectorIndex(
       [&]() { return planner.planVectorIndexRows(refresh, *index); },
       [&](lp::PlanBuilder storageScan) {
         return planner.addVectorIndexCondition(refresh, std::move(storageScan));
-      });
+      },
+      session->centroidPlanner().get());
 
   // The plans read the table, and the codec table to find each row's cluster.
   auto inputTables = planner.inputTables();

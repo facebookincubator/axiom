@@ -128,6 +128,12 @@ refresh is one index write, which runs two plans in order:
 2. Assigns each row to the nearest cluster of its partition's codec, and
    builds a local index for each cluster.
 
+The codec's k-means runs in `vector_index_train`, on one driver per partition.
+An engine with a k-means of its own can plan the centroids instead: an
+application gives the parser a `CentroidPlanner` (see `CentroidPlanner.h`),
+and the refresh packs the centroids it plans into each codec with
+`vector_index_pack`.
+
 The result is the number of embeddings written, summed over the local indexes.
 For a partition of 30 valid rows and 3 clusters, the refresh writes 3 local
 indexes holding 30 embeddings:

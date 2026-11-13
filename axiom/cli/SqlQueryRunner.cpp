@@ -257,15 +257,20 @@ SqlQueryRunner::SqlQueryRunner(
     velox::connector::ConnectorRegistry::Registry& connectorRegistry,
     const connector::ConnectorMetadataRegistry::Registry& metadataRegistry,
     folly::FunctionScheduler* progressScheduler,
-    bool useOptimizerV2)
+    bool useOptimizerV2,
+    std::shared_ptr<const presto::CentroidPlanner> centroidPlanner)
     : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency() * 2)},
       user_{std::move(user)},
       useOptimizerV2_{useOptimizerV2},
+      centroidPlanner_{std::move(centroidPlanner)},
       progressScheduler_{progressScheduler},
       connectorRegistry_{connectorRegistry},
       metadataRegistry_{metadataRegistry} {
   VELOX_USER_CHECK(!user_.empty(), "SqlQueryRunner user must be non-empty");
+  VELOX_USER_CHECK(
+      useOptimizerV2_ || centroidPlanner_ == nullptr,
+      "A centroid planner requires the v2 optimizer");
 }
 
 void SqlQueryRunner::initialize(
@@ -1012,7 +1017,8 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
                     options.queryId.value_or(queryIdGenerator_()), options),
       std::make_shared<velox::NoopRuntimeStatWriter>(),
       std::move(properties),
-      std::move(parserOptions));
+      std::move(parserOptions),
+      centroidPlanner_);
   auto prestoParser = std::make_unique<presto::PrestoParser>(
       defaultConnectorId, defaultSchema, std::move(parserSession));
   return prestoParser->parseMultiple(sql, /*enableTracing=*/false);

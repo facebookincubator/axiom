@@ -24,28 +24,39 @@
 
 namespace axiom::sql::presto {
 
+class CentroidPlanner;
+
 /// What the parser is given for one query: the query's context and its writer,
 /// plus the typed ParserOptions parsed from the parser's slice of the query's
-/// session properties.
+/// session properties, and the engine's centroid planner.
 class ParserSession final : public facebook::axiom::BaseSession {
  public:
   ParserSession(
       facebook::axiom::connector::ConnectorContextPtr context,
       std::shared_ptr<facebook::velox::BaseRuntimeStatWriter> statsWriter,
       facebook::axiom::connector::Properties properties,
-      ParserOptions options)
+      ParserOptions options,
+      std::shared_ptr<const CentroidPlanner> centroidPlanner = nullptr)
       : BaseSession(
             std::move(context),
             std::move(statsWriter),
             std::move(properties)),
-        options_{std::move(options)} {}
+        options_{std::move(options)},
+        centroidPlanner_{std::move(centroidPlanner)} {}
 
   const ParserOptions& options() const {
     return options_;
   }
 
+  /// The engine's planner of REFRESH VECTOR INDEX's centroids, or null to
+  /// train each codec with vector_index_train (see CentroidPlanner).
+  const std::shared_ptr<const CentroidPlanner>& centroidPlanner() const {
+    return centroidPlanner_;
+  }
+
  private:
   const ParserOptions options_;
+  const std::shared_ptr<const CentroidPlanner> centroidPlanner_;
 };
 
 using ParserSessionPtr = std::shared_ptr<ParserSession>;
