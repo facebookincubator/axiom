@@ -294,6 +294,7 @@ folly::dynamic columnDomainsToJson(
   folly::dynamic constraints = folly::dynamic::array;
   for (const auto& columnName : columnNames) {
     auto* connectorColumn = connectorTable.findColumn(columnName);
+    VELOX_CHECK_NOT_NULL(connectorColumn, "Column not found: {}", columnName);
     const auto& domain = domains.at(columnName);
     folly::dynamic constraint = folly::dynamic::object;
     constraint["columnName"] = columnName;
