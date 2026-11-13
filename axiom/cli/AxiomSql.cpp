@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
     runner.initialize(initializeConnectors);
 
     // Register after initialize() so the session configuration is available.
-    connectors.registerSystemConnector(runner.sessionConfig());
+    runner.registerSystemCatalog();
     connectors.registerFileConnector();
 
     // --catalog is only checked here because the system and file catalogs are
