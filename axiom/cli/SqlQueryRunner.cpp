@@ -902,6 +902,8 @@ SqlQueryRunner::co_run(std::string sql, RunOptions options) {
         completionInfo,
         statement->views(),
         statement->referencedTables());
+    // The context predates the check: parsing needed it.
+    context->setTokenProvider(runOptions.tokenProvider);
     cliWriter->addTiming(
         facebook::axiom::ComponentMetrics::kPermissionCheckWallNanos,
         std::chrono::microseconds(completionInfo.timing.checkPermission));
@@ -2166,12 +2168,14 @@ folly::coro::CleanableAsyncGenerator<velox::RowVectorPtr> co_drainQuery(
 connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
     std::string_view queryId,
     const RunOptions& options) const {
-  return std::make_shared<connector::ConnectorContext>(
+  auto context = std::make_shared<connector::ConnectorContext>(
       std::string(queryId),
       user_,
       collectConnectorProperties(*sessionConfig_, metadataRegistry_),
       options.connectorStatWriterProvider,
       metadataRegistry_);
+  context->setTokenProvider(options.tokenProvider);
+  return context;
 }
 
 connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
