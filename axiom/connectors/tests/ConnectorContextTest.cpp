@@ -140,6 +140,38 @@ TEST_F(ConnectorContextTest, sessionCarriesThisConnectorsProperties) {
   EXPECT_EQ(session->property("max_rows_per_scan"), "10");
 }
 
+class FakeTokenProvider : public velox::filesystems::TokenProvider {
+ public:
+  bool equals(const velox::filesystems::TokenProvider& other) const override {
+    return this == &other;
+  }
+
+  size_t hash() const override {
+    return 0;
+  }
+
+  std::shared_ptr<velox::filesystems::AccessToken> getToken(
+      const velox::filesystems::AccessTokenKey&) const override {
+    return nullptr;
+  }
+};
+
+// A session made before the permission check still sees the token provider
+// the engine sets after it.
+TEST_F(ConnectorContextTest, tokenProvider) {
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+  auto session = context->sessionFor("a");
+  EXPECT_EQ(session->tokenProvider(), nullptr);
+
+  auto provider = std::make_shared<FakeTokenProvider>();
+  context->setTokenProvider(provider);
+
+  EXPECT_EQ(session->tokenProvider(), provider);
+  EXPECT_EQ(context->sessionFor("b")->tokenProvider(), provider);
+}
+
 // The contract is that concurrent callers get one session, not merely one per
 // caller, so the writer is requested exactly once. Each caller also sees the
 // session's query state already initialized.

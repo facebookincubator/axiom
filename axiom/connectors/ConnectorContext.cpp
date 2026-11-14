@@ -63,6 +63,11 @@ void ConnectorContext::setQueryKind(QueryKind kind) {
   queryKind_->store(kind);
 }
 
+void ConnectorContext::setTokenProvider(
+    std::shared_ptr<velox::filesystems::TokenProvider> tokenProvider) {
+  *tokenProvider_->wlock() = std::move(tokenProvider);
+}
+
 StatWriterProvider ConnectorContext::noopStatWriterProvider() {
   return [](std::string_view) {
     return std::make_shared<velox::NoopRuntimeStatWriter>();
@@ -95,7 +100,8 @@ ConnectorSessionPtr ConnectorContext::sessionFor(std::string_view connectorId) {
         user_,
         propertiesFor(properties_, connectorId),
         std::move(statsWriter),
-        queryKind_);
+        queryKind_,
+        tokenProvider_);
     session->setQueryState(metadata->makeQueryState(*session));
     entry->session = std::move(session);
   });

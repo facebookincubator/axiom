@@ -100,6 +100,13 @@ class ConnectorContext {
   /// on, as does one made after.
   void setQueryKind(QueryKind kind);
 
+  /// Records the provider of the query's storage access tokens, e.g. the one
+  /// its permission check returns. Every session of this context shares it,
+  /// so connectors can authorize metadata I/O such as file listing as the
+  /// query.
+  void setTokenProvider(
+      std::shared_ptr<velox::filesystems::TokenProvider> tokenProvider);
+
   /// Returns 'connectorId's session, made on first use. Concurrent callers get
   /// the same one after its query state is initialized, and it is the same one
   /// for the life of this context. Fails if connector metadata is not
@@ -128,6 +135,9 @@ class ConnectorContext {
   // Shared with every session of this context.
   const std::shared_ptr<QueryKindState> queryKind_{
       std::make_shared<QueryKindState>()};
+  // Shared with every session of this context.
+  const std::shared_ptr<TokenProviderState> tokenProvider_{
+      std::make_shared<TokenProviderState>()};
   // The lock guards the map alone; a session is built under its entry's flag.
   folly::Synchronized<folly::F14FastMap<std::string, std::shared_ptr<Entry>>>
       sessions_;
