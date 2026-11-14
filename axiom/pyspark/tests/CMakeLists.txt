@@ -14,6 +14,7 @@
 
 add_executable(
   collagen_spark_velox_converter_test
+  SparkToAxiomAggregateTest.cpp
   SparkToAxiomLambdaTest.cpp
   SparkToAxiomSetOperationTest.cpp
   SparkToAxiomUnnestTest.cpp
@@ -30,9 +31,11 @@ target_link_libraries(
   axiom_logical_plan
   axiom_test_connector
   velox_connector_registry
+  velox_aggregates
   velox_functions_prestosql
   velox_memory
   velox_type
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
