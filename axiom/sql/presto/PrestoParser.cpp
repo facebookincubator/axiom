@@ -726,7 +726,9 @@ class RelationPlanner : public AstVisitor {
 
     auto metadata = session_->connectorMetadata(connectorId);
 
-    if (metadata->findTable(connectorTable) != nullptr) {
+    if (metadata->findTableForRead(
+            session_->context()->sessionFor(connectorId), connectorTable) !=
+        nullptr) {
       // Drop display names captured from a sibling FROM relation so
       // this table's columns aren't tagged with them.
       displayNames_.lastNames.clear();
@@ -2518,7 +2520,8 @@ static facebook::axiom::connector::TablePtr findTable(
 
   auto metadata = session->connectorMetadata(connectorId);
 
-  auto table = metadata->findTable(connectorTable);
+  auto table = metadata->findTableForRead(
+      session->context()->sessionFor(connectorId), connectorTable);
   checkTableFound(table, name);
   return table;
 }
@@ -2529,7 +2532,9 @@ static facebook::axiom::connector::TablePtr findTable(
     const std::string& connectorId,
     const facebook::axiom::SchemaTableName& connectorTable) {
   auto table =
-      session->connectorMetadata(connectorId)->findTable(connectorTable);
+      session->connectorMetadata(connectorId)
+          ->findTableForRead(
+              session->context()->sessionFor(connectorId), connectorTable);
   checkTableFound(table, name);
   return table;
 }
@@ -2609,7 +2614,8 @@ SqlStatementPtr parseShowColumns(
   };
 
   // A view's columns have no extra info or comments.
-  const auto table = metadata->findTable(connectorTable);
+  const auto table = metadata->findTableForRead(
+      session->context()->sessionFor(connectorId), connectorTable);
   facebook::velox::RowTypePtr schema;
   if (table != nullptr) {
     schema = table->type();
