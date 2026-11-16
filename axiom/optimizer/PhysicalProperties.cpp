@@ -214,8 +214,8 @@ bool Partitioning::sameClassAs(const Partitioning& other) const {
 
 bool PhysicalProperties::coLocates(PropertyScope scope, const ExprVector& keys)
     const {
-  const Partitioning& partition =
-      scope == PropertyScope::kGlobal ? globalPartition : driverPartition;
+  const bool global = scope == PropertyScope::kGlobal;
+  const Partitioning& partition = global ? globalPartition : driverPartition;
   if (partition.is(PartitionKind::kGather)) {
     return true;
   }
@@ -223,14 +223,15 @@ bool PhysicalProperties::coLocates(PropertyScope scope, const ExprVector& keys)
     return true;
   }
 
-  if (scope == PropertyScope::kGlobal &&
-      globalPartition.is(PartitionKind::kBroadcast)) {
+  if (global && globalPartition.is(PartitionKind::kBroadcast)) {
     return false;
   }
   const auto keySet = PlanObjectSet::fromObjects(keys);
-  return std::ranges::any_of(globalUnique, [&](const PlanObjectSet& key) {
+  const auto inKeys = [&](const PlanObjectSet& key) {
     return key.isSubset(keySet);
-  });
+  };
+  return std::ranges::any_of(globalUnique, inKeys) ||
+      (global && std::ranges::any_of(globalColocated, inKeys));
 }
 
 void PhysicalProperties::checkReferencesColumns(
@@ -267,6 +268,12 @@ void PhysicalProperties::checkReferencesColumns(
           key.isSubset(outputColumns),
           "Unique key references a column that is not in the node's output");
     }
+  }
+  for (const PlanObjectSet& key : globalColocated) {
+    VELOX_CHECK(!key.empty(), "Colocated key set must not be empty");
+    VELOX_CHECK(
+        key.isSubset(outputColumns),
+        "Colocated key references a column that is not in the node's output");
   }
 }
 
