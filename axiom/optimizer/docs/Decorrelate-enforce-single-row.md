@@ -89,13 +89,13 @@ Aggregate.** Specifically, if the SQL is
 global Agg → always 1 row per outer → ESR is unneeded. Translate
 emits `Apply.enforceSingleRow=false`.
 
-**Aggregate peel preserves ESR.** If translate set ESR=true (e.g.,
-because the SQL form looked scalar but body wasn't initially analyzed
-as having a global Agg), the Aggregate rule peels normally. At
-terminus, both the lifted Agg's per-`rn` grouping AND the
-`EnforceDistinct([rn])` wrap apply. EnforceDistinct becomes a no-op
-(each per-`rn` group already has 1 row from the lifted Agg). Correct
-but redundant; downstream optimization can elide.
+**Aggregate peel and ESR.** If translate set ESR=true on a body with a
+global Agg, the Aggregate rule peels normally, and the lifted Agg's
+per-`rn` grouping gives one row per outer: the peel builds no
+`EnforceDistinct`. A body with a GROUP BY can give an outer several
+rows, so under ESR the peel asserts the bound with an
+`EnforceDistinct([rn])` over the lifted Agg (after the HAVING, when
+there is one).
 
 **Filter / Project peel don't interact with ESR.** Both preserve
 per-outer cardinality (Filter peel: predicates absorbed into
@@ -144,11 +144,6 @@ peel checks.
 
 ## What this rule does NOT do
 
-- **Detect mid-iteration redundancy.** If body becomes an Aggregate
-  during iteration (peel reveals it), we don't drop ESR=true at that
-  point. The redundant wrap is left for downstream optimization.
-- **Lower ESR before terminus.** The flag stays on Apply until
-  terminus; no per-iteration wrap.
 - **Handle EnforceSingleRow node inside body.** Under the relaxed
   Apply contract, body doesn't contain EnforceSingleRow nodes —
   translate uses the flag instead. If iteration somehow encounters an
