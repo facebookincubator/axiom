@@ -2733,9 +2733,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // True when 'input' is not already arranged so that rows agreeing on 'keys'
   // share a task: a gathered input co-locates any keys; a global aggregate (no
-  // keys) needs a gather unless already gathered; otherwise the input must be
-  // partitioned on the keys. Callers that can avoid the shuffle by reading the
-  // source grouped ask `groupedRead` after this returns true.
+  // keys) needs a gather unless already gathered; otherwise the input's
+  // partitioning, or a unique or colocated key set, must keep each group on one
+  // task. Callers that can avoid the shuffle by reading the source grouped ask
+  // `groupedRead` after this returns true.
   bool needsShuffle(NodeCP input, const ExprVector& keys) const {
     if (holdsAllRows(input)) {
       return false;
@@ -2849,7 +2850,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          .globalGroupingSets = node->globalGroupingSets()});
   }
 
-  // Distributes a window: its input must be partitioned on the PARTITION BY
+  // Distributes a window: its input must be co-located on the PARTITION BY
   // keys so each partition is computed on one task (an unpartitioned window
   // gathers to one task). Runs bottom-up, so the input is already physically
   // planned.
@@ -2870,7 +2871,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
          outputFollowingInput(node, input)});
   }
 
-  // Distributes a row numbering: like a window, its input must be partitioned
+  // Distributes a row numbering: like a window, its input must be co-located
   // on the PARTITION BY keys (gather when none) so each partition is numbered
   // on one task.
   NodeCP rewriteRowNumber(const RowNumber* node, NoContext& context) override {
@@ -2890,7 +2891,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   }
 
   // Distributes a per-partition top-n (row_number / rank): its input must be
-  // partitioned on the PARTITION BY keys (gather when none). The rows each
+  // co-located on the PARTITION BY keys (gather when none). The rows each
   // driver ranks within the limit among its own rows still hold a top-n of the
   // whole partition: for rank and dense_rank, every row within the limit is
   // within it among its driver's rows, and row_number keeps a valid choice of
