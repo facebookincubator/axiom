@@ -317,8 +317,7 @@ TEST_P(HiveBucketedExecutionTest, joinRepartitionedAndBucketedInputs) {
       makeFlatVector<int64_t>(
           16, [](vector_size_t row) { return (row + 1) * 1'000; }),
   });
-  const auto result = runFragmentedPlan(distributedPlan);
-  exec::test::assertEqualResults({expected}, result.results);
+  runFragmentedPlan(distributedPlan).assertResults(expected);
 }
 
 TEST_P(HiveBucketedExecutionTest, semijoin) {
