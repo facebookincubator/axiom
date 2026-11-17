@@ -1829,32 +1829,50 @@ std::string createTemporaryDirectory(
   return resultPath;
 }
 
-// Appends to 'moves' the source and target of each file and partition
-// directory written to 'sourceDir', to move into 'targetDir'. A partition is
-// 'numPartitionLevels' directories deep, one per partition column, and one that
-// already exists fails. A directory less deep merges into an existing one.
-void collectWrittenFiles(
+// Returns the source and target of each file and partition directory written
+// to 'sourceDir', to move into 'targetDir'. A partition is 'numPartitionLevels'
+// directories deep, one per partition column, and 'partitionName' is the part
+// of its name above 'sourceDir'. One that already exists may be replaced only
+// if the writers report it as OVERWRITE in 'written'. A directory less deep
+// merges into an existing one.
+std::vector<std::pair<fs::path, fs::path>> collectWrittenFiles(
     const fs::path& sourceDir,
     const fs::path& targetDir,
     size_t numPartitionLevels,
-    std::vector<std::pair<fs::path, fs::path>>& moves) {
+    const folly::F14FastMap<std::string, PartitionWriteInfo>& written,
+    const fs::path& partitionName) {
   VELOX_CHECK(
       fs::is_directory(sourceDir),
       "Source directory does not exist or is not a directory: {}",
       sourceDir.string());
+  std::vector<std::pair<fs::path, fs::path>> moves;
   for (const auto& entry : fs::directory_iterator(sourceDir)) {
-    const auto destPath = targetDir / fs::relative(entry.path(), sourceDir);
+    const auto relativePath = fs::relative(entry.path(), sourceDir);
+    const auto destPath = targetDir / relativePath;
     if (numPartitionLevels > 1 && fs::is_directory(destPath)) {
-      collectWrittenFiles(
-          entry.path(), destPath, numPartitionLevels - 1, moves);
+      auto nested = collectWrittenFiles(
+          entry.path(),
+          destPath,
+          numPartitionLevels - 1,
+          written,
+          partitionName / relativePath);
+      moves.insert(moves.end(), nested.begin(), nested.end());
       continue;
     }
-    VELOX_USER_CHECK(
-        !fs::exists(destPath),
-        "Partition already exists: {}",
-        destPath.string());
+    if (numPartitionLevels == 1) {
+      const auto it = written.find((partitionName / relativePath).string());
+      VELOX_CHECK(
+          it != written.end(),
+          "Written partition has no commit message: {}",
+          destPath.string());
+      VELOX_USER_CHECK(
+          it->second.overwrite || !fs::exists(destPath),
+          "Partition already exists: {}",
+          destPath.string());
+    }
     moves.emplace_back(entry.path(), destPath);
   }
+  return moves;
 }
 
 // Check if directory exists.
@@ -2137,18 +2155,15 @@ LocalHiveConnectorMetadata::WriteStats LocalHiveConnectorMetadata::writeStats(
               static_cast<uint64_t>(partitionRows), std::move(groupStats[i])});
     }
   } else if (!partitioned) {
-    stats.files.emplace_back(
-        targetPath,
-        PersistedStats{
-            rows,
-            groupStats.empty() ? std::vector<ColumnStatistics>{}
-                               : std::move(groupStats[0])});
-  }
-  for (auto& [directory, written] : stats.files) {
-    if (auto existing = PersistedStats::read(directory)) {
+    PersistedStats written{
+        rows,
+        groupStats.empty() ? std::vector<ColumnStatistics>{}
+                           : std::move(groupStats[0])};
+    if (auto existing = PersistedStats::read(targetPath)) {
       existing->merge(written.numRows, written.columns);
       written = std::move(*existing);
     }
+    stats.files.emplace_back(targetPath, std::move(written));
   }
   return stats;
 }
@@ -2159,17 +2174,12 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
     const std::vector<velox::RowVectorPtr>& writeResults,
     velox::RowVectorPtr groupingKeys,
     std::vector<std::vector<ColumnStatistics>> groupStats) {
+  const auto written = PartitionWriteInfo::parse(writeResults);
   uint64_t rows = 0;
-  velox::DecodedVector decoded;
-  for (const auto& result : writeResults) {
-    decoded.decode(*result->childAt(0));
-    for (velox::vector_size_t i = 0; i < decoded.size(); ++i) {
-      if (decoded.isNullAt(i)) {
-        continue;
-      }
-      rows += decoded.valueAt<int64_t>(i);
-    }
+  for (const auto& [_, info] : written) {
+    rows += info.rowCount;
   }
+
   std::lock_guard<std::mutex> l(mutex_);
   const auto* hiveHandle = handle->asChecked<HiveConnectorWriteHandle>();
   const auto* veloxHandle =
@@ -2185,8 +2195,12 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
                                        .size();
   // Everything that can reject the write runs before the files move, so a
   // failed write leaves the table as it was.
-  std::vector<std::pair<fs::path, fs::path>> moves;
-  collectWrittenFiles(writePath, targetPath, numPartitionColumns, moves);
+  const auto moves = collectWrittenFiles(
+      writePath,
+      targetPath,
+      numPartitionColumns,
+      written,
+      /*partitionName=*/fs::path{});
 
   auto stats = writeStats(
       targetPath,
@@ -2204,12 +2218,15 @@ RowsFuture LocalHiveConnectorMetadata::finishWrite(
 
   // Commits the write. Only I/O errors can fail the steps from here on.
   for (const auto& [source, target] : moves) {
+    fs::remove_all(target);
     fs::create_directories(target.parent_path());
     fs::rename(source, target);
   }
+
   deleteDirectoryRecursive(writePath);
-  for (const auto& [directory, merged] : stats.files) {
-    PersistedStats::write(directory, merged);
+
+  for (const auto& [directory, fileStats] : stats.files) {
+    PersistedStats::write(directory, fileStats);
   }
 
   // loadTable reads the .schema and .stats files, populating in-memory

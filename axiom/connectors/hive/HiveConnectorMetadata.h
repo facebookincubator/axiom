@@ -369,6 +369,29 @@ class HiveConnectorWriteHandle : public ConnectorWriteHandle {
   std::vector<std::string> statsGroupingKeys_;
 };
 
+/// What the writers wrote to one partition, as their commit messages report
+/// it.
+struct PartitionWriteInfo {
+  /// Number of rows written.
+  int64_t rowCount{0};
+  /// Bytes written to storage, after encoding and compression.
+  int64_t size{0};
+  /// Bytes of the written rows in memory, before encoding and compression.
+  int64_t rawSize{0};
+  /// Number of files written.
+  int32_t fileCount{0};
+  /// Target file names the writers produced for this partition.
+  std::vector<std::string> fileNames;
+  /// Whether the writers report the partition's update mode as OVERWRITE: the
+  /// commit replaces the partition if it exists.
+  bool overwrite{false};
+
+  /// Parses the commit messages in the writers' 'results', keyed by partition
+  /// name: "" for an unpartitioned table.
+  static folly::F14FastMap<std::string, PartitionWriteInfo> parse(
+      const std::vector<velox::RowVectorPtr>& results);
+};
+
 /// A key the rows of a bucket are sorted by. A `sorted_by` entry names the
 /// key's column and, optionally, a direction, as in 'ds DESC'; ascending is
 /// the default. Nulls go where the direction puts them: first ascending and
@@ -461,6 +484,10 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       : hiveConnector_(hiveConnector),
         includeHiddenColumns_{includeHiddenColumns} {}
 
+  /// Hands an INSERT to the writers as a write to an existing table, so they
+  /// report the update mode of each partition the commit applies: OVERWRITE
+  /// when the Hive session property 'insert_existing_partitions_behavior'
+  /// says so.
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,
       const TablePtr& table,
