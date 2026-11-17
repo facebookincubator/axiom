@@ -485,9 +485,10 @@ class LocalHiveConnectorMetadata : public HiveConnectorMetadata {
 
   // The stats a write persists and the partition directories it adds.
   struct WriteStats {
-    // Each .stats file to write, by directory, merged with the stats of prior
-    // writes: one per partition, none for a partitioned write of no rows, or
-    // one in the table directory for an unpartitioned table.
+    // Each .stats file to write, by directory: one per partition the write
+    // creates or replaces, none for a partitioned write of no rows, or one in
+    // the table directory for an unpartitioned table, merged with the stats of
+    // prior writes since such an insert appends.
     std::vector<std::pair<std::string, PersistedStats>> files;
     std::vector<fs::path> partitions;
   };

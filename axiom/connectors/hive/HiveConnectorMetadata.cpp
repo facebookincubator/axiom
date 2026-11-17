@@ -21,6 +21,8 @@
 #include <folly/Conv.h>
 #include <folly/Expected.h>
 #include <folly/String.h>
+#include <folly/json/dynamic.h>
+#include <folly/json/json.h>
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
@@ -773,11 +775,14 @@ std::string HiveDeleteWriteHandle::toString() const {
 namespace {
 std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
     const std::string& targetDirectory,
-    const std::optional<std::string>& writeDirectory) {
+    const std::optional<std::string>& writeDirectory,
+    WriteKind kind) {
   return std::make_shared<velox::connector::hive::LocationHandle>(
       targetDirectory,
       writeDirectory.value_or(targetDirectory),
-      velox::connector::hive::LocationHandle::TableType::kNew);
+      kind == WriteKind::kInsert
+          ? velox::connector::hive::LocationHandle::TableType::kExisting
+          : velox::connector::hive::LocationHandle::TableType::kNew);
 }
 
 // Returns the filters selecting the partitions to remove, or why the rows the
@@ -922,10 +927,12 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   // Resolving one is not free: it can leave state behind.
   auto locationHandle = explain
       ? makeLocationHandle(/*targetDirectory=*/"",
-                           /*writeDirectory=*/std::nullopt)
+                           /*writeDirectory=*/std::nullopt,
+                           kind)
       : makeLocationHandle(
             prepareWriteLocation(session, table->name()),
-            makeStagingDirectory(table->name()));
+            makeStagingDirectory(table->name()),
+            kind);
 
   auto veloxHandle =
       std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
@@ -941,6 +948,61 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
       velox::exec::TableWriteTraits::outputType(std::nullopt),
       table,
       kind);
+}
+
+// static
+folly::F14FastMap<std::string, PartitionWriteInfo> PartitionWriteInfo::parse(
+    const std::vector<velox::RowVectorPtr>& results) {
+  using velox::connector::hive::HiveCommitMessage;
+  using velox::connector::hive::WriterParameters;
+  static const auto kOverwrite = WriterParameters::updateModeToString(
+      WriterParameters::UpdateMode::kOverwrite);
+
+  folly::F14FastMap<std::string, PartitionWriteInfo> writeResult;
+  for (const auto& result : results) {
+    auto* fragments =
+        result->childAt(1)->as<velox::SimpleVector<velox::StringView>>();
+    for (velox::vector_size_t i = 0; i < result->size(); ++i) {
+      if (fragments->isNullAt(i)) {
+        continue;
+      }
+      folly::dynamic fragment;
+      try {
+        const auto value = fragments->valueAt(i);
+        fragment =
+            folly::parseJson(folly::StringPiece(value.data(), value.size()));
+      } catch (const folly::json::parse_error& e) {
+        VELOX_FAIL("Failed to parse write result fragment JSON: {}", e.what());
+      }
+      VELOX_CHECK_EQ(fragment.count(HiveCommitMessage::kName), 1);
+      auto& info = writeResult[fragment[HiveCommitMessage::kName].asString()];
+      info.rowCount +=
+          fragment.getDefault(HiveCommitMessage::kRowCount, 0).asInt();
+      info.size +=
+          fragment.getDefault(HiveCommitMessage::kOnDiskDataSizeInBytes, 0)
+              .asInt();
+      info.rawSize +=
+          fragment.getDefault(HiveCommitMessage::kInMemoryDataSizeInBytes, 0)
+              .asInt();
+      info.overwrite =
+          fragment.getDefault(HiveCommitMessage::kUpdateMode, "").asString() ==
+          kOverwrite;
+      if (fragment.count(HiveCommitMessage::kFileWriteInfos)) {
+        const auto& fileWriteInfos =
+            fragment[HiveCommitMessage::kFileWriteInfos];
+        info.fileCount += static_cast<int32_t>(fileWriteInfos.size());
+        for (const auto& fileWriteInfo : fileWriteInfos) {
+          auto targetFileName =
+              fileWriteInfo.getDefault(HiveCommitMessage::kTargetFileName, "")
+                  .asString();
+          if (!targetFileName.empty()) {
+            info.fileNames.push_back(std::move(targetFileName));
+          }
+        }
+      }
+    }
+  }
+  return writeResult;
 }
 
 std::vector<SortKey> SortKey::parse(const std::vector<std::string>& entries) {

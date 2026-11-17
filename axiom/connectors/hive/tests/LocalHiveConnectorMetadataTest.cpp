@@ -21,6 +21,7 @@
 #include "axiom/runner/tests/LocalRunnerTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -161,8 +162,22 @@ class LocalHiveConnectorMetadataTest
   }
 
   static ConnectorSessionPtr makeSession() {
-    return makeTestContext("test")->sessionFor(
-        velox::exec::test::kHiveConnectorId);
+    return makeSession(Properties{});
+  }
+
+  static ConnectorSessionPtr makeSession(Properties properties) {
+    return makeTestContext(
+               "test",
+               "test",
+               {{velox::exec::test::kHiveConnectorId, std::move(properties)}})
+        ->sessionFor(velox::exec::test::kHiveConnectorId);
+  }
+
+  void writeToTable(
+      const TablePtr& table,
+      const RowVectorPtr& values,
+      WriteKind kind) {
+    writeToTable(table, values, kind, Properties{});
   }
 
   /// Write the specified data to the table with a TableWrite operation, in the
@@ -170,13 +185,16 @@ class LocalHiveConnectorMetadataTest
   /// only kCreate (new table) and kInsert (existing table) writes are
   /// supported. A write to a partitioned table reports one stats group per
   /// partition, as the engine's does (see ConnectorMetadata::finishWrite).
+  /// 'properties' are the Hive connector's session properties, which the
+  /// connector metadata and the writers both see.
   void writeToTable(
       const TablePtr& table,
       const RowVectorPtr& values,
-      WriteKind kind) {
+      WriteKind kind,
+      const Properties& properties) {
     std::string outputPath = localTablePath(table->name());
     auto groupingKeys = partitionGroups(table, values);
-    auto session = makeSession();
+    auto session = makeSession(properties);
     auto handle = metadata_->beginWrite(
         session,
         table,
@@ -190,7 +208,12 @@ class LocalHiveConnectorMetadataTest
                     .insertHandle(handle->veloxHandle())
                     .endTableWriter()
                     .planNode();
-    auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool());
+    exec::test::AssertQueryBuilder queryBuilder(plan);
+    for (const auto& [key, value] : properties) {
+      queryBuilder.connectorSessionProperty(
+          velox::exec::test::kHiveConnectorId, key, value);
+    }
+    auto result = queryBuilder.copyResults(pool());
     metadata_
         ->finishWrite(
             session,
@@ -202,12 +225,32 @@ class LocalHiveConnectorMetadataTest
         .get();
   }
 
-  /// Inserts 'values' into the existing table 'name'.
   void insertInto(std::string_view name, const RowVectorPtr& values) {
+    insertInto(name, values, Properties{});
+  }
+
+  /// Inserts 'values' into the existing table 'name' with the Hive connector
+  /// session 'properties'.
+  void insertInto(
+      std::string_view name,
+      const RowVectorPtr& values,
+      const Properties& properties) {
     writeToTable(
         metadata_->findTable(qualifiedName(std::string(name))),
         values,
-        WriteKind::kInsert);
+        WriteKind::kInsert,
+        properties);
+  }
+
+  /// Inserts 'values' into the existing table 'name', replacing the
+  /// partitions it writes.
+  void insertOverwrite(std::string_view name, const RowVectorPtr& values) {
+    insertInto(
+        name,
+        values,
+        {{velox::connector::hive::HiveConfig::
+              kInsertExistingPartitionsBehaviorSession,
+          "overwrite"}});
   }
 
   // Returns the stats groups of writing 'values' to 'table': for a partitioned
@@ -272,14 +315,14 @@ class LocalHiveConnectorMetadataTest
   /// to be read, for which all data must belong to the same partition.
   void compareTableData(
       const std::string& tableName,
-      const RowVectorPtr& expectedData,
+      const std::vector<RowVectorPtr>& expectedData,
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys) {
     std::string path = localTablePath(qualifiedName(tableName));
     auto files = getDataFiles(path);
     auto table = metadata_->findTable(qualifiedName(tableName));
     auto results = readFiles(table, files, partitionKeys);
-    exec::test::assertEqualResults({expectedData}, {results});
+    exec::test::assertEqualResults(expectedData, {results});
   }
 
   static std::vector<std::string> getDataFiles(const std::string& path) {
@@ -596,7 +639,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createTable) {
   }
 
   compareTableLayout(table, metadata_->findTable(qualifiedName("test")));
-  compareTableData("test", data, {{"ds", partition}});
+  compareTableData("test", {data}, {{"ds", partition}});
 }
 
 TEST_F(LocalHiveConnectorMetadataTest, invalidSortedBy) {
@@ -937,7 +980,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createEmptyTable) {
   compareTableLayout(table, metadata_->findTable(qualifiedName("test_empty")));
   compareTableData(
       "test_empty",
-      emptyData,
+      {emptyData},
       /*partitionKeys=*/{});
 }
 
@@ -978,7 +1021,9 @@ TEST_F(LocalHiveConnectorMetadataTest, commentsAndPrimaryKey) {
 }
 
 // A table created empty and then inserted into holds and reports the inserted
-// rows, partitioned or not.
+// rows, partitioned or not. With insert_existing_partitions_behavior set to
+// OVERWRITE, a second insert replaces the partition of a partitioned table and
+// appends to an unpartitioned one.
 TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
   auto tableType =
       ROW({{"key1", BIGINT()}, {"key2", BIGINT()}, {"ds", VARCHAR()}});
@@ -1018,7 +1063,17 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
     if (partitioned) {
       partitionKeys.emplace("ds", "2022-09-01");
     }
-    compareTableData(name, insertData, partitionKeys);
+    compareTableData(name, {insertData}, partitionKeys);
+
+    insertOverwrite(name, insertData);
+    std::vector<RowVectorPtr> expected{insertData};
+    if (!partitioned) {
+      expected.push_back(insertData);
+    }
+    EXPECT_EQ(
+        metadata_->findTable(qualifiedName(name))->numRows(),
+        expected.size() * kInsertSize);
+    compareTableData(name, expected, partitionKeys);
   }
 
   VELOX_ASSERT_THROW(
@@ -1035,7 +1090,8 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
 
 // With two partition columns, an insert adds a partition that shares the
 // value of the first partition column with an existing one. An insert into a
-// partition that exists fails and adds none of its partitions.
+// partition that exists fails and adds none of its partitions, unless the
+// session asks to overwrite.
 TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
   const std::string tableName{"test_insert_partitions"};
   const auto tableType =
@@ -1084,6 +1140,30 @@ TEST_F(LocalHiveConnectorMetadataTest, insertIntoPartitions) {
     SCOPED_TRACE(hour);
     EXPECT_FALSE(
         std::filesystem::exists(fmt::format("{}/hr={}", dsPath, hour)));
+  }
+
+  // With insert_existing_partitions_behavior set to OVERWRITE, the same write
+  // replaces hr=01, adds the new partitions and leaves hr=02 as it was.
+  insertOverwrite(tableName, mixed);
+  const auto table = metadata_->findTable(qualifiedName(tableName));
+  EXPECT_EQ(table->numRows(), 6 * kInsertSize);
+  const auto hourData = [&](int32_t index) {
+    return std::static_pointer_cast<RowVector>(
+        mixed->slice(index * kInsertSize, kInsertSize));
+  };
+  const std::vector<std::pair<std::string, RowVectorPtr>> expected{
+      {"01", hourData(2)},
+      {"02", makeData("02")},
+      {"03", hourData(0)},
+  };
+  for (const auto& [hour, data] : expected) {
+    SCOPED_TRACE(hour);
+    exec::test::assertEqualResults(
+        {data},
+        {readFiles(
+            table,
+            getDataFiles(fmt::format("{}/hr={}", dsPath, hour)),
+            {{"ds", "2022-09-01"}, {"hr", hour}})});
   }
 }
 
