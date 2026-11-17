@@ -22,6 +22,7 @@
 // - SessionConfig: set, get, reset, getAll, type validation, all()
 
 #include "axiom/common/SessionConfig.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -39,6 +40,11 @@ class TestConfigProvider : public ConfigProvider {
         {"count", ConfigPropertyType::kInteger, "10", "An integer count."},
         {"ratio", ConfigPropertyType::kDouble, "0.5", "A double ratio."},
         {"label", ConfigPropertyType::kString, std::nullopt, "A string label."},
+        {"fixed_flag",
+         ConfigPropertyType::kBoolean,
+         "true",
+         "A fixed flag.",
+         false},
     };
   }
 
@@ -142,6 +148,32 @@ TEST_F(SessionConfigTest, allEntries) {
   auto entry = findEntry("count");
   EXPECT_EQ(entry.currentValue, "42");
   EXPECT_TRUE(entry.isOverridden);
+}
+
+TEST_F(SessionConfigTest, fixedProperty) {
+  EXPECT_EQ(config_->effectiveValue("test.fixed_flag"), "true");
+  EXPECT_EQ(config_->effectiveValues("test").at("fixed_flag"), "true");
+  EXPECT_THAT(
+      config_->fixedValues("test"),
+      testing::UnorderedElementsAre(testing::Pair("fixed_flag", "true")));
+  EXPECT_THAT(
+      config_->all(),
+      testing::Not(testing::Contains(testing::Truly([](const auto& entry) {
+        return entry.property.name == "fixed_flag";
+      }))));
+
+  VELOX_ASSERT_THROW(
+      config_->set("test.fixed_flag", "false"),
+      "Session property cannot be overridden: test.fixed_flag");
+  VELOX_ASSERT_THROW(
+      config_->reset("test.fixed_flag"),
+      "Session property cannot be overridden: test.fixed_flag");
+  VELOX_ASSERT_THROW(
+      config_->validate("test.fixed_flag", "false"),
+      "Session property cannot be overridden: test.fixed_flag");
+  VELOX_ASSERT_THROW(
+      config_->validate("test.fixed_flag"),
+      "Session property cannot be overridden: test.fixed_flag");
 }
 
 TEST_F(SessionConfigTest, normalize) {

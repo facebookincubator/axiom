@@ -90,13 +90,26 @@ struct NormalizedAndDefault {
   }
 };
 
+// Resolves a property that may be changed by a session.
+ConfigRegistry::Resolution resolveSessionProperty(
+    const ConfigRegistry& registry,
+    std::string_view qualifiedName) {
+  auto resolved = registry.resolve(qualifiedName);
+  VELOX_USER_CHECK(
+      resolved.property.sessionOverridable,
+      "Session property cannot be overridden: {}",
+      qualifiedName);
+  return resolved;
+}
+
 // Resolves 'qualifiedName' and normalizes 'value'.
-// Throws if 'qualifiedName' is not found or 'value' is invalid.
+// Throws if 'qualifiedName' is not found, a session may not override it, or
+// 'value' is invalid.
 NormalizedAndDefault resolveAndNormalize(
     const ConfigRegistry& registry,
     std::string_view qualifiedName,
     std::string_view value) {
-  auto resolved = registry.resolve(qualifiedName);
+  auto resolved = resolveSessionProperty(registry, qualifiedName);
   auto normalized = normalizeType(qualifiedName, resolved.property.type, value);
   normalized = resolved.provider->normalize(resolved.property.name, normalized);
   return {std::move(normalized), std::move(resolved.property.defaultValue)};
@@ -137,8 +150,7 @@ bool SessionConfig::set(
 }
 
 bool SessionConfig::reset(std::string_view qualifiedName) {
-  // Verify property exists.
-  registry_->resolve(qualifiedName);
+  resolveSessionProperty(*registry_, qualifiedName);
   return overrides_.erase(qualifiedName) > 0;
 }
 
@@ -149,7 +161,7 @@ void SessionConfig::validate(
 }
 
 void SessionConfig::validate(std::string_view qualifiedName) const {
-  registry_->resolve(qualifiedName);
+  resolveSessionProperty(*registry_, qualifiedName);
 }
 
 std::optional<std::string> SessionConfig::effectiveValue(
@@ -180,9 +192,24 @@ folly::F14FastMap<std::string, std::string> SessionConfig::effectiveValues(
   return result;
 }
 
+folly::F14FastMap<std::string, std::string> SessionConfig::fixedValues(
+    std::string_view prefix) const {
+  folly::F14FastMap<std::string, std::string> result;
+  for (const auto& entry : registry_->all()) {
+    if (entry.prefix == prefix && !entry.property.sessionOverridable &&
+        entry.property.defaultValue.has_value()) {
+      result[entry.property.name] = entry.property.defaultValue.value();
+    }
+  }
+  return result;
+}
+
 std::vector<SessionConfig::Entry> SessionConfig::all() const {
   std::vector<Entry> result;
   for (const auto& registryEntry : registry_->all()) {
+    if (!registryEntry.property.sessionOverridable) {
+      continue;
+    }
     auto qualifiedName =
         registryEntry.prefix + "." + registryEntry.property.name;
     auto it = overrides_.find(qualifiedName);

@@ -32,7 +32,7 @@ class SessionConfig {
 
   /// Sets a property by prefix-qualified name. Validates type and
   /// delegates to provider for domain validation. Returns true if
-  /// the value changed.
+  /// the value changed. Throws if a session may not override the property.
   bool set(std::string_view qualifiedName, std::string_view value);
 
   /// Convenience overload: set("prefix", "name", "value") is equivalent to
@@ -41,15 +41,17 @@ class SessionConfig {
   set(std::string_view prefix, std::string_view name, std::string_view value);
 
   /// Resets a property to its default. Returns true if the value
-  /// changed.
+  /// changed. Throws if a session may not override the property.
   bool reset(std::string_view qualifiedName);
 
-  /// Validates that 'qualifiedName' names a known property and that 'value' is
-  /// a valid value for it (type and domain validation). Throws on failure.
+  /// Validates that 'qualifiedName' names a known property a session may
+  /// override and that 'value' is a valid value for it (type and domain
+  /// validation). Throws on failure.
   /// Does not modify the session.
   void validate(std::string_view qualifiedName, std::string_view value) const;
 
-  /// Validates that 'qualifiedName' names a known property. Throws on failure.
+  /// Validates that 'qualifiedName' names a known property a session may
+  /// override. Throws on failure.
   /// Does not modify the session.
   void validate(std::string_view qualifiedName) const;
 
@@ -61,6 +63,11 @@ class SessionConfig {
   /// Returns effective values (override or default) for all properties
   /// under a component prefix as a flat map.
   folly::F14FastMap<std::string, std::string> effectiveValues(
+      std::string_view prefix) const;
+
+  /// Returns the values of properties under a component prefix that sessions
+  /// cannot override.
+  folly::F14FastMap<std::string, std::string> fixedValues(
       std::string_view prefix) const;
 
   /// A property with its current effective value for SHOW SESSION output.
@@ -76,7 +83,7 @@ class SessionConfig {
     bool isOverridden;
   };
 
-  /// Returns all properties with current values.
+  /// Returns the properties a session may override, with current values.
   std::vector<Entry> all() const;
 
  private:
