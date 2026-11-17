@@ -93,8 +93,7 @@ TEST_P(TestConnectorQueryTest, selectFiltered) {
   {
     auto logicalPlan =
         lp::PlanBuilder(context).tableScan("t", {"a"}).filter("a > 0").build();
-    auto results = runVelox(logicalPlan, options_);
-    exec::test::assertEqualResults(results.results, {expected});
+    runVelox(logicalPlan, options_).assertResults(expected);
   }
 
   // Filter on a column that is not selected: it must not appear in the output.
@@ -104,8 +103,7 @@ TEST_P(TestConnectorQueryTest, selectFiltered) {
                            .filter("b > 0")
                            .project({"a"})
                            .build();
-    auto results = runVelox(logicalPlan, options_);
-    exec::test::assertEqualResults(results.results, {expected});
+    runVelox(logicalPlan, options_).assertResults(expected);
   }
 }
 
@@ -182,8 +180,7 @@ TEST_P(TestConnectorQueryTest, wideOrChainExecutes) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2})});
   auto logicalPlan = parseSelect(sql);
-  auto results = runVelox(logicalPlan, options_);
-  exec::test::assertEqualResults(results.results, {expected});
+  runVelox(logicalPlan, options_).assertResults(expected);
 }
 
 // Wide correlated ORs produce per-column filters without introducing deeply
@@ -208,8 +205,7 @@ TEST_P(TestConnectorQueryTest, wideCorrelatedOrChainExecutes) {
       makeFlatVector<int64_t>({0, 1, 2}),
   });
   auto logicalPlan = parseSelect(sql);
-  auto results = runVelox(logicalPlan, options_);
-  exec::test::assertEqualResults(results.results, {expected});
+  runVelox(logicalPlan, options_).assertResults(expected);
 }
 
 AXIOM_INSTANTIATE_V1_V2(TestConnectorQueryTest);

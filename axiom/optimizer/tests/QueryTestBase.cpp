@@ -49,6 +49,10 @@ using namespace facebook::velox;
 
 namespace facebook::axiom::optimizer::test {
 
+void TestResult::assertResults(const velox::RowVectorPtr& expected) const {
+  velox::exec::test::assertEqualResults({expected}, results);
+}
+
 exec::PlanNodeStats TestResult::planNodeStats(
     const core::PlanNodeId& nodeId) const {
   const auto& stages = runner->stages();
@@ -676,10 +680,19 @@ std::string QueryTestBase::getTestDataPath(const std::string& filename) {
 
 std::shared_ptr<velox::core::QueryCtx> QueryTestBase::makeQueryCtx(
     const std::string& queryId) {
+  std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
+      connectorConfigs;
+  for (const auto& [connectorId, properties] : connectorSessionProperties_) {
+    connectorConfigs.emplace(
+        connectorId,
+        std::make_shared<velox::config::ConfigBase>(
+            std::unordered_map<std::string, std::string>(
+                properties.begin(), properties.end())));
+  }
   auto queryCtx = velox::core::QueryCtx::create(
       executor_.get(),
       velox::core::QueryConfig(folly::copy(config_)),
-      /*connectorConfigs=*/{},
+      std::move(connectorConfigs),
       velox::cache::AsyncDataCache::getInstance(),
       /*pool=*/nullptr,
       /*spillExecutor=*/nullptr,

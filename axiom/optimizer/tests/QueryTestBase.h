@@ -95,6 +95,9 @@ struct TestResult {
     return getOnlyResult().template value<T>();
   }
 
+  /// Asserts that 'results' hold the rows of 'expected', in any order.
+  void assertResults(const velox::RowVectorPtr& expected) const;
+
   /// Returns the stats of plan node 'nodeId', summed over the tasks of the
   /// stage that runs it. Throws if no stage runs the node.
   velox::exec::PlanNodeStats planNodeStats(
@@ -440,7 +443,7 @@ class QueryTestBase : public velox::exec::test::HiveConnectorTestBase {
   OptimizerOptions optimizerOptions_;
 
   /// Sets connector session property 'key'='value' for 'connectorId', applied
-  /// to the OptimizerSession of subsequently planned queries.
+  /// to the connector metadata and the Velox connector of subsequent queries.
   void setConnectorSession(
       const std::string& connectorId,
       const std::string& key,
