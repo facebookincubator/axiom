@@ -145,3 +145,14 @@ SELECT DISTINCT ds FROM v
 SELECT a FROM v WHERE ds IS NULL
 ----
 SELECT ds, count(*) FROM v GROUP BY ds
+----
+-- An EXISTS whose subquery is one row once its partition scan is known empty:
+-- its condition is NULL for one row of u, which reads false.
+-- disabled_v1: v1 returns NULL where the condition is NULL
+SELECT d,
+    EXISTS (
+        SELECT 1
+        FROM (VALUES (1)) w(k)
+        LEFT JOIN (SELECT a FROM t WHERE ds = '1900-01-01') x ON true
+        WHERE nullif(u.d, '2025-01-03') > '2025-01-01')
+FROM u

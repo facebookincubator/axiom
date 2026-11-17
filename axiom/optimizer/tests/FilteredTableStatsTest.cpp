@@ -341,6 +341,33 @@ TEST_P(FilteredTableStatsTest, emptyPartition) {
     SCOPED_TRACE(query);
     AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
   }
+
+  // An EXISTS whose body is one row once its scan is known empty becomes its
+  // condition, with NULL as false. Only estimation knows the scan is empty, so
+  // the join survives pushdown.
+  {
+    SCOPED_TRACE("EXISTS over a known-empty scan");
+    const std::string_view sql =
+        "SELECT n_name, EXISTS ("
+        "    SELECT 1 "
+        "    FROM (VALUES 1) w(c) "
+        "    LEFT JOIN (SELECT a FROM t WHERE k = 7) x ON true "
+        "    WHERE nullif(n_nationkey, 21) > 20) AS e "
+        "FROM nation";
+    verifyOptimization(
+        *parseSelect(sql), Optimizer::Pass::kPushdownAndPrune, [](NodeCP root) {
+          const auto text = root->toString();
+          EXPECT_NE(text.find("LEFT SEMI (PROJECT)"), std::string::npos)
+              << text;
+        });
+    auto matcher =
+        matchHiveScan("nation")
+            .project(
+                {"n_name",
+                 "coalesce(nullif(n_nationkey, 21) > 20, false) as e"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(sql), matcher);
+  }
 }
 
 // Verifies that a partition key filter combined with a data column filter

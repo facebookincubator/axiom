@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/NodeSimplifier.h"
 #include "axiom/optimizer/NonNullOutput.h"
@@ -38,8 +39,13 @@ namespace facebook::axiom::optimizer {
 /// 6. Outputs: one output per distinct source; literal outputs become
 ///    substitutions.
 /// 7. An inner cross join with one row without columns becomes the other
-///    input. A semi or anti join with such a build side becomes the probe, or
-///    no rows.
+///    input. A keyless semi or anti join with such a build side, other than a
+///    null-aware one with a filter, becomes an expression of its probe, where a
+///    row matches iff the filter is true:
+///    - semi filter: the probe rows that match;
+///    - anti: the probe rows that do not match, or no rows without a filter;
+///    - semi project: the probe with a mark: the literal-key comparison when
+///      there is one, otherwise whether the row matches.
 /// 8. The join, or for a null-aware semi project whose mark depends on the
 ///    build side having rows, a join that marks existence and a projection of
 ///    the mark.
@@ -82,8 +88,16 @@ class NodeSimplifier::JoinSimplifier {
   // NULLs for the other.
   SimplifiedNode unmatchedFullInputs();
 
+  // The expression each output reads over the probe side: its source, or
+  // 'marker' for the mark.
+  ExprVector probeOutputs(ExprCP marker) const;
+
   // The probe side with 'marker' as the mark column.
   SimplifiedNode probeWithMarker(ExprCP marker);
+
+  // The probe side with 'marker' computed into the mark column, so that a
+  // nondeterministic marker is evaluated once per row for all its readers.
+  SimplifiedNode probeWithMarkerColumn(ExprCP marker);
 
   // The result when no pair of rows matches.
   SimplifiedNode noMatch();
@@ -141,8 +155,8 @@ class NodeSimplifier::JoinSimplifier {
       NodeCP singleRow,
       NodeCP other);
 
-  // Replaces a keyless, filterless semi or anti join whose build side is one
-  // row without columns.
+  // Replaces a keyless semi or anti join whose build side is one row without
+  // columns. A probe row matches iff the join filter is true for it.
   std::optional<SimplifiedNode> eliminateSingleRowBuild();
 
   // Builds the join of a null-aware semi project whose mark depends on the
@@ -346,23 +360,46 @@ NodeSimplifier::JoinSimplifier::unmatchedFullInputs() {
       {}};
 }
 
+ExprVector NodeSimplifier::JoinSimplifier::probeOutputs(ExprCP marker) const {
+  const SimplifiedNode& probe = probeIsLeft_ ? left_ : right_;
+  VELOX_CHECK(!probe.empty());
+  const auto probeColumns = PlanObjectSet::fromObjects(providedColumns(probe));
+  ExprVector outputs;
+  outputs.reserve(key_.outputColumns.size());
+  for (ColumnCP source : key_.effectiveSourceColumns()) {
+    outputs.push_back(
+        probeColumns.contains(source)
+            ? probe.substitutions.apply(source, exprs_)
+            : marker);
+  }
+  return outputs;
+}
+
 NodeSimplifier::SimplifiedNode NodeSimplifier::JoinSimplifier::probeWithMarker(
     ExprCP marker) {
   SimplifiedNode& probe = probeIsLeft_ ? left_ : right_;
-  VELOX_CHECK(!probe.empty());
-  const auto probeColumns = PlanObjectSet::fromObjects(providedColumns(probe));
-  const auto sourceColumns = key_.effectiveSourceColumns();
+  const ExprVector outputs = probeOutputs(marker);
   PlanSubstitutions substitutions;
   for (size_t i = 0; i < key_.outputColumns.size(); ++i) {
-    ExprCP replacement = probeColumns.contains(sourceColumns[i])
-        ? probe.substitutions.apply(sourceColumns[i], exprs_)
-        : marker;
-    if (key_.outputColumns[i] != replacement) {
-      substitutions.add(key_.outputColumns[i], replacement);
+    if (key_.outputColumns[i] != outputs[i]) {
+      substitutions.add(key_.outputColumns[i], outputs[i]);
     }
   }
   substitutions.retainVisible(probe.node->outputColumns(), exprs_);
   return {probe.node, std::move(substitutions)};
+}
+
+NodeSimplifier::SimplifiedNode
+NodeSimplifier::JoinSimplifier::probeWithMarkerColumn(ExprCP marker) {
+  const SimplifiedNode& probe = probeIsLeft_ ? left_ : right_;
+  return {
+      PrecomputeProjections::makeProject(
+          probe.node,
+          probeOutputs(marker),
+          key_.outputColumns,
+          builder_,
+          simplifier_),
+      {}};
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::JoinSimplifier::noMatch() {
@@ -855,23 +892,48 @@ NodeSimplifier::JoinSimplifier::eliminateSingleRowCrossJoin(
 
 std::optional<NodeSimplifier::SimplifiedNode>
 NodeSimplifier::JoinSimplifier::eliminateSingleRowBuild() {
-  if (!(isSemiFilter_ || isSemiProject_ || isAnti_) || !key_.leftKeys.empty() ||
-      !key_.filter.empty()) {
+  if (!(isSemiFilter_ || isSemiProject_ || isAnti_) || !key_.leftKeys.empty()) {
+    return std::nullopt;
+  }
+  // A null-aware join's result is its IN comparison, held by the filter or the
+  // marker, where NULL means unknown. A replacement reads only the filter, with
+  // NULL as no match.
+  if (!key_.filter.empty() && key_.nullAware) {
     return std::nullopt;
   }
   const SimplifiedNode& build = probeIsLeft_ ? right_ : left_;
   if (!isSingleRowNoColumns(build.node)) {
     return std::nullopt;
   }
-  if (isAnti_) {
-    return empty();
+  SimplifiedNode& probe = probeIsLeft_ ? left_ : right_;
+  if (key_.filter.empty()) {
+    if (isAnti_) {
+      return empty();
+    }
+    if (isSemiFilter_) {
+      return withOutputSubstitutions(probe);
+    }
+    return withOutputSubstitutions(probeWithMarker(
+        markerWhenBuildHasRows_ != nullptr ? markerWhenBuildHasRows_
+                                           : builder_.makeBoolean(true)));
   }
+
+  const auto filterProbe = [&](ExprVector predicates) {
+    NodeCP probeNode = probe.node;
+    SimplifiedNode filtered = nodes_.make(
+        Filter::Key{probeNode, std::move(predicates)}, std::move(probe));
+    return filtered.empty() ? empty()
+                            : withOutputSubstitutions(std::move(filtered));
+  };
   if (isSemiFilter_) {
-    return withOutputSubstitutions(probeIsLeft_ ? left_ : right_);
+    return filterProbe(key_.filter);
   }
-  return withOutputSubstitutions(probeWithMarker(
-      markerWhenBuildHasRows_ != nullptr ? markerWhenBuildHasRows_
-                                         : builder_.makeBoolean(true)));
+  ExprCP matched = exprs_.makeCoalesce(
+      exprs_.andAll(key_.filter), builder_.makeBoolean(false));
+  if (isAnti_) {
+    return filterProbe({exprs_.makeNot(matched)});
+  }
+  return withOutputSubstitutions(probeWithMarkerColumn(matched));
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::JoinSimplifier::makeJoin() {
@@ -895,7 +957,21 @@ NodeSimplifier::JoinSimplifier::makeJoinWithMarker() {
   NodeCP buildSource = cardinalitySource((probeIsLeft_ ? right_ : left_).node);
   if (buildSource->is(NodeType::kValues) &&
       buildSource->as<Values>()->cardinality() > 0) {
-    return withOutputSubstitutions(probeWithMarker(markerWhenBuildHasRows_));
+    if (key_.filter.empty()) {
+      return withOutputSubstitutions(probeWithMarker(markerWhenBuildHasRows_));
+    }
+    // The one build row matches where the filter holds, with NULL as no match.
+    const auto probeColumns = PlanObjectSet::fromObjects(
+        (probeIsLeft_ ? left_ : right_).node->outputColumns());
+    if (buildSource->as<Values>()->cardinality() == 1 &&
+        std::ranges::all_of(key_.filter, [&](ExprCP conjunct) {
+          return probeColumns.containsColumns(conjunct);
+        })) {
+      ExprCP matched = exprs_.makeCoalesce(
+          exprs_.andAll(key_.filter), builder_.makeBoolean(false));
+      return withOutputSubstitutions(probeWithMarkerColumn(exprs_.makeIf(
+          matched, markerWhenBuildHasRows_, builder_.makeBoolean(false))));
+    }
   }
   ColumnVector finalOutputColumns{key_.outputColumns};
   PlanObjectSet existenceOutputs =
