@@ -289,9 +289,10 @@ class SqlQueryRunner {
     /// a new one. Useful for correlating queries across systems.
     std::optional<std::string> queryId;
 
-    /// Token provider for authenticated file system access.
-    /// Used by runUnchecked() as-is. Overwritten by run() with the result of
-    /// the permission check callback.
+    /// Token provider for authenticated file system access, which connectors
+    /// also get through ConnectorSession::tokenProvider(). Used by
+    /// runUnchecked() as-is. run() replaces it with the result of the
+    /// permission check callback.
     std::shared_ptr<facebook::velox::filesystems::TokenProvider> tokenProvider;
 
     /// Override for session start time (milliseconds since epoch). If not

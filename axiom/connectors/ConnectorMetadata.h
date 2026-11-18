@@ -1470,7 +1470,9 @@ class ConnectorMetadata {
   /// Creates connector-defined state for this query, or nullptr when none is
   /// needed. Receives a session with all other fields initialized. Query state
   /// is unavailable during this call because this method creates it. The
-  /// returned state owns everything it needs after this call returns.
+  /// returned state owns everything it needs after this call returns. The
+  /// engine can set the query kind and token provider after this call, so read
+  /// them from the session on each use.
   ///
   /// Example:
   ///   std::unique_ptr<ConnectorQueryState> makeQueryState(

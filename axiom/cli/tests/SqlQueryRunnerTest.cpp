@@ -40,6 +40,7 @@
 #include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -662,6 +663,42 @@ TEST_F(SqlQueryRunnerTest, queryKind) {
     ASSERT_EQ(kinds.size(), 1);
     EXPECT_EQ(kinds[0], kind);
   }
+}
+
+// The connector sees the token provider execution uses: run() replaces the
+// caller's with the permission check's, and runUnchecked() keeps the caller's.
+TEST_F(SqlQueryRunnerTest, tokenProvider) {
+  using filesystems::PlainUserNameTokenProvider;
+  using filesystems::TokenProvider;
+  std::shared_ptr<TokenProvider> checked;
+  auto runner = makeRunner(
+      "test_token",
+      {},
+      [&](std::string_view,
+          std::string_view,
+          std::string_view,
+          std::optional<std::string_view>,
+          const auto&,
+          const auto&) { return checked; });
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+
+  std::vector<std::shared_ptr<TokenProvider>> providers;
+  testConnector_->setOnListPartitions(
+      [&](const facebook::axiom::connector::ConnectorSession& session) {
+        providers.push_back(session.tokenProvider());
+      });
+
+  const auto caller = std::make_shared<PlainUserNameTokenProvider>("caller");
+  const auto granted = std::make_shared<PlainUserNameTokenProvider>("checked");
+  checked = granted;
+  runner->run("SELECT a FROM t", {.tokenProvider = caller});
+  checked = nullptr;
+  runner->run("SELECT a FROM t", {.tokenProvider = caller});
+  const auto statements =
+      runner->parseMultiple("SELECT a FROM t", {}, /*context=*/nullptr);
+  runner->runUnchecked(*statements[0], {.tokenProvider = caller});
+
+  EXPECT_THAT(providers, ::testing::ElementsAre(granted, nullptr, caller));
 }
 
 TEST_F(SqlQueryRunnerTest, multipleRunnerInstances) {
