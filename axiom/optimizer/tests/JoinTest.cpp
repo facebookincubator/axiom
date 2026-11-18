@@ -2844,6 +2844,26 @@ TEST_P(JoinTest, leftThenFilter) {
   }
 }
 
+TEST_P(JoinTest, atTimeZoneFilter) {
+  testConnector_->addTable("t", ROW({"k", "ts"}, {BIGINT(), TIMESTAMP()}));
+  testConnector_->addTable("u", ROW({"k", "ts"}, {BIGINT(), TIMESTAMP()}));
+
+  const auto query =
+      "SELECT t.k FROM t LEFT JOIN u ON t.k = u.k "
+      "WHERE u.ts AT TIME ZONE 'UTC' > "
+      "TIMESTAMP '2024-01-01 00:00:00'";
+  SCOPED_TRACE(query);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(query),
+      matchScan("t")
+          .hashJoinInner(matchScan("u")
+                             .aliases({"uk", "ts"})
+                             .filter("at_timezone(ts, 'UTC') > \"any\"()")
+                             .project({"uk"}))
+          .build());
+}
+
 TEST_P(JoinTest, fullThenFilter) {
   testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));

@@ -21,6 +21,8 @@
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::axiom::logical_plan {
 
@@ -832,6 +834,7 @@ const auto& specialFormNames() {
       {SpecialForm::kNullIf, "NULLIF"},
       {SpecialForm::kInArray, "IN_ARRAY"},
       {SpecialForm::kRowConstructor, "ROW_CONSTRUCTOR"},
+      {SpecialForm::kAtTimeZone, "AT_TIME_ZONE"},
   };
   return kNames;
 }
@@ -1148,6 +1151,31 @@ SpecialFormExpr::SpecialFormExpr(
             "ROW_CONSTRUCTOR input type must match its field type: {} vs {}",
             inputs_[i]->type(),
             type_->childAt(i));
+      }
+      break;
+    case SpecialForm::kAtTimeZone:
+      VELOX_USER_CHECK_EQ(
+          inputs_.size(), 2, "AT_TIME_ZONE must have exactly two inputs");
+      VELOX_USER_CHECK(
+          inputs_[1]->type()->equivalent(*velox::VARCHAR()),
+          "AT_TIME_ZONE time zone must be VARCHAR: {}",
+          inputs_[1]->type());
+      if (inputs_[0]->type()->equivalent(*velox::TIMESTAMP()) ||
+          inputs_[0]->type()->equivalent(*velox::TIMESTAMP_WITH_TIME_ZONE())) {
+        VELOX_USER_CHECK(
+            type_->equivalent(*velox::TIMESTAMP()) ||
+                type_->equivalent(*velox::TIMESTAMP_WITH_TIME_ZONE()),
+            "AT_TIME_ZONE timestamp result must be TIMESTAMP or TIMESTAMP WITH TIME ZONE: {}",
+            type_);
+      } else {
+        VELOX_USER_CHECK(
+            inputs_[0]->type()->equivalent(*velox::TIME_WITH_TIME_ZONE()),
+            "AT_TIME_ZONE value must have a supported temporal type: {}",
+            inputs_[0]->type());
+        VELOX_USER_CHECK(
+            type_->equivalent(*velox::TIME_WITH_TIME_ZONE()),
+            "AT_TIME_ZONE time result must be TIME WITH TIME ZONE: {}",
+            type_);
       }
       break;
   }

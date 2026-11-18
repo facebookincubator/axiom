@@ -360,6 +360,10 @@ class CallExpr : public Expr {
 
 using CallExprPtr = std::shared_ptr<const CallExpr>;
 
+/// Names the untyped CallExpr that carries SQL AT TIME ZONE into type
+/// resolution.
+inline constexpr std::string_view kAtTimeZoneCallName{"$at_time_zone"};
+
 enum class SpecialForm {
   /// Logical AND. Requires two or more boolean inputs. Commutative. The result
   /// doesn’t depend on the order of inputs.
@@ -557,6 +561,20 @@ enum class SpecialForm {
   /// Example:
   ///   ROW(1, 'a') => ROW_CONSTRUCTOR(1, 'a')
   kRowConstructor = 14,
+
+  /// Applies a time zone to a time or timestamp value, with or without a time
+  /// zone. The output type depends on the input type and the function
+  /// registration mode.
+  ///
+  /// Takes exactly two inputs. The value is TIMESTAMP, TIMESTAMP WITH TIME
+  /// ZONE, or TIME WITH TIME ZONE; the resolver casts TIME to TIME WITH TIME
+  /// ZONE. The time zone is VARCHAR. Timestamp inputs produce TIMESTAMP or
+  /// TIMESTAMP WITH TIME ZONE according to function registration; a time input
+  /// produces TIME WITH TIME ZONE.
+  ///
+  /// Example:
+  ///   ts AT TIME ZONE 'UTC' => AT_TIME_ZONE(ts, 'UTC')
+  kAtTimeZone = 15,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SpecialForm)

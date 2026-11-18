@@ -213,6 +213,7 @@ void PrestoFunctions::registerAll(
       lp::SpecialForm::kNullIf, velox::expression::kNullIf);
   registry.registerSpecialForm(
       lp::SpecialForm::kRowConstructor, velox::expression::kRowConstructor);
+  registry.registerSpecialForm(lp::SpecialForm::kAtTimeZone, "at_timezone");
 }
 
 // static

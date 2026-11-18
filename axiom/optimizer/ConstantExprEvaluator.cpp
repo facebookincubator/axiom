@@ -80,6 +80,10 @@ class ExprTranslator : public lp::ExprVisitor {
         myCtx.veloxExpr = std::make_shared<velox::core::ConcatTypedExpr>(
             expr.type()->asRow().names(), inputs);
         break;
+      case lp::SpecialForm::kAtTimeZone:
+        myCtx.veloxExpr = std::make_shared<velox::core::CallTypedExpr>(
+            expr.type(), inputs, "at_timezone");
+        break;
       default:
         VELOX_NYI();
     }

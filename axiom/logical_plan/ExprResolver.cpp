@@ -31,6 +31,8 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/vector/VariantToVector.h"
 
@@ -882,6 +884,46 @@ ExprPtr ExprResolver::tryResolveConstantIn(
   return in;
 }
 
+ExprPtr ExprResolver::tryResolveAtTimeZone(
+    const velox::core::IExpr& expr,
+    const InputNameResolver& inputNameResolver) const {
+  if (!expr.is(velox::core::IExpr::Kind::kCall)) {
+    return nullptr;
+  }
+
+  const auto* call = expr.as<velox::core::CallExpr>();
+  if (call->name() != kAtTimeZoneCallName) {
+    return nullptr;
+  }
+
+  VELOX_USER_CHECK_EQ(
+      call->inputs().size(), 2, "AT TIME ZONE must have exactly two inputs");
+  VELOX_USER_CHECK(
+      !call->inputAt(0)->is(velox::core::IExpr::Kind::kLambda),
+      "AT TIME ZONE requires a time or timestamp value, but got a lambda");
+
+  auto inputs = resolveScalarInputs(call->inputs(), inputNameResolver);
+
+  auto& value = inputs.at(0);
+  const auto& valueType = value->type();
+  if (valueType->equivalent(*velox::TIME())) {
+    value = std::make_shared<SpecialFormExpr>(
+        velox::TIME_WITH_TIME_ZONE(), SpecialForm::kCast, value);
+  } else {
+    VELOX_USER_CHECK(
+        valueType->equivalent(*velox::TIMESTAMP()) ||
+            valueType->equivalent(*velox::TIMESTAMP_WITH_TIME_ZONE()) ||
+            valueType->equivalent(*velox::TIME_WITH_TIME_ZONE()),
+        "AT TIME ZONE requires a time or timestamp value, but got: {}",
+        valueType->toString());
+  }
+
+  const auto type =
+      resolveScalarFunction("at_timezone", inputs, /*coercer=*/nullptr);
+  return std::make_shared<SpecialFormExpr>(
+      type, SpecialForm::kAtTimeZone, std::move(inputs));
+}
+
 ExprPtr ExprResolver::tryFoldCast(
     const velox::TypePtr& type,
     const ExprPtr& input) const {
@@ -1132,6 +1174,10 @@ ExprPtr ExprResolver::resolveScalarTypes(
   if (const auto& constant =
           dynamic_cast<const velox::core::ConstantExpr*>(expr.get())) {
     return makeConstantExpr(constant->type(), constant->value());
+  }
+
+  if (auto atTimeZone = tryResolveAtTimeZone(*expr, inputNameResolver)) {
+    return atTimeZone;
   }
 
   if (auto lambdaCall = tryResolveCallWithLambdas(

@@ -255,6 +255,13 @@ class ExprResolver {
       const velox::core::IExpr& expr,
       const InputNameResolver& inputNameResolver) const;
 
+  // Resolves the internal AT TIME ZONE call marker by the operator's type
+  // rule. Casts TIME to TIME WITH TIME ZONE before exact function resolution.
+  // Returns nullptr for any other expression.
+  ExprPtr tryResolveAtTimeZone(
+      const velox::core::IExpr& expr,
+      const InputNameResolver& inputNameResolver) const;
+
   std::shared_ptr<velox::core::QueryCtx> queryCtx_;
   // Nullable: nullptr means implicit coercions are disabled.
   const velox::TypeCoercer* coercer_;
