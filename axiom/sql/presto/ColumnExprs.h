@@ -54,6 +54,13 @@ class ColumnExprs {
   static std::optional<facebook::axiom::logical_plan::ExprApi> equal(
       const std::vector<std::string>& names,
       std::string_view prefix);
+
+  /// Returns 'prefix' followed by the values of the columns 'names', for an
+  /// error message that names a row:
+  ///   concat(prefix, CAST(c0 AS VARCHAR), ', ', CAST(c1 AS VARCHAR), ...)
+  static facebook::axiom::logical_plan::ExprApi message(
+      std::string_view prefix,
+      const std::vector<std::string>& names);
 };
 
 } // namespace axiom::sql::presto

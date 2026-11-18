@@ -17,6 +17,7 @@
 #include "axiom/sql/presto/tests/LogicalPlanMatcher.h"
 #include <gtest/gtest.h>
 #include <set>
+#include <unordered_set>
 #include "axiom/sql/presto/tests/ExprMatcher.h"
 #include "velox/parse/ExprRewriter.h"
 #include "velox/parse/Expressions.h"
@@ -213,6 +214,43 @@ class JoinMatcher : public LogicalPlanMatcherImpl<JoinNode> {
   }
 
   const std::vector<std::string> outputAliases_;
+};
+
+// Binds 'aliases' to the output columns of the node 'matcher' matches, by
+// position, skipping nullopt entries.
+class AliasesMatcher : public LogicalPlanMatcher {
+ public:
+  AliasesMatcher(
+      std::shared_ptr<LogicalPlanMatcher> matcher,
+      std::vector<std::optional<std::string>> aliases)
+      : matcher_{std::move(matcher)}, aliases_{std::move(aliases)} {}
+
+  MatchResult match(
+      const LogicalPlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    auto result = matcher_->match(plan, symbols);
+    if (!result.match) {
+      return MatchResult::failure();
+    }
+
+    const auto& outputType = plan->outputType();
+    EXPECT_LE(aliases_.size(), outputType->size())
+        << "More aliases than output columns";
+    AXIOM_RETURN_IF_FAILURE;
+
+    auto newSymbols = result.symbols;
+    for (uint32_t i = 0; i < aliases_.size(); ++i) {
+      if (aliases_[i].has_value()) {
+        newSymbols[*aliases_[i]] = outputType->nameOf(i);
+      }
+    }
+    return MatchResult::success(std::move(newSymbols));
+  }
+
+ private:
+  const std::shared_ptr<LogicalPlanMatcher> matcher_;
+  const std::vector<std::optional<std::string>> aliases_;
 };
 
 class FilterMatcher : public LogicalPlanMatcherImpl<FilterNode> {
@@ -458,8 +496,12 @@ class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
 
     velox::parse::DuckSqlExpressionsParser parser(parseOptions_);
 
+    std::unordered_map<std::string, std::string> newSymbols = symbols;
     for (auto i = 0; i < groupingKeys_.size(); ++i) {
       auto expected = parser.parseScalarOrWindowExpr(groupingKeys_[i]);
+      if (expected->alias()) {
+        newSymbols[expected->alias().value()] = plan.outputType()->nameOf(i);
+      }
       if (!symbols.empty()) {
         expected = rewriteInputNames(expected, symbols);
       }
@@ -472,7 +514,6 @@ class AggregateMatcher : public LogicalPlanMatcherImpl<AggregateNode> {
     EXPECT_EQ(aggregates_.size(), plan.aggregates().size());
     AXIOM_RETURN_IF_FAILURE;
 
-    std::unordered_map<std::string, std::string> newSymbols = symbols;
     auto numGroupingKeys = plan.groupingKeys().size();
     for (auto i = 0; i < aggregates_.size(); ++i) {
       velox::core::ExprPtr parsed = parser.parseAggregateExpr(aggregates_[i]);
@@ -1107,6 +1148,22 @@ LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::output(
     const velox::RowTypePtr& expectedType) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<OutputTypeMatcher>(matcher_, expectedType);
+  return *this;
+}
+
+LogicalPlanMatcherBuilder& LogicalPlanMatcherBuilder::aliases(
+    const std::vector<std::optional<std::string>>& aliases) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  std::unordered_set<std::string> seen;
+  for (const auto& alias : aliases) {
+    if (alias.has_value()) {
+      VELOX_USER_CHECK(
+          seen.insert(*alias).second,
+          "Duplicate alias in LogicalPlanMatcherBuilder::aliases(): {}",
+          *alias);
+    }
+  }
+  matcher_ = std::make_shared<AliasesMatcher>(matcher_, aliases);
   return *this;
 }
 

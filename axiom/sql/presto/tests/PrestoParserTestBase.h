@@ -152,12 +152,13 @@ class PrestoParserTestBase : public testing::Test {
         .values(outputType);
   }
 
-  static ParserSessionPtr makeParserSession(ParserOptions options = {}) {
+  ParserSessionPtr makeParserSession(ParserOptions options = {}) {
     return std::make_shared<ParserSession>(
         facebook::axiom::connector::makeTestContext(/*queryId=*/"test"),
         facebook::axiom::connector::makeTestStatWriter(),
         facebook::axiom::connector::Properties{},
-        std::move(options));
+        std::move(options),
+        vectorIndexCodecTrainer_);
   }
 
   /// Creates a PrestoParser configured with the test connector and
@@ -181,6 +182,10 @@ class PrestoParserTestBase : public testing::Test {
 
   /// Options of the parsers makeParser() creates.
   ParserOptions parserOptions_;
+
+  /// The codec trainer of the parser sessions makeParserSession() creates, or
+  /// null.
+  std::shared_ptr<const VectorIndexCodecTrainer> vectorIndexCodecTrainer_;
 };
 
 } // namespace axiom::sql::presto::test

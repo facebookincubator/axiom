@@ -40,7 +40,8 @@ class ConstantExprEvaluatorTest : public ::testing::Test {
             connector::makeTestContext("test"),
             connector::makeTestStatWriter(),
             connector::Properties{},
-            ::axiom::sql::presto::ParserOptions{}));
+            ::axiom::sql::presto::ParserOptions{},
+            /*vectorIndexCodecTrainer=*/nullptr));
     return ConstantExprEvaluator::evaluateConstantExpr(
         *parser.parseExpression(sql));
   }

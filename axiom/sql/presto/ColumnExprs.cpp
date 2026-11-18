@@ -63,4 +63,18 @@ std::optional<lp::ExprApi> ColumnExprs::equal(
   return condition;
 }
 
+// static
+lp::ExprApi ColumnExprs::message(
+    std::string_view prefix,
+    const std::vector<std::string>& names) {
+  std::vector<lp::ExprApi> parts{lp::Lit(prefix)};
+  for (const auto& name : names) {
+    if (parts.size() > 1) {
+      parts.push_back(lp::Lit(", "));
+    }
+    parts.push_back(lp::Cast(facebook::velox::VARCHAR(), lp::Col(name)));
+  }
+  return lp::Call("concat", parts);
+}
+
 } // namespace axiom::sql::presto

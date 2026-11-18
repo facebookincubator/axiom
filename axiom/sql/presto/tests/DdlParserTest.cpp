@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/coro/BlockingWait.h>
 #include <gmock/gmock.h>
 #include "axiom/common/SchemaTableName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
+#include "axiom/sql/presto/VectorIndexCodecTrainer.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -625,6 +627,197 @@ TEST_F(DdlParserTest, refreshVectorIndex) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("REFRESH VECTOR INDEX i ON t_global WHERE id > 0"),
       "Refreshing a vector index of a table with no partition columns is not supported yet: i");
+}
+
+// Plans about K sampled rows of each partition as the centroids: each row's
+// key as its cluster ID and its embedding as its centroid, under names other
+// than the contract's, since REFRESH takes the result's columns by position.
+// With a mistake, the result's columns have that mistake.
+class SampleCentroids : public VectorIndexCodecTrainer {
+ public:
+  enum class Mistake {
+    kNone,
+    kMissingId,
+    kBigintPartition,
+    kIntegerIds,
+    kDoubleCentroids,
+  };
+
+  explicit SampleCentroids(Mistake mistake) : mistake_{mistake} {}
+
+  lp::PlanBuilder plan(const VectorIndexSample& sample) const override {
+    auto rows = sample.makeSample(sample.properties.numClusters);
+    const auto columns = rows.findOrAssignOutputNames();
+    const auto numPartitionColumns = sample.partitionColumns->size();
+    std::vector<lp::ExprApi> projections;
+    projections.reserve(numPartitionColumns + 2);
+    for (size_t i = 0; i < numPartitionColumns; ++i) {
+      projections.push_back(columns[i].toCol().as(fmt::format("part{}", i)));
+    }
+    if (mistake_ == Mistake::kBigintPartition) {
+      projections.front() =
+          lp::Call("length", columns.front().toCol()).as("part0");
+    }
+    const auto key = columns[numPartitionColumns].toCol();
+    const auto embedding = columns[numPartitionColumns + 1].toCol();
+    if (mistake_ == Mistake::kIntegerIds) {
+      projections.push_back(lp::Cast(INTEGER(), key).as("cluster"));
+    } else if (mistake_ != Mistake::kMissingId) {
+      projections.push_back(key.as("cluster"));
+    }
+    if (mistake_ == Mistake::kDoubleCentroids) {
+      projections.push_back(lp::Cast(ARRAY(DOUBLE()), embedding).as("center"));
+    } else {
+      projections.push_back(embedding.as("center"));
+    }
+    return rows.project(projections);
+  }
+
+ private:
+  const Mistake mistake_;
+};
+
+// The train plan of a refresh trains each partition's codec with
+// vector_index_train, or, with a codec trainer, packs the centroids the trainer
+// plans from its sample with vector_index_pack. A sample is the valid rows
+// under a cutoff on the documented sample hash, set from each partition's row
+// count, which the connector's metadata answers, and the number of rows asked
+// for: 256 * K for vector_index_train; nothing numbers the rows. REFRESH
+// checks the columns of the trainer's result while planning.
+TEST_F(DdlParserTest, codecTrainer) {
+  connector_->addPartitionedTable(
+      "t",
+      ROW({"id", "embedding", "ds"}, {BIGINT(), ARRAY(REAL()), VARCHAR()}),
+      {"ds"});
+  connector_->addVectorIndex(
+      "t",
+      {.name = "i",
+       .column = "embedding",
+       .key = {"id"},
+       .properties = {
+           {"distance_metric", Variant("cosine")},
+           {"index_type", Variant("flat")},
+           {"num_clusters", Variant(int64_t{4})},
+           {"dimension", Variant(int64_t{2})},
+       }});
+  const auto trainPlan = [&]() {
+    return parseSql("REFRESH VECTOR INDEX i ON t WHERE ds = 'x'")
+        ->as<RefreshVectorIndexStatement>()
+        ->plans()
+        .trainPlan;
+  };
+
+  // The rows of the refreshed partition, with the columns named 'prefix' +
+  // key, embedding and p0.
+  const auto matchRows = [](const std::string& prefix) {
+    return lp::test::LogicalPlanMatcherBuilder()
+        .tableScan("t")
+        .aliases({prefix + "id", prefix + "embedding", prefix + "ds"})
+        .filter(fmt::format("{}ds = 'x'", prefix))
+        .project(
+            {fmt::format("{0}id AS {0}id", prefix),
+             fmt::format("{0}embedding AS {0}embedding", prefix),
+             fmt::format("{0}ds AS {0}ds", prefix)})
+        .project(
+            {fmt::format("{0}id AS {0}key", prefix),
+             fmt::format("{0}embedding AS {0}embedding", prefix),
+             fmt::format("{0}ds AS {0}p0", prefix)});
+  };
+  // The cutoff is -2^63 + n * 2^64 / row count, with 'numerator' n * 2^64 for
+  // n rows: 256 * K for vector_index_train and K for the trainer, with K = 4.
+  const auto matchSample = [&](std::string_view numerator) {
+    return matchRows("")
+        .filter(
+            "key IS NOT NULL AND cardinality(embedding) = 2 AND "
+            "none_match("
+            "    embedding, x -> x IS NULL OR NOT is_finite(CAST(x AS DOUBLE))) "
+            "AND l2_norm(embedding) > 0.0 AND p0 IS NOT NULL")
+        .join(matchRows("s_")
+                  .aggregate(
+                      {"s_p0 AS s_p0"}, {"metadata_row_count() AS num_rows"})
+                  .project({"s_p0 AS n_p0", "num_rows AS num_rows"})
+                  .build())
+        .project(
+            {"key",
+             "embedding",
+             "p0",
+             "n_p0",
+             "num_rows",
+             "from_big_endian_64(xxhash64(to_big_endian_64(key))) "
+             "AS sample_hash"})
+        .filter(
+            fmt::format(
+                "CAST(sample_hash AS DOUBLE) < "
+                "{} / CAST(num_rows AS DOUBLE) + -9.223372036854776e18",
+                numerator))
+        .project(
+            {"p0 AS p0",
+             "key AS key",
+             "embedding AS embedding",
+             "sample_hash AS sample_hash",
+             "num_rows AS num_rows"});
+  };
+  const auto matchTrainPlan = [&](lp::test::LogicalPlanMatcherBuilder codecs) {
+    return matchRows("t_")
+        .filter("t_p0 IS NOT NULL")
+        .aggregate({"t_p0 AS t_p0"}, {})
+        .join(codecs.project({"p0 AS t_p0", "codec"}).build())
+        .tableWrite()
+        .build();
+  };
+
+  auto plan = trainPlan();
+  EXPECT_TRUE(
+      matchTrainPlan(
+          matchSample("1.888946593147858e22")
+              .aggregate(
+                  {"p0 AS p0"},
+                  {R"(vector_index_train(embedding, key, 4, 'cosine', "any"()) AS codec)"}))
+          ->match(plan))
+      << plan->toString();
+
+  vectorIndexCodecTrainer_ =
+      std::make_shared<SampleCentroids>(SampleCentroids::Mistake::kNone);
+  plan = trainPlan();
+  EXPECT_TRUE(
+      matchTrainPlan(
+          matchSample("7.378697629483821e19")
+              .project({"p0 AS part0", "key AS cluster", "embedding AS center"})
+              .project(
+                  {"part0 AS p0",
+                   "cluster AS cluster_id",
+                   "center AS centroid"})
+              .aggregate(
+                  {"p0 AS p0"},
+                  {"vector_index_pack(cluster_id, centroid, 'cosine', 4, 2) "
+                   "AS codec"}))
+          ->match(plan))
+      << plan->toString();
+
+  // The partition columns with their types, then BIGINT cluster IDs and
+  // ARRAY(REAL) centroids.
+  vectorIndexCodecTrainer_ =
+      std::make_shared<SampleCentroids>(SampleCentroids::Mistake::kMissingId);
+  VELOX_ASSERT_THROW(
+      trainPlan(),
+      "Vector index codec trainer must return the partition columns, a cluster ID and a centroid");
+
+  vectorIndexCodecTrainer_ = std::make_shared<SampleCentroids>(
+      SampleCentroids::Mistake::kBigintPartition);
+  VELOX_ASSERT_THROW(
+      trainPlan(),
+      "Vector index codec trainer changed a partition column's type");
+
+  vectorIndexCodecTrainer_ =
+      std::make_shared<SampleCentroids>(SampleCentroids::Mistake::kIntegerIds);
+  VELOX_ASSERT_THROW(
+      trainPlan(), "Vector index codec trainer must return BIGINT cluster IDs");
+
+  vectorIndexCodecTrainer_ = std::make_shared<SampleCentroids>(
+      SampleCentroids::Mistake::kDoubleCentroids);
+  VELOX_ASSERT_THROW(
+      trainPlan(),
+      "Vector index codec trainer must return ARRAY(REAL) centroids");
 }
 
 TEST_F(DdlParserTest, view) {

@@ -44,7 +44,11 @@ class QueryInterruptHandler;
 ///       connector::ConnectorMetadataRegistry::create();
 ///   folly::FunctionScheduler scheduler;  // enables progress reporting
 ///   SqlQueryRunner runner{
-///       user, *connectorRegistry, *metadataRegistry, &scheduler};
+///       user,
+///       *connectorRegistry,
+///       *metadataRegistry,
+///       /*vectorIndexCodecTrainer=*/nullptr,
+///       &scheduler};
 ///   Console console{runner};
 ///   console.initialize();
 ///   const Console::Outcome outcome = console.run();

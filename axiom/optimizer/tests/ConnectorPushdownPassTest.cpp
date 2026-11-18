@@ -129,7 +129,8 @@ class ConnectorPushdownPassTest : public optimizer::test::QueryTestBase {
             connector::makeTestContext("test"),
             connector::makeTestStatWriter(),
             connector::Properties{},
-            ::axiom::sql::presto::ParserOptions{}));
+            ::axiom::sql::presto::ParserOptions{},
+            /*vectorIndexCodecTrainer=*/nullptr));
     auto statement = parser.parse(sql);
     VELOX_CHECK(statement->isInsert());
     return statement->as<::axiom::sql::presto::InsertStatement>()->plan();

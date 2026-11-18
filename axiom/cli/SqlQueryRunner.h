@@ -36,6 +36,7 @@
 #include "axiom/runner/ProgressReporter.h"
 #include "axiom/runner/QueryProgress.h"
 #include "axiom/sql/presto/SqlStatement.h"
+#include "axiom/sql/presto/VectorIndexCodecTrainer.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -216,6 +217,9 @@ class SqlQueryRunner {
   /// default table owner in DDL.
   /// @param connectorRegistry Execution connectors available to queries.
   /// @param metadataRegistry Catalog metadata available during planning.
+  /// @param vectorIndexCodecTrainer Optional trainer of REFRESH VECTOR INDEX's
+  /// codecs, given to every query (see presto::VectorIndexCodecTrainer).
+  /// Without one, REFRESH trains each codec with vector_index_train.
   /// @param progressScheduler Optional, non-owned scheduler for queries that
   /// set `RunOptions::onProgress`. It must outlive this runner. Such queries
   /// fail if the scheduler is null.
@@ -227,6 +231,8 @@ class SqlQueryRunner {
           connectorRegistry,
       facebook::axiom::connector::ConnectorMetadataRegistry::Registry&
           metadataRegistry,
+      std::shared_ptr<const presto::VectorIndexCodecTrainer>
+          vectorIndexCodecTrainer = nullptr,
       folly::FunctionScheduler* progressScheduler = nullptr,
       bool useOptimizerV2 = true);
 
@@ -840,6 +846,10 @@ class SqlQueryRunner {
   const std::string user_;
   std::atomic<int32_t> queryCounter_{0};
   const bool useOptimizerV2_{true};
+
+  // Given to every query's ParserSession (see constructor).
+  const std::shared_ptr<const presto::VectorIndexCodecTrainer>
+      vectorIndexCodecTrainer_;
 
   // Progress-polling scheduler (see constructor). Started idempotently before
   // each progress-reporting query.

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optional>
 #include <unordered_map>
 #include "axiom/logical_plan/ExprApi.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
@@ -185,7 +186,9 @@ class LogicalPlanMatcherBuilder {
   LogicalPlanMatcherBuilder& aggregate(OnMatchCallback onMatch = nullptr);
 
   /// Matches an AggregateNode with the specified grouping keys, aggregates,
-  /// and optionally grouping sets (as vectors of key indices).
+  /// and optionally grouping sets (as vectors of key indices). A grouping key
+  /// or an aggregate followed by ' AS alias' names its output column for
+  /// subsequent matchers.
   LogicalPlanMatcherBuilder& aggregate(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
@@ -318,6 +321,17 @@ class LogicalPlanMatcherBuilder {
   /// Matches an OutputNode whose output column names and types are those of
   /// 'expectedType'.
   LogicalPlanMatcherBuilder& output(const velox::RowTypePtr& expectedType);
+
+  /// Binds aliases to the previous matcher's output columns by position, so
+  /// subsequent matchers can reference the columns by these names. For each i
+  /// where aliases[i] is set, maps the alias to the i-th output column. nullopt
+  /// entries are skipped. The match fails if there are more aliases than
+  /// output columns.
+  ///
+  /// Use lowercase aliases. Expressions are parsed as DuckDB SQL, which
+  /// lowercases unquoted identifiers.
+  LogicalPlanMatcherBuilder& aliases(
+      const std::vector<std::optional<std::string>>& aliases);
 
   /// Builds and returns the constructed LogicalPlanMatcher.
   std::shared_ptr<LogicalPlanMatcher> build();

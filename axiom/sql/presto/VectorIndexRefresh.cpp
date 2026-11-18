@@ -19,14 +19,17 @@
 #include <map>
 
 #include "axiom/sql/presto/ColumnExprs.h"
+#include "axiom/sql/presto/VectorIndexCodecTrainer.h"
 
 namespace axiom::sql::presto {
 
 namespace lp = facebook::axiom::logical_plan;
 using facebook::axiom::connector::VectorIndex;
+using facebook::velox::ARRAY;
 using facebook::velox::BIGINT;
 using facebook::velox::DOUBLE;
 using facebook::velox::MAP;
+using facebook::velox::REAL;
 using facebook::velox::TypePtr;
 using facebook::velox::VARCHAR;
 using facebook::velox::Variant;
@@ -35,6 +38,9 @@ using facebook::velox::common::vectorindex::VectorIndexKindName;
 using facebook::velox::common::vectorindex::VectorIndexMetricName;
 
 namespace {
+
+// The points per cluster vector_index_train trains each partition's codec on.
+constexpr int64_t kSamplesPerCluster{256};
 
 // The plans name the query's columns by these names and partitionNames(), so
 // they never collide with the plans' own columns.
@@ -61,21 +67,6 @@ lp::ExprApi failIf(
     const lp::ExprApi& value) {
   return lp::Call(
       "if", condition, lp::Cast(type, lp::Call("fail", message)), value);
-}
-
-// Returns 'prefix' followed by the values of 'partitions':
-//   concat(prefix, CAST(p0 AS VARCHAR), ', ', CAST(p1 AS VARCHAR), ...)
-lp::ExprApi partitionMessage(
-    std::string_view prefix,
-    const std::vector<std::string>& partitions) {
-  std::vector<lp::ExprApi> parts{lp::Lit(prefix)};
-  for (const auto& partition : partitions) {
-    if (parts.size() > 1) {
-      parts.push_back(lp::Lit(", "));
-    }
-    parts.push_back(lp::Cast(VARCHAR(), lp::Col(partition)));
-  }
-  return lp::Call("concat", parts);
 }
 
 // Returns 'query' (see VectorIndexRefresh::plan) with its columns named kKey,
@@ -136,7 +127,10 @@ lp::PlanBuilder validRows(
 }
 
 // Returns the number of rows of each partition of 'query', valid or not, in
-// 'num_rows', with the partition columns named 'prefix' + 'partitions'.
+// 'num_rows', with the partition columns named 'prefix' + 'partitions'. The
+// optimizer reads the counts from the connector's metadata, and fails the
+// refresh when the metadata can't answer them: counting the rows would read
+// the whole input once more than the sample does.
 lp::PlanBuilder partitionSizes(
     const std::vector<std::string>& partitions,
     std::string_view prefix,
@@ -161,58 +155,135 @@ lp::PlanBuilder selectedPartitions(
       .aggregate(ColumnExprs::of(partitions), {});
 }
 
-// Returns a stratified sample of 'rows': about kSamplesPerCluster times the
-// number of clusters points of each partition, chosen by a hash of their keys,
-// so the sample is the same on every run. 'sizes' is partitionSizes(). The
-// partition's row count includes invalid rows, so a partition with many gets a
-// smaller sample.
-lp::PlanBuilder sample(
-    const VectorIndex& index,
-    const std::vector<std::string>& partitions,
-    const lp::PlanBuilder& sizes,
-    const lp::PlanBuilder& rows) {
-  // The points each partition's codec is trained on, per cluster.
-  constexpr int64_t kSamplesPerCluster{256};
-  const auto hash = lp::Call(
+// Returns the hash of the key that samples the rows, uniform over BIGINT.
+lp::ExprApi sampleHash() {
+  return lp::Call(
       "from_big_endian_64",
       lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey))));
+}
+
+// Returns a stratified sample of 'rows': the valid rows among about 'numRows'
+// rows of each partition, chosen by a hash of their keys, so the sample is the
+// same on every run. 'sizes' is partitionSizes(). The partition's row count
+// includes invalid rows, so a partition with many gets a smaller sample. The
+// sample has the columns VectorIndexSample::makeSample describes: the
+// partition columns, key, embedding, sample_hash and num_rows.
+lp::PlanBuilder sample(
+    const std::vector<std::string>& partitions,
+    const lp::PlanBuilder& sizes,
+    const lp::PlanBuilder& rows,
+    int64_t numRows) {
   // The hashes are uniform over [-2^63, 2^63). The cutoff passes a share of
-  // numSamples / num_rows of them.
-  const double numSamples = kSamplesPerCluster * index.properties.numClusters;
-  const auto cutoff =
-      lp::Lit(numSamples * 0x1p64) / lp::Cast(DOUBLE(), lp::Col("num_rows")) +
+  // numRows / num_rows of them.
+  const auto cutoff = lp::Lit(static_cast<double>(numRows) * 0x1p64) /
+          lp::Cast(DOUBLE(), lp::Col("num_rows")) +
       lp::Lit(-0x1p63);
   return lp::PlanBuilder(rows)
       .join(sizes, *ColumnExprs::equal(partitions, "n_"), lp::JoinType::kInner)
-      .filter(lp::Cast(DOUBLE(), hash) < cutoff);
+      .with({sampleHash().as("sample_hash")})
+      .filter(lp::Cast(DOUBLE(), lp::Col("sample_hash")) < cutoff)
+      .project(
+          ColumnExprs::concat(
+              ColumnExprs::of(partitions),
+              {lp::Col(kKey),
+               lp::Col(kEmbedding),
+               lp::Col("sample_hash"),
+               lp::Col("num_rows")}));
 }
 
-// Returns the plan that trains a codec for each partition of 'rows' and writes
+// Returns the centroids 'trainer' plans for each partition of 'sample', with
+// their columns named 'partitions', cluster_id and centroid.
+lp::PlanBuilder planCentroids(
+    const VectorIndexCodecTrainer& trainer,
+    const VectorIndex& index,
+    const std::vector<std::string>& partitions,
+    const VectorIndexSample& sample) {
+  auto centroids = trainer.plan(sample);
+
+  const auto types = centroids.outputTypes();
+  VELOX_CHECK_EQ(
+      types.size(),
+      partitions.size() + 2,
+      "Vector index codec trainer must return the partition columns, a cluster ID and a centroid");
+  for (uint32_t i = 0; i < partitions.size(); ++i) {
+    VELOX_CHECK(
+        types[i]->equivalent(*index.partitionColumns->childAt(i)),
+        "Vector index codec trainer changed a partition column's type");
+  }
+  VELOX_CHECK(
+      types[partitions.size()]->equivalent(*BIGINT()),
+      "Vector index codec trainer must return BIGINT cluster IDs");
+  VELOX_CHECK(
+      types.back()->equivalent(*ARRAY(REAL())),
+      "Vector index codec trainer must return ARRAY(REAL) centroids");
+
+  const auto columns = centroids.findOrAssignOutputNames();
+  std::vector<lp::ExprApi> named;
+  named.reserve(columns.size());
+  for (size_t i = 0; i < partitions.size(); ++i) {
+    named.push_back(columns[i].toCol().as(partitions[i]));
+  }
+  named.push_back(columns[partitions.size()].toCol().as("cluster_id"));
+  named.push_back(columns.back().toCol().as("centroid"));
+  return centroids.project(named);
+}
+
+// Returns one codec per sampled partition: trained with vector_index_train,
+// or packed with vector_index_pack from the centroids of 'trainer' if set.
+// 'makeSample' plans sample() for a given number of rows.
+lp::PlanBuilder trainCodecs(
+    const VectorIndex& index,
+    const std::vector<std::string>& partitions,
+    const std::function<lp::PlanBuilder(int64_t)>& makeSample,
+    const VectorIndexCodecTrainer* trainer) {
+  const auto metric =
+      std::string(VectorIndexMetricName::toName(index.properties.metric));
+  if (trainer == nullptr) {
+    return makeSample(kSamplesPerCluster * index.properties.numClusters)
+        .aggregate(
+            ColumnExprs::of(partitions),
+            {lp::Call(
+                 "vector_index_train",
+                 lp::Col(kEmbedding),
+                 lp::Col(kKey),
+                 lp::Lit(index.properties.numClusters),
+                 lp::Lit(metric),
+                 lp::Lit(Variant::map({}), MAP(VARCHAR(), VARCHAR())))
+                 .as("codec")});
+  }
+
+  return planCentroids(
+             *trainer,
+             index,
+             partitions,
+             {.properties = index.properties,
+              .partitionColumns = index.partitionColumns,
+              .makeSample = makeSample})
+      .aggregate(
+          ColumnExprs::of(partitions),
+          {lp::Call(
+               "vector_index_pack",
+               lp::Col("cluster_id"),
+               lp::Col("centroid"),
+               lp::Lit(metric),
+               lp::Lit(index.properties.numClusters),
+               lp::Lit(index.properties.dimension))
+               .as("codec")});
+}
+
+// Returns the plan that trains a codec for each sampled partition and writes
 // it to the codec table with the id 'codecId', with a NULL codec for each of
-// 'selected' that has no rows. 'sizes' is partitionSizes().
+// 'selected' that has no rows.
 lp::LogicalPlanNodePtr planTrain(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
-    const lp::PlanBuilder& sizes,
-    const lp::PlanBuilder& rows,
-    const lp::PlanBuilder& selected) {
+    const std::function<lp::PlanBuilder(int64_t)>& makeSample,
+    const lp::PlanBuilder& selected,
+    const VectorIndexCodecTrainer* trainer) {
   auto codecs =
-      sample(index, partitions, sizes, rows)
-          .aggregate(
-              ColumnExprs::of(partitions),
-              {lp::Call(
-                   "vector_index_train",
-                   lp::Col(kEmbedding),
-                   lp::Col(kKey),
-                   lp::Lit(index.properties.numClusters),
-                   lp::Lit(
-                       VectorIndexMetricName::toName(index.properties.metric)),
-                   lp::Lit(
-                       Variant::map(std::map<Variant, Variant>{}),
-                       MAP(VARCHAR(), VARCHAR())))
-                   .as("codec")})
+      trainCodecs(index, partitions, makeSample, trainer)
           .project(
               ColumnExprs::concat(
                   ColumnExprs::renamed(partitions, "t_"), lp::Col("codec")));
@@ -282,7 +353,7 @@ lp::LogicalPlanNodePtr planBuild(
   // has no codec and fails the refresh.
   const auto clusterId = failIf(
       lp::Col("cluster_id").isNull(),
-      partitionMessage("No codec for partition: ", partitions),
+      ColumnExprs::message("No codec for partition: ", partitions),
       BIGINT(),
       lp::Col("cluster_id"));
 
@@ -395,7 +466,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::function<lp::PlanBuilder()>& makeQuery,
-    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition) {
+    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition,
+    const VectorIndexCodecTrainer* trainer) {
   const auto& partitionColumns = index.partitionColumns->names();
   VELOX_CHECK(!partitionColumns.empty());
   const auto codecId = lp::Placeholder(BIGINT(), 1);
@@ -403,15 +475,22 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
   const auto makeRows = [&]() {
     return validRows(index, partitions, namedRows(partitions, makeQuery()));
   };
+  const auto makeSample = [&](int64_t numRows) {
+    return sample(
+        partitions,
+        partitionSizes(partitions, "n_", makeQuery()),
+        makeRows(),
+        numRows);
+  };
   return {
       .trainPlan = planTrain(
           index,
           connectorId,
           partitions,
           codecId,
-          partitionSizes(partitions, "n_", makeQuery()),
-          makeRows(),
-          selectedPartitions(partitions, makeQuery())),
+          makeSample,
+          selectedPartitions(partitions, makeQuery()),
+          trainer),
       .buildPlan = planBuild(
           table,
           index,

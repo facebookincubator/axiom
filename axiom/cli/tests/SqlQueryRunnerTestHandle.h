@@ -49,10 +49,13 @@ class SqlQueryRunnerTestHandle {
 
   explicit SqlQueryRunnerTestHandle(
       std::string user,
+      std::shared_ptr<const presto::VectorIndexCodecTrainer>
+          vectorIndexCodecTrainer = nullptr,
       folly::FunctionScheduler* progressScheduler = nullptr,
       bool useOptimizerV2 = true)
       : state_{std::make_unique<State>(
             std::move(user),
+            std::move(vectorIndexCodecTrainer),
             progressScheduler,
             useOptimizerV2)} {}
 
@@ -82,6 +85,8 @@ class SqlQueryRunnerTestHandle {
   struct State {
     State(
         std::string user,
+        std::shared_ptr<const presto::VectorIndexCodecTrainer>
+            vectorIndexCodecTrainer,
         folly::FunctionScheduler* progressScheduler,
         bool useOptimizerV2)
         : connectorRegistry{facebook::velox::connector::ConnectorRegistry::
@@ -93,6 +98,7 @@ class SqlQueryRunnerTestHandle {
               std::move(user),
               *connectorRegistry,
               *metadataRegistry,
+              std::move(vectorIndexCodecTrainer),
               progressScheduler,
               useOptimizerV2)} {}
 

@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
       axiom::sql::SystemUser::resolve(),
       *connectorRegistry,
       *metadataRegistry,
+      /*vectorIndexCodecTrainer=*/nullptr,
       &progressScheduler,
       !FLAGS_v1};
   auto initializeConnectors = [&]() {

@@ -259,7 +259,8 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
           connector::makeTestContext("test"),
           connector::makeTestStatWriter(),
           connector::Properties{},
-          parserOptions));
+          parserOptions,
+          /*vectorIndexCodecTrainer=*/nullptr));
   auto statement = parser.parse(sql);
 
   VELOX_CHECK(

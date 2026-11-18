@@ -107,6 +107,10 @@ class SqlQueryRunnerTestBase : public ::testing::Test,
   // Selects the optimizer makeRunner() builds; a parameterized fixture sets
   // this before calling makeRunner() and branches its expectations on v1 vs v2.
   bool useV2_{true};
+
+  // The codec trainer of the runners makeRunner() builds, or null.
+  std::shared_ptr<const presto::VectorIndexCodecTrainer>
+      vectorIndexCodecTrainer_;
 };
 
 } // namespace axiom::sql

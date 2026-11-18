@@ -131,6 +131,12 @@ refresh is one index write, which runs two plans in order:
 Refreshing a partition the index already covers replaces its codec and local
 indexes.
 
+The codec's k-means runs in `vector_index_train`, on one driver per partition.
+An engine with a k-means of its own can train the codecs instead: an
+application gives the parser a `VectorIndexCodecTrainer` (see
+`VectorIndexCodecTrainer.h`), which plans each partition's centroids, and the
+refresh packs them into each codec with `vector_index_pack`.
+
 The result is the number of embeddings written, summed over the local indexes.
 For a partition of 30 valid rows and 3 clusters, the refresh writes 3 local
 indexes holding 30 embeddings:
@@ -187,6 +193,9 @@ Not supported yet:
 
 - An index with `codec_policy = 'shared'`.
 - An index of a table with no partition columns.
+- A condition the connector can't evaluate from its partition metadata: the
+  refresh reads each partition's row count from the metadata, and fails when
+  the metadata can't answer it.
 
 ## vector_search
 

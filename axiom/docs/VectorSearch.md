@@ -212,11 +212,24 @@ TableWrite <codec table>, codec_id = ?1
 - **Sample.** About 256 points per cluster from each partition, chosen by a
   hash of the key, so the sample is the same on every run. The filter passes
   a share of the partition's rows set from its row count, which includes
-  invalid rows, so a partition with many gets a smaller sample.
+  invalid rows, so a partition with many gets a smaller sample. The connector
+  answers the row count from its metadata. A refresh whose condition the
+  metadata can't evaluate fails, rather than counting the rows, which would
+  read the whole input once more.
 - **Train.** The `vector_index_train` aggregate clusters each partition's
   sample with FAISS's spherical k-means and returns the codec of the
   clusters. It orders the sample by key first, so the codec does not depend
   on the order rows arrive in.
+- **Engine training.** When the parser session has a
+  `VectorIndexCodecTrainer`, the engine plans each partition's centroids
+  instead, and
+  `vector_index_pack(cluster_id, centroid, metric, num_clusters, dimension)`
+  packs them into the codec, checking the cluster IDs and the centroids. The
+  trainer asks for samples of the sizes it needs: a sample of n is the valid
+  rows among about n rows of each partition, those of smallest key hash, with
+  each row's key hash and the partition's row count. A smaller sample is a
+  subset of a larger one, and the rows come unordered, so they stay spread
+  over the workers (see `VectorIndexCodecTrainer.h`).
 - The left join writes a NULL codec for a selected partition with no valid
   rows.
 
