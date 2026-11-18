@@ -484,10 +484,11 @@ class HiveConnectorMetadata : public ConnectorMetadata {
       : hiveConnector_(hiveConnector),
         includeHiddenColumns_{includeHiddenColumns} {}
 
-  /// Hands an INSERT to the writers as a write to an existing table, so they
-  /// report the update mode of each partition the commit applies: OVERWRITE
-  /// when the Hive session property 'insert_existing_partitions_behavior'
-  /// says so.
+  /// Hands an INSERT or VECTOR_INDEX_REFRESH to the writers as a write to an
+  /// existing table, so they report the update mode of each partition the
+  /// commit applies. A VECTOR_INDEX_REFRESH overwrites existing partitions; an
+  /// INSERT overwrites them when the Hive session property
+  /// 'insert_existing_partitions_behavior' says so.
   ConnectorWriteHandlePtr beginWrite(
       const ConnectorSessionPtr& session,
       const TablePtr& table,

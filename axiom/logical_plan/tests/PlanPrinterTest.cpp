@@ -1565,6 +1565,7 @@ TEST_F(PlanPrinterTest, tableWrite) {
            std::pair{"CREATE", WriteKind::kCreate},
            {"INSERT", WriteKind::kInsert},
            {"UPDATE", WriteKind::kUpdate},
+           {"VECTOR_INDEX_REFRESH", WriteKind::kVectorIndexRefresh},
        }) {
     SCOPED_TRACE(
         fmt::format("TableWrite kind: {}, {}", expectedKind, actualKind));

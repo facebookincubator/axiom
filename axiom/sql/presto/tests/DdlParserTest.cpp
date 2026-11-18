@@ -544,13 +544,13 @@ TEST_F(DdlParserTest, refreshVectorIndex) {
   };
   addIndexedTable(
       "t", ROW("ds", VARCHAR()), VectorIndexCodecPolicy::kPerPartition);
-  const auto expectInsert = [](const lp::LogicalPlanNodePtr& plan,
-                               std::string_view table,
-                               const std::vector<std::string>& columns) {
+  const auto expectRefreshWrite = [](const lp::LogicalPlanNodePtr& plan,
+                                     std::string_view table,
+                                     const std::vector<std::string>& columns) {
     const auto* write = plan->as<lp::TableWriteNode>();
     ASSERT_NE(write, nullptr);
     EXPECT_EQ(write->tableName().table, table);
-    EXPECT_EQ(write->writeKind(), lp::WriteKind::kInsert);
+    EXPECT_EQ(write->writeKind(), lp::WriteKind::kVectorIndexRefresh);
     EXPECT_EQ(write->columnNames(), columns);
   };
 
@@ -563,8 +563,9 @@ TEST_F(DdlParserTest, refreshVectorIndex) {
     EXPECT_EQ("i", refresh->index()->name);
 
     const auto& plans = refresh->plans();
-    expectInsert(plans.trainPlan, "t__i__codecs", {"codec", "ds", "codec_id"});
-    expectInsert(
+    expectRefreshWrite(
+        plans.trainPlan, "t__i__codecs", {"codec", "ds", "codec_id"});
+    expectRefreshWrite(
         plans.buildPlan,
         "t__i__index",
         {"codec_id", "cluster_id", "group_id", "local_index", "ds"});
@@ -604,11 +605,11 @@ TEST_F(DdlParserTest, refreshVectorIndex) {
     auto statement =
         parseSql("REFRESH VECTOR INDEX i ON t_hourly WHERE ds = 'x'");
     const auto& plans = statement->as<RefreshVectorIndexStatement>()->plans();
-    expectInsert(
+    expectRefreshWrite(
         plans.trainPlan,
         "t_hourly__i__codecs",
         {"codec", "ds", "hr", "codec_id"});
-    expectInsert(
+    expectRefreshWrite(
         plans.buildPlan,
         "t_hourly__i__index",
         {"codec_id", "cluster_id", "group_id", "local_index", "ds", "hr"});

@@ -128,6 +128,9 @@ refresh is one index write, which runs two plans in order:
 2. Assigns each row to the nearest cluster of its partition's codec, and
    builds a local index for each cluster.
 
+Refreshing a partition the index already covers replaces its codec and local
+indexes.
+
 The result is the number of embeddings written, summed over the local indexes.
 For a partition of 30 valid rows and 3 clusters, the refresh writes 3 local
 indexes holding 30 embeddings:
@@ -182,7 +185,6 @@ a `NULL`, `NaN` or infinite element, is all zeros, or has a length other than
 
 Not supported yet:
 
-- Refreshing a partition the index already covers.
 - An index with `codec_policy = 'shared'`.
 - An index of a table with no partition columns.
 

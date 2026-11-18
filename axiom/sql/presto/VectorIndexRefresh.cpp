@@ -223,7 +223,7 @@ lp::LogicalPlanNodePtr planTrain(
           connectorId,
           index.codecTable.schema,
           index.codecTable.table,
-          lp::WriteKind::kInsert,
+          lp::WriteKind::kVectorIndexRefresh,
           VectorIndex::codecTableType(index.partitionColumns)->names(),
           ColumnExprs::concat(
               ColumnExprs::concat(
@@ -374,7 +374,7 @@ lp::LogicalPlanNodePtr planBuild(
           connectorId,
           index.indexTable.schema,
           index.indexTable.table,
-          lp::WriteKind::kInsert,
+          lp::WriteKind::kVectorIndexRefresh,
           columnNames,
           ColumnExprs::concat(
               {

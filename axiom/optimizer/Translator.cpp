@@ -466,6 +466,17 @@ Translator::DeleteTarget Translator::resolveDeleteTarget(
   return {scan, std::move(rowIdColumns)};
 }
 
+#define AXIOM_CHECK_WRITE_KIND(kind)           \
+  static_assert(                               \
+      static_cast<int>(lp::WriteKind::kind) == \
+      static_cast<int>(connector::WriteKind::kind));
+AXIOM_CHECK_WRITE_KIND(kCreate)
+AXIOM_CHECK_WRITE_KIND(kInsert)
+AXIOM_CHECK_WRITE_KIND(kDelete)
+AXIOM_CHECK_WRITE_KIND(kUpdate)
+AXIOM_CHECK_WRITE_KIND(kVectorIndexRefresh)
+#undef AXIOM_CHECK_WRITE_KIND
+
 Translated Translator::translateTableWrite(
     const lp::TableWriteNode& tableWrite,
     const LpNameSet& /*required*/) {
@@ -473,6 +484,7 @@ Translated Translator::translateTableWrite(
   VELOX_NYI_CHECK(
       kind == connector::WriteKind::kCreate ||
           kind == connector::WriteKind::kInsert ||
+          kind == connector::WriteKind::kVectorIndexRefresh ||
           kind == connector::WriteKind::kDelete,
       "TableWrite does not support {}",
       connector::WriteKindName::toName(kind));

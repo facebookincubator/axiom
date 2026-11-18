@@ -4532,8 +4532,10 @@ void ToGraph::addWrite(const lp::TableWriteNode& tableWrite) {
       static_cast<connector::WriteKind>(tableWrite.writeKind());
   VELOX_NYI_CHECK(
       writeKind == connector::WriteKind::kInsert ||
+          writeKind == connector::WriteKind::kVectorIndexRefresh ||
           writeKind == connector::WriteKind::kCreate,
-      "Only INSERT supported for TableWrite");
+      "TableWrite does not support {}",
+      connector::WriteKindName::toName(writeKind));
   VELOX_CHECK_NULL(
       currentDt_->write, "Only one TableWrite per DerivedTable is allowed");
   const auto* schemaTable =

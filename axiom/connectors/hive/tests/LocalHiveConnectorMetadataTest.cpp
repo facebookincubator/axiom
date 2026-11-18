@@ -1082,7 +1082,7 @@ TEST_F(LocalHiveConnectorMetadataTest, createThenInsert) {
           created,
           WriteKind::kUpdate,
           /*explain=*/false),
-      "Only CREATE/INSERT supported, not UPDATE");
+      "Only CREATE, INSERT and VECTOR_INDEX_REFRESH supported, not UPDATE");
   VELOX_ASSERT_THROW(
       metadata_->deleteLayout(session, /*scanHandle=*/nullptr, /*exact=*/true),
       "DELETE requires a scan of the table");
