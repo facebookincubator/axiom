@@ -174,7 +174,8 @@ namespace {
           connector::makeTestContext("test"),
           connector::makeTestStatWriter(),
           connector::Properties{},
-          parserOptions));
+          parserOptions,
+          /*vectorIndexCodecTrainer=*/nullptr));
   return parser.parse(sql);
 }
 } // namespace

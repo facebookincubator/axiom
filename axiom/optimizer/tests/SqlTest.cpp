@@ -134,7 +134,8 @@ bool runSetupStatement(
           connector::makeTestContext("test"),
           connector::makeTestStatWriter(),
           connector::Properties{},
-          ::axiom::sql::presto::ParserOptions{}));
+          ::axiom::sql::presto::ParserOptions{},
+          /*vectorIndexCodecTrainer=*/nullptr));
   auto stmt = parser.parse(sql);
 
   auto session = connector::makeTestContext("test")->sessionFor(connectorId);

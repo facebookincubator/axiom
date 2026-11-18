@@ -25,12 +25,15 @@
 
 namespace axiom::sql::presto {
 
+class VectorIndexCodecTrainer;
+
 /// The plans of REFRESH VECTOR INDEX (see RefreshVectorIndexStatement).
 ///
 /// Example:
 ///
 ///   auto plans = VectorIndexRefresh::plan(
-///       table, index, connectorId, makeQuery, addCondition);
+///       table, index, connectorId, makeQuery, addCondition,
+///       session->vectorIndexCodecTrainer().get());
 ///   // Inside the index write, run plans.trainPlan, then plans.buildPlan,
 ///   // each with the write's codec id as the value of ?1.
 class VectorIndexRefresh {
@@ -53,6 +56,9 @@ class VectorIndexRefresh {
   /// value. Refreshing a partition the index covers replaces its codec and
   /// local indexes.
   ///
+  /// Each partition's codec is trained with vector_index_train, or packed with
+  /// vector_index_pack from the centroids of 'trainer' if set.
+  ///
   /// For now, the index has at least one partition column.
   static Plans plan(
       const facebook::axiom::SchemaTableName& table,
@@ -62,7 +68,8 @@ class VectorIndexRefresh {
           makeQuery,
       const std::function<facebook::axiom::logical_plan::PlanBuilder(
           facebook::axiom::logical_plan::PlanBuilder storageScan)>&
-          addCondition);
+          addCondition,
+      const VectorIndexCodecTrainer* trainer);
 };
 
 } // namespace axiom::sql::presto

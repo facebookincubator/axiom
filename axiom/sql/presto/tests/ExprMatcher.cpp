@@ -91,11 +91,11 @@ void matchConstant(
   ADD_FAILURE() << "Constant mismatch.";
 }
 
-// Returns the lowercase IExpr call name for a SpecialForm.
-std::string specialFormToCallName(SpecialForm form) {
-  auto name = std::string(SpecialFormName::toName(form));
-  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-  return name;
+// Returns 'name' in lowercase, as an IExpr call spells a special form.
+std::string toCallName(std::string_view name) {
+  std::string callName(name);
+  std::transform(callName.begin(), callName.end(), callName.begin(), ::tolower);
+  return callName;
 }
 
 void matchDereference(
@@ -386,7 +386,7 @@ void matchSpecialForm(
       << ".";
   AXIOM_RETURN_IF_FAILURE
 
-  const auto callName = specialFormToCallName(form);
+  const auto callName = toCallName(SpecialFormName::toName(form));
 
   const auto* expectedCall = expected->as<velox::core::CallExpr>();
   EXPECT_EQ(callName, expectedCall->name());
@@ -503,14 +503,15 @@ bool matchImpl(const ExprPtr& actual, const velox::core::ExprPtr& expected) {
     }
 
     case ExprKind::kSpecialFormAgg: {
-      const auto* expectedCall =
-          dynamic_cast<const velox::core::SpecialFormAggCallExpr*>(
-              expected.get());
-      EXPECT_NE(expectedCall, nullptr) << "Expected SpecialFormAggCallExpr.";
+      // Expect an aggregate call with the kind's name in lowercase, as SQL
+      // spells it, e.g. metadata_row_count().
+      EXPECT_TRUE(expected->is(velox::core::IExpr::Kind::kAggregate))
+          << "Expected AggregateCallExpr.";
       AXIOM_RETURN_FALSE_IF_FAILURE
 
       const auto* aggregate = actual->as<SpecialFormAggExpr>();
-      EXPECT_EQ(aggregate->kind(), expectedCall->specialAggregateKind());
+      const auto* expectedCall = expected->as<velox::core::AggregateCallExpr>();
+      EXPECT_EQ(toCallName(aggregate->name()), expectedCall->name());
       AXIOM_RETURN_FALSE_IF_FAILURE
 
       matchChildren(aggregate->inputs(), expectedCall->inputs());

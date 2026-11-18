@@ -296,12 +296,15 @@ SqlQueryRunner::SqlQueryRunner(
     std::string user,
     velox::connector::ConnectorRegistry::Registry& connectorRegistry,
     connector::ConnectorMetadataRegistry::Registry& metadataRegistry,
+    std::shared_ptr<const presto::VectorIndexCodecTrainer>
+        vectorIndexCodecTrainer,
     folly::FunctionScheduler* progressScheduler,
     bool useOptimizerV2)
     : executor_{std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency() * 2)},
       user_{std::move(user)},
       useOptimizerV2_{useOptimizerV2},
+      vectorIndexCodecTrainer_{std::move(vectorIndexCodecTrainer)},
       progressScheduler_{progressScheduler},
       connectorRegistry_{connectorRegistry},
       metadataRegistry_{metadataRegistry} {
@@ -1086,7 +1089,8 @@ std::vector<presto::SqlStatementPtr> SqlQueryRunner::parseMultiple(
                     options.queryId.value_or(queryIdGenerator_()), options),
       std::make_shared<velox::NoopRuntimeStatWriter>(),
       std::move(properties),
-      std::move(parserOptions));
+      std::move(parserOptions),
+      vectorIndexCodecTrainer_);
   auto prestoParser = std::make_unique<presto::PrestoParser>(
       defaultConnectorId, defaultSchema, std::move(parserSession));
   return prestoParser->parseMultiple(sql, /*enableTracing=*/false);
