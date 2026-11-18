@@ -28,6 +28,7 @@
 #include <type_traits>
 #include <utility>
 #include "velox/common/Casts.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -902,8 +903,6 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
 
   const auto& serdeParameters = hiveLayout->serdeParameters();
 
-  const std::shared_ptr<velox::dwio::common::WriterOptions> writerOptions;
-
   velox::common::CompressionKind compressionKind;
   auto it =
       hiveLayout->table().options().find(HiveWriteOptions::kCompressionKind);
@@ -934,15 +933,27 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
             makeStagingDirectory(table->name()),
             kind);
 
+  using velox::connector::hive::HiveConfig;
+  std::unordered_map<std::string, std::string> sessionOverrides;
+  if (auto value = session->property(
+          HiveConfig::kInsertExistingPartitionsBehaviorSession)) {
+    sessionOverrides.emplace(
+        HiveConfig::kInsertExistingPartitionsBehaviorSession, *value);
+  }
+  const velox::config::ConfigBase sessionConfig(std::move(sessionOverrides));
+  const auto insertExistingPartitionsBehavior =
+      HiveConfig(hiveConnector_->connectorConfig())
+          .insertExistingPartitionsBehavior(&sessionConfig);
+
   auto veloxHandle =
       std::make_shared<velox::connector::hive::HiveInsertTableHandle>(
           inputColumns,
           std::move(locationHandle),
+          insertExistingPartitionsBehavior,
           storageFormat,
           hiveLayout->bucketProperty(),
           compressionKind,
-          serdeParameters,
-          writerOptions);
+          serdeParameters);
   return std::make_shared<HiveConnectorWriteHandle>(
       std::move(veloxHandle),
       velox::exec::TableWriteTraits::outputType(std::nullopt),
