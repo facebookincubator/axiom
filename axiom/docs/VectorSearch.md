@@ -250,8 +250,9 @@ The build reads `t` again. A row of a partition the train plan did not see,
 e.g. one a concurrent write added, has no codec and fails the refresh.
 
 REFRESH does not read the index's existing partitions or check their
-coverage. A refresh of a covered partition fails only when the connector
-rejects an insert into an existing partition, as Local Hive does.
+coverage. Both of its writes have kind `kVectorIndexRefresh`, which the
+connector applies by replacing the partitions the write produces, so a refresh
+of a covered partition replaces its codec and local indexes.
 
 ### Index writes
 
@@ -505,7 +506,6 @@ also prunes files by cluster.
 - Keys other than one BIGINT column.
 - A codec shared by all partitions (`codec_policy = 'shared'`).
 - REFRESH of a table without partition columns.
-- REFRESH of a covered partition.
 - Filters on non-partition columns inside the search.
 - Joins other than INNER, and reading columns of `t` other than the key and
   partition columns; join the result back to `t` instead.
@@ -513,11 +513,6 @@ also prunes files by cluster.
 
 ## Follow-ups
 
-- **Rebuild a covered partition.** Add INSERT OVERWRITE to the engine and the
-  connectors, and have REFRESH use it: write a new codec and overwrite the
-  partition's local indexes in one swap. Finish already drops the old codec.
-  Until then, whether a refresh of a covered partition fails is up to the
-  connector.
 - **Hold the queries in a LEFT search.** Velox can hold either side of a LEFT
   search, preserving the queries as a RIGHT search with the indexes on the
   probe side. The optimizer swaps sides only for INNER searches, so a LEFT

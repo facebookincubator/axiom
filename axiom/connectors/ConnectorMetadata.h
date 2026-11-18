@@ -911,8 +911,7 @@ enum class WriteKind {
   kCreate = 1,
 
   /// Rows are added and all columns must be specified for the TableWriter.
-  /// Covers insert, Hive partition replacement or any other operation which
-  /// adds whole rows.
+  /// Covers insert or any other operation which adds whole rows.
   kInsert = 2,
 
   /// Individual rows are deleted. Only the columns Table::rowIdColumns()
@@ -924,6 +923,11 @@ enum class WriteKind {
   /// for the columns being changed. The new values may overlap with the row
   /// id if the row id is a set of primary key columns.
   kUpdate = 4,
+
+  /// Rows are added as with kInsert, to one of a vector index's storage tables
+  /// as part of refreshing the index. Each partition the write produces
+  /// replaces the table's existing rows in that partition.
+  kVectorIndexRefresh = 5,
 };
 
 AXIOM_DECLARE_ENUM_NAME(WriteKind);

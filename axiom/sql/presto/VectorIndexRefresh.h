@@ -50,7 +50,8 @@ class VectorIndexRefresh {
   /// The index holds only valid rows. A row is skipped when its key is NULL, or
   /// its embedding is NULL, of another length than the index's dimension, has
   /// a NULL or non-finite element, has a zero norm, or has a NULL partition
-  /// value. A partition the index covers fails the refresh, for now.
+  /// value. Refreshing a partition the index covers replaces its codec and
+  /// local indexes.
   ///
   /// For now, the index has at least one partition column.
   static Plans plan(

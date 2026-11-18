@@ -781,9 +781,9 @@ std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
   return std::make_shared<velox::connector::hive::LocationHandle>(
       targetDirectory,
       writeDirectory.value_or(targetDirectory),
-      kind == WriteKind::kInsert
-          ? velox::connector::hive::LocationHandle::TableType::kExisting
-          : velox::connector::hive::LocationHandle::TableType::kNew);
+      kind == WriteKind::kCreate
+          ? velox::connector::hive::LocationHandle::TableType::kNew
+          : velox::connector::hive::LocationHandle::TableType::kExisting);
 }
 
 // Returns the filters selecting the partitions to remove, or why the rows the
@@ -894,8 +894,9 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
     bool explain) {
   ensureInitialized();
   VELOX_CHECK(
-      kind == WriteKind::kCreate || kind == WriteKind::kInsert,
-      "Only CREATE/INSERT supported, not {}",
+      kind == WriteKind::kCreate || kind == WriteKind::kInsert ||
+          kind == WriteKind::kVectorIndexRefresh,
+      "Only CREATE, INSERT and VECTOR_INDEX_REFRESH supported, not {}",
       WriteKindName::toName(kind));
   checkTableWritable(*table);
   const auto* hiveLayout = table->primaryLayout()->asChecked<HiveTableLayout>();
@@ -942,8 +943,10 @@ ConnectorWriteHandlePtr HiveConnectorMetadata::beginWrite(
   }
   const velox::config::ConfigBase sessionConfig(std::move(sessionOverrides));
   const auto insertExistingPartitionsBehavior =
-      HiveConfig(hiveConnector_->connectorConfig())
-          .insertExistingPartitionsBehavior(&sessionConfig);
+      kind == WriteKind::kVectorIndexRefresh
+      ? HiveConfig::InsertExistingPartitionsBehavior::kOverwrite
+      : HiveConfig(hiveConnector_->connectorConfig())
+            .insertExistingPartitionsBehavior(&sessionConfig);
 
   auto veloxHandle =
       std::make_shared<velox::connector::hive::HiveInsertTableHandle>(

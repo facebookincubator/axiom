@@ -1944,13 +1944,14 @@ PlanBuilder& PlanBuilder::tableWrite(
     columnExpressions.push_back(resolveScalarTypes(expr.expr()));
   }
 
-  if (kind == WriteKind::kInsert || kind == WriteKind::kDelete) {
+  if (kind == WriteKind::kInsert || kind == WriteKind::kVectorIndexRefresh ||
+      kind == WriteKind::kDelete) {
     auto metadata = findMetadata(connectorId);
     auto table = metadata->findTable(schemaTableName);
     VELOX_USER_CHECK_NOT_NULL(
         table, "Table not found: {}", schemaTableName.toString());
 
-    if (kind == WriteKind::kInsert) {
+    if (kind != WriteKind::kDelete) {
       // Check input types.
       const auto& schema = table->type();
 

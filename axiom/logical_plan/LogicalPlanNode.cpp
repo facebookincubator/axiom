@@ -1497,6 +1497,7 @@ const auto& writeKindNames() {
       {WriteKind::kInsert, "INSERT"},
       {WriteKind::kUpdate, "UPDATE"},
       {WriteKind::kDelete, "DELETE"},
+      {WriteKind::kVectorIndexRefresh, "VECTOR_INDEX_REFRESH"},
   };
 
   return kNames;

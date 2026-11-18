@@ -101,7 +101,7 @@ class VectorIndexRefreshTest : public SqlQueryRunnerTestBase {
 // Each refresh trains a codec for every partition it reads, under one codec id
 // per refresh, builds a local index for every cluster of every partition, and
 // deletes the other codecs of those partitions. Refreshing a partition the
-// index covers fails and leaves the index as it was.
+// index covers replaces its codec and local indexes.
 TEST_F(VectorIndexRefreshTest, refresh) {
   createTable();
   run(fmt::format(
@@ -148,11 +148,16 @@ TEST_F(VectorIndexRefreshTest, refresh) {
       fetchSingleInt64("SELECT count(DISTINCT codec_id) FROM t__i__codecs"), 2);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 9);
 
-  VELOX_ASSERT_THROW(
-      run("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"),
-      "Partition already exists");
+  EXPECT_EQ(fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE ds = 'a'"), 30);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 3);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT count(DISTINCT codec_id) FROM t__i__codecs"), 3);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 9);
+  EXPECT_EQ(
+      fetchSingleInt64(
+          "SELECT count(*) FROM t__i__index i JOIN t__i__codecs c "
+          "ON i.ds = c.ds AND i.codec_id = c.codec_id"),
+      9);
 }
 
 // EXPLAIN shows the two plans of a refresh and writes nothing. EXPLAIN ANALYZE
@@ -204,7 +209,8 @@ TEST_F(VectorIndexRefreshTest, sample) {
 
 // A table partitioned by several columns gets a codec and local indexes for
 // each combination of their values, and a NULL codec and local index for a
-// combination with no valid rows.
+// combination with no valid rows. Refreshing some of the combinations replaces
+// only theirs.
 TEST_F(VectorIndexRefreshTest, partitionColumns) {
   createTable({"ds", "hr"});
   run(fmt::format(
@@ -231,10 +237,12 @@ TEST_F(VectorIndexRefreshTest, partitionColumns) {
           "AND group_id IS NULL AND local_index IS NULL"),
       1);
 
-  VELOX_ASSERT_THROW(
-      run("REFRESH VECTOR INDEX i ON t WHERE hr = '01'"),
-      "Partition already exists");
+  EXPECT_EQ(
+      fetchSingleInt64("REFRESH VECTOR INDEX i ON t WHERE hr = '01'"), 30);
   EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__codecs"), 3);
+  EXPECT_EQ(
+      fetchSingleInt64("SELECT count(DISTINCT codec_id) FROM t__i__codecs"), 2);
+  EXPECT_EQ(fetchSingleInt64("SELECT count(*) FROM t__i__index"), 7);
 }
 
 // The index holds only valid embeddings: rows with a NULL key, or an embedding
