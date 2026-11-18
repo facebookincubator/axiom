@@ -26,6 +26,7 @@ add_library(
   Connectors.cpp
   Console.cpp
   LiveProgressDisplay.cpp
+  Pager.cpp
   QueryInterruptHandler.cpp
   SqlQueryRunner.cpp
   SystemUser.cpp

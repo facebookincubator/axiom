@@ -38,13 +38,14 @@ int64_t countResults(const std::vector<RowVectorPtr>& results) {
 
 int32_t printResults(
     const std::vector<RowVectorPtr>& results,
-    int64_t maxRows) {
+    int64_t maxRows,
+    std::ostream& output) {
   const auto numRows = countResults(results);
 
   auto printFooter = [&]() {
-    std::cout << "(" << numRows << " rows in " << results.size() << " batches)"
-              << std::endl
-              << std::endl;
+    output << "(" << numRows << " rows in " << results.size() << " batches)"
+           << std::endl
+           << std::endl;
   };
 
   if (numRows == 0) {
@@ -65,35 +66,35 @@ int32_t printResults(
   }
 
   auto printSeparator = [&]() {
-    std::cout << std::setfill('-');
+    output << std::setfill('-');
     for (auto i = 0; i < numColumns; ++i) {
       if (i > 0) {
-        std::cout << "-+-";
+        output << "-+-";
       }
-      std::cout << std::setw(widths[i]) << "";
+      output << std::setw(widths[i]) << "";
     }
-    std::cout << std::endl;
-    std::cout << std::setfill(' ');
+    output << std::endl;
+    output << std::setfill(' ');
   };
 
   auto printRow = [&](const auto& row) {
     for (auto i = 0; i < numColumns; ++i) {
       if (i > 0) {
-        std::cout << " | ";
+        output << " | ";
       }
       if (alignLeft[i]) {
-        std::cout << std::left;
+        output << std::left;
         // Skip padding on the last column to avoid trailing whitespace.
         if (i < numColumns - 1) {
-          std::cout << std::setw(widths[i]);
+          output << std::setw(widths[i]);
         }
       } else {
-        std::cout << std::right;
-        std::cout << std::setw(widths[i]);
+        output << std::right;
+        output << std::setw(widths[i]);
       }
-      std::cout << row[i];
+      output << row[i];
     }
-    std::cout << std::endl;
+    output << std::endl;
   };
 
   int32_t numPrinted = 0;
@@ -108,9 +109,8 @@ int32_t printResults(
     }
 
     if (numPrinted < numRows) {
-      std::cout << std::endl;
-      std::cout << "..." << (numRows - numPrinted) << " more rows."
-                << std::endl;
+      output << std::endl;
+      output << "..." << (numRows - numPrinted) << " more rows." << std::endl;
     }
 
     printFooter();
