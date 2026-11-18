@@ -486,6 +486,149 @@ WHERE EXISTS (
   WHERE u.x = t.a AND u.y = t.a
 )
 ----
+-- A range filter on the right key restricts the left input the same way. NULL
+-- keys match nothing on either side.
+SELECT t.a, u.x
+FROM (VALUES (1), (2), (NULL)) AS t(a), (VALUES (1), (2), (NULL)) AS u(x)
+WHERE t.a = u.x AND u.x > 1
+----
+-- A filter on the last input of a chain of WHERE equalities holds for every
+-- input of the chain.
+SELECT t.a, u.x, v.k
+FROM (VALUES (1), (3)) AS t(a),
+  (VALUES (1), (3), (NULL)) AS u(x),
+  (VALUES (3), (NULL)) AS v(k)
+WHERE t.a = u.x AND u.x = v.k AND v.k = 3
+----
+-- Two WHERE equalities to one column: a row matches only where a = b.
+SELECT t.a, t.b, u.x
+FROM (VALUES (1, 1), (1, 2), (2, 2)) AS t(a, b),
+  (VALUES (1), (2)) AS u(x)
+WHERE t.a = u.x AND t.b = u.x
+----
+-- Three equalities make t.a, t.b, u.x and u.y equal, and a fourth condition
+-- reads both inputs. Only (6, 6, 6, 6) satisfies all four.
+SELECT t.a, t.b, u.x, u.y
+FROM (VALUES (6, 6), (9, 6), (2, 2)) AS t(a, b),
+  (VALUES (6, 6), (9, 6), (6, 9), (2, 2)) AS u(x, y)
+WHERE t.a = u.x AND t.b = u.y AND t.a = u.y AND t.b + u.x > 10
+----
+-- A WHERE filter on the right side of a LEFT join whose two keys share t.a.
+-- Only u's (200, 200) matches t's 200.
+SELECT t.a, u.x, u.y
+FROM (VALUES (200), (50), (NULL)) AS t(a)
+LEFT JOIN (VALUES (200, 0), (200, 200), (50, 50), (NULL, NULL)) AS u(x, y)
+  ON t.a = u.x AND t.a = u.y
+WHERE u.x > 100
+----
+-- A key a WHERE equality matches is never NULL, so IS NULL on it returns
+-- nothing.
+-- count 0
+SELECT t.a, u.y
+FROM (VALUES (1, 10), (NULL, 15)) AS t(a, b),
+  (VALUES (1, 100), (NULL, 300)) AS u(x, y)
+WHERE t.a = u.x AND u.x IS NULL
+----
+-- A filter a subquery guarantees holds for every input of a chain of WHERE
+-- equalities.
+SELECT t.a, u.x, v.k
+FROM (SELECT * FROM (VALUES (1), (6)) AS t(a) WHERE a > 5) t,
+  (VALUES (1), (6)) AS u(x),
+  (VALUES (1), (6)) AS v(k)
+WHERE t.a = u.x AND u.x = v.k
+----
+-- An IN subquery that selects only its key restricts the outer rows by the
+-- filter on another column the key equals.
+SELECT a
+FROM (VALUES (1), (2), (3)) AS t(a)
+WHERE a IN (
+  SELECT x FROM (VALUES (1, 1), (2, 2), (3, 4)) AS u(x, y)
+  WHERE x = y AND y > 1
+)
+----
+-- What the right input of a LEFT join guarantees does not restrict the left
+-- rows: those without a match still appear with NULLs.
+SELECT t.a, u.x
+FROM (VALUES (1), (2), (3)) AS t(a)
+LEFT JOIN (
+  SELECT * FROM (VALUES (1, 1), (2, 2), (3, 4)) AS u(x, y)
+  WHERE x = y AND y > 1
+) u ON t.a = u.x
+----
+-- An IN subquery below another join keeps only the outer rows with a match,
+-- so the join above can read the subquery's filter on the key.
+SELECT q.a, v.k
+FROM (
+  SELECT * FROM (VALUES (1), (2)) AS t(a)
+  WHERE a IN (SELECT x FROM (VALUES (1), (2)) AS u(x) WHERE x > 1)
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.a = v.k
+----
+-- NOT IN below another join keeps the outer rows without a match, so the
+-- subquery's filter says nothing about them.
+SELECT q.a, v.k
+FROM (
+  SELECT * FROM (VALUES (1), (2)) AS t(a)
+  WHERE a NOT IN (SELECT x FROM (VALUES (1), (2)) AS u(x) WHERE x > 1)
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.a = v.k
+----
+-- A LEFT join's key equality does not hold on the rows it pads with NULLs.
+SELECT q.a, v.k
+FROM (
+  SELECT t.a, u.x
+  FROM (VALUES (1), (2)) AS t(a) LEFT JOIN (VALUES (1)) AS u(x) ON t.a = u.x
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.a = v.k
+WHERE q.x IS NULL
+----
+-- A condition that keeps the NULLs a LEFT join pads with leaves it outer.
+SELECT q.a, v.k
+FROM (
+  SELECT t.a, u.x
+  FROM (VALUES (1), (2)) AS t(a)
+  LEFT JOIN (SELECT * FROM (VALUES (1), (2)) AS u(x) WHERE x > 1) u
+    ON t.a = u.x
+  WHERE u.x IS NULL
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.a = v.k
+----
+-- A WHERE that rejects the NULLs of one side of a FULL join keeps the rows of
+-- that side without a match.
+SELECT q.x, v.k
+FROM (
+  SELECT u.x
+  FROM (SELECT * FROM (VALUES (1), (2)) AS t(a) WHERE a > 1) t
+  FULL JOIN (VALUES (1), (2)) AS u(x) ON t.a = u.x
+  WHERE u.x > 0
+) q
+JOIN (VALUES (1), (2)) AS v(k) ON q.x = v.k
+----
+-- INTERSECT matches NULL to NULL, so a row a LEFT join pads with NULLs still
+-- matches.
+SELECT t.a, u.y
+FROM (VALUES (1), (2)) AS t(a)
+LEFT JOIN (SELECT * FROM (VALUES (1, 10), (2, 3)) AS u(x, y) WHERE y > 5) u
+  ON t.a = u.x
+INTERSECT
+SELECT k, m FROM (VALUES (1, 10), (2, NULL)) AS v(k, m)
+----
+-- A condition over both inputs still holds when an input's equality moves it
+-- into the other input.
+SELECT t.b, u.y
+FROM (SELECT * FROM (VALUES (5, 5), (5, 6)) AS t(a, b) WHERE a = b) t
+JOIN (VALUES (5, 1), (5, 7)) AS u(x, y) ON t.a = u.x
+WHERE t.b + u.y > 10
+----
+-- A filter only one leg of a UNION ALL guarantees does not hold on the union.
+SELECT w.c, v.k
+FROM (
+  SELECT a AS c FROM (VALUES (1), (2)) AS t(a) WHERE a > 1
+  UNION ALL
+  SELECT x FROM (VALUES (1), (2)) AS u(x) WHERE x < 2
+) w
+JOIN (VALUES (1), (2)) AS v(k) ON w.c = v.k
+----
 -- RIGHT JOIN with a non-equi ON against a FROM-less scalar subquery and a
 -- null-rejecting WHERE on the optional side. Returns the optional-side rows
 -- that pass the predicate.

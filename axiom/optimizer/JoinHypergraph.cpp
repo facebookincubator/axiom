@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "axiom/optimizer/EquivalenceClosure.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::optimizer {
@@ -195,50 +196,6 @@ void JoinHypergraph::addFilterConjunct(FilterConjunct conjunct) {
 }
 
 namespace {
-
-// Tracks the transitive closure of equalities over pointer-identity values.
-// The comparator overload keeps the preferred representative when sets merge.
-template <typename T>
-class EquivalenceClosure {
- public:
-  void add(T value) {
-    parents_.try_emplace(value, value);
-  }
-
-  T find(T value) {
-    add(value);
-    T root = value;
-    while (parents_[root] != root) {
-      root = parents_[root];
-    }
-    while (value != root) {
-      T next = parents_[value];
-      parents_[value] = root;
-      value = next;
-    }
-    return root;
-  }
-
-  void merge(T left, T right) {
-    merge(left, right, [](T, T) { return false; });
-  }
-
-  template <typename Better>
-  void merge(T left, T right, Better better) {
-    left = find(left);
-    right = find(right);
-    if (left == right) {
-      return;
-    }
-    if (better(right, left)) {
-      std::swap(left, right);
-    }
-    parents_[right] = left;
-  }
-
- private:
-  folly::F14FastMap<T, T> parents_;
-};
 
 // Whether a join of `joinType` proves its equi-key columns hold equal values
 // on every row it emits, so downstream may substitute either for the other.
