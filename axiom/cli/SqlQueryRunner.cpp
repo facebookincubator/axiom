@@ -1602,6 +1602,9 @@ SqlQueryRunner::co_runUnchecked(
     std::string& planString) {
   const std::string queryId = options.queryId.value_or(queryIdGenerator_());
   context->setQueryKind(sqlStatement.queryKind());
+  if (options.tokenProvider != nullptr) {
+    context->setTokenProvider(options.tokenProvider);
+  }
 
   if (sqlStatement.isExplain()) {
     auto generator = co_runExplainStatement(
@@ -2109,6 +2112,9 @@ SqlQueryRunner::executeSelectOrInsert(
   auto queryCtx = newQuery(options);
   const auto context = makeConnectorContext(queryCtx->queryId(), options);
   context->setQueryKind(statement.queryKind());
+  if (options.tokenProvider != nullptr) {
+    context->setTokenProvider(options.tokenProvider);
+  }
   auto planAndStats = optimize(logicalPlan, queryCtx, options, context);
   return makeLocalRunner(planAndStats, queryCtx, options, context);
 }

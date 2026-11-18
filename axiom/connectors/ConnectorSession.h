@@ -22,12 +22,14 @@
 #include <string_view>
 #include <utility>
 
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 
 #include "axiom/common/Enums.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/TokenProvider.h"
 
 namespace facebook::axiom::connector {
 
@@ -66,9 +68,15 @@ class ConnectorQueryState {
   virtual ~ConnectorQueryState() = default;
 };
 
+/// The query's storage token provider, or null until the engine sets it and
+/// for a query without one. The engine sets it at most once.
+using TokenProviderState =
+    folly::Synchronized<std::shared_ptr<velox::filesystems::TokenProvider>>;
+
 /// Holds what one connector is given for one query: the query's identity, this
-/// connector's property slice, and the writer it records into. Every connector
-/// API takes one.
+/// connector's property slice, the writer it records into, and the query kind
+/// and storage token provider it shares with its ConnectorContext. Every
+/// connector API takes one.
 ///
 /// ConnectorContext makes one on first use. Connector-defined query state lives
 /// as long as this session.
@@ -88,12 +96,14 @@ class ConnectorSession final {
       std::string user,
       Properties properties,
       std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter,
-      std::shared_ptr<const QueryKindState> queryKind = nullptr)
+      std::shared_ptr<const QueryKindState> queryKind = nullptr,
+      std::shared_ptr<const TokenProviderState> tokenProvider = nullptr)
       : queryId_{std::move(queryId)},
         user_{std::move(user)},
         properties_{std::move(properties)},
         statsWriter_{std::move(statsWriter)},
-        queryKind_{std::move(queryKind)} {
+        queryKind_{std::move(queryKind)},
+        tokenProvider_{std::move(tokenProvider)} {
     VELOX_CHECK_NOT_NULL(statsWriter_, "ConnectorSession requires a writer");
   }
 
@@ -156,14 +166,23 @@ class ConnectorSession final {
     return velox::checkedPointerCast<T>(queryState_->get());
   }
 
+  /// Returns the provider of the query's storage access tokens, or null until
+  /// the engine sets it (see ConnectorContext::setTokenProvider()), when the
+  /// query has none, and for a session made outside a ConnectorContext. The
+  /// engine can set it after this session is made, so call this on each use.
+  std::shared_ptr<velox::filesystems::TokenProvider> tokenProvider() const {
+    return tokenProvider_ ? tokenProvider_->copy() : nullptr;
+  }
+
  private:
   const std::string queryId_;
   const std::string user_;
   const Properties properties_;
   const std::shared_ptr<velox::BaseRuntimeStatWriter> statsWriter_;
-  // Shared with the ConnectorContext that sets it. Null for a session made
+  // Shared with the ConnectorContext that sets them. Null for a session made
   // outside a context.
   const std::shared_ptr<const QueryKindState> queryKind_;
+  const std::shared_ptr<const TokenProviderState> tokenProvider_;
   // Tracks whether initialization has run, including when the connector keeps
   // no query state.
   std::optional<std::unique_ptr<ConnectorQueryState>> queryState_;

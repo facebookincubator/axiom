@@ -29,6 +29,7 @@ target_link_libraries(
   velox_memory
   velox_connector
   velox_core
+  velox_file
   velox_vector_index_settings
   Folly::folly
 )

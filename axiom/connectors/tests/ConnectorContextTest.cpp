@@ -27,6 +27,7 @@
 #include "axiom/connectors/tests/TestConnector.h"
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/PlainUserNameTokenProvider.h"
 
 namespace facebook::axiom::connector {
 namespace {
@@ -138,6 +139,29 @@ TEST_F(ConnectorContextTest, sessionCarriesThisConnectorsProperties) {
   EXPECT_EQ(session->queryId(), "q1");
   EXPECT_EQ(session->user(), "user");
   EXPECT_EQ(session->property("max_rows_per_scan"), "10");
+}
+
+// Every session sees the token provider, including one made before it was
+// set. The provider is set once.
+TEST_F(ConnectorContextTest, tokenProvider) {
+  velox::ConcurrentRuntimeStatWriter writer;
+  std::atomic<int32_t> writerCalls{0};
+  auto context = makeContext({}, &writerCalls, writer);
+  auto session = context->sessionFor("a");
+  EXPECT_EQ(session->tokenProvider(), nullptr);
+
+  auto provider =
+      std::make_shared<velox::filesystems::PlainUserNameTokenProvider>("a");
+  context->setTokenProvider(provider);
+  EXPECT_EQ(session->tokenProvider(), provider);
+  EXPECT_EQ(context->sessionFor("b")->tokenProvider(), provider);
+
+  VELOX_ASSERT_THROW(
+      context->setTokenProvider(
+          std::make_shared<velox::filesystems::PlainUserNameTokenProvider>(
+              "b")),
+      "Token provider is already set");
+  EXPECT_EQ(session->tokenProvider(), provider);
 }
 
 // The contract is that concurrent callers get one session, not merely one per
