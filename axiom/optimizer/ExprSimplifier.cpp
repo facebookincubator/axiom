@@ -296,6 +296,63 @@ ExprCP domainToFilter(Builder& builder, ColumnCP column, Domain domain) {
 
 } // namespace
 
+namespace {
+
+// Returns the result of `rand() <op> threshold` when every value of `rand()`
+// gives the same result, or nullopt.
+std::optional<bool> randomComparisonResult(
+    Name op,
+    const velox::Variant& threshold,
+    const FunctionNames& names) {
+  if (threshold.isNull()) {
+    return std::nullopt;
+  }
+  const double value = threshold.value<double>();
+  if (value >= 1) {
+    // Every value of rand() is below 'value'.
+    if (op == names.lt || op == names.lte) {
+      return true;
+    }
+    if (op == names.gt || op == names.gte) {
+      return false;
+    }
+  } else if (value < 0 || (value == 0 && (op == names.lt || op == names.gte))) {
+    // Every value of rand() is at or above 'value'.
+    if (op == names.gt || op == names.gte) {
+      return true;
+    }
+    if (op == names.lt || op == names.lte) {
+      return false;
+    }
+  }
+  return std::nullopt;
+}
+
+// Folds a comparison of `rand()` with a literal to TRUE or FALSE when every
+// value of `rand()` gives the same result: `rand() < 0` is FALSE, `rand() < 1`
+// is TRUE. Otherwise returns 'expr' unchanged.
+ExprCP tryFoldRandomComparison(Builder& builder, ExprCP expr) {
+  if (!expr->is(PlanType::kCallExpr)) {
+    return expr;
+  }
+  const auto* comparison = expr->as<Call>();
+  const auto& args = comparison->args();
+  if (args.size() != 2 || !args[0]->is(PlanType::kCallExpr) ||
+      !args[1]->is(PlanType::kLiteralExpr)) {
+    return expr;
+  }
+  const auto& names = builder.functionNames();
+  const auto* randomCall = args[0]->as<Call>();
+  if (randomCall->name() != names.random || !randomCall->args().empty()) {
+    return expr;
+  }
+  const auto result = randomComparisonResult(
+      comparison->name(), args[1]->as<Literal>()->literal(), names);
+  return result.has_value() ? builder.makeBoolean(*result) : expr;
+}
+
+} // namespace
+
 ExprCP ExprSimplifier::simplify(ExprCP expr) {
   if (const auto it = simplified_.find(expr); it != simplified_.end()) {
     return it->second;
@@ -348,7 +405,8 @@ ExprCP ExprSimplifier::simplify(ExprCP expr) {
   } else if (ExprCP fieldEqualities = tryExpandRowEquality(expr)) {
     expr = simplify(fieldEqualities);
   } else {
-    expr = tryFoldConjunct(tryFoldConstant(expr));
+    expr = tryFoldConjunct(
+        tryFoldRandomComparison(builder_, tryFoldConstant(expr)));
   }
   simplified_.emplace(original, expr);
   return expr;

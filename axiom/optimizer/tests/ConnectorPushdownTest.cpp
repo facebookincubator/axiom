@@ -153,7 +153,7 @@ TEST_P(ConnectorPushdownTest, multiRowIn) {
 
   expectPushed(
       "(random(), b) IN ((DOUBLE '1', 2), (DOUBLE '3', 4))",
-      {R"("in"(row_constructor(random(), b), "any"()))", "b IN (2, 4)"});
+      {R"("in"(row_constructor(rand(), b), "any"()))", "b IN (2, 4)"});
 
   expectPushed("ROW(a) IN (ROW(1), ROW(2))", {"a IN (1, 2)"});
   expectPushed("ROW(a) IN (ROW(1), NULL)", {"a = 1"});
