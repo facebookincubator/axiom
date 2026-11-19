@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/Node.h"
 
+#include <algorithm>
 #include <optional>
 #include <ranges>
 #include <type_traits>
@@ -1461,6 +1462,21 @@ Partitioning Aggregation::globalPartition(
       inputPartitions[0],
       groupingKeys_,
       aggregateGroupingColumns(outputColumns(), groupingKeys_.size()));
+}
+
+bool Aggregation::producesRowOnEmptyInput() const {
+  return groupingKeys_.empty() || !globalGroupingSets_.empty();
+}
+
+bool Aggregation::canFilterBelow(ExprCP conjunct) const {
+  if (producesRowOnEmptyInput() || conjunct->containsNonDeterministic()) {
+    return false;
+  }
+  const auto& outputs = outputColumns();
+  return std::none_of(
+      outputs.begin() + groupingKeys_.size(),
+      outputs.end(),
+      [&](ColumnCP output) { return conjunct->columns().contains(output); });
 }
 
 Aggregation::Key Aggregation::key() const {

@@ -621,8 +621,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       }
       case NodeType::kAggregate: {
         const auto* aggregate = node->as<Aggregation>();
-        if (aggregate->groupingKeys().empty() ||
-            !aggregate->globalGroupingSets().empty()) {
+        if (aggregate->producesRowOnEmptyInput()) {
           return;
         }
         const size_t numKeys = aggregate->groupingKeys().size();
@@ -1065,24 +1064,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         std::move(simplified), std::move(blocked), context);
   }
 
-  // Aggregate: conjuncts referencing only grouping-key outputs push below
-  // (substituted to the grouping-key expressions); conjuncts referencing
-  // any aggregate output stay above as a HAVING-equivalent Filter, as do
-  // nondeterministic conjuncts, since a group collapses rows.
-  //
-  // An aggregate that emits a row on empty input — a global aggregate (no
-  // grouping keys), or one with a global (empty) grouping set — blocks
-  // pushdown entirely: the aggregate manufactures that row regardless of its
-  // input, so a filter pushed below it can't suppress the row it was meant to
-  // remove. A predicate on a key that GroupId NULLs for some set is handled by
-  // the GroupId barrier (see rewriteGroupId), not here.
+  // Aggregate: pushes the conjuncts Aggregation::canFilterBelow admits,
+  // substituted to the grouping-key expressions; the rest stay above as a
+  // HAVING-equivalent Filter. A predicate on a key that GroupId NULLs for some
+  // set is handled by the GroupId barrier (see rewriteGroupId), not here.
   //
   // Grouping keys stay; dropping one would re-shape the groups.
   NodeCP rewriteAggregate(const Aggregation* node, PushdownContext& context)
       override {
-    const bool emitsRowOnEmptyInput =
-        node->groupingKeys().empty() || !node->globalGroupingSets().empty();
-    if (emitsRowOnEmptyInput) {
+    if (node->producesRowOnEmptyInput()) {
       for (const auto* aggregate : node->aggregates()) {
         access_.add(aggregate);
       }
@@ -1114,14 +1104,12 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     const size_t numKeys = node->groupingKeys().size();
     ColumnVector groupingKeyOutputs(
         node->outputColumns().begin(), node->outputColumns().begin() + numKeys);
-    PlanObjectSet aggregateOutputs;
-    for (size_t i = numKeys; i < node->outputColumns().size(); ++i) {
-      aggregateOutputs.add(node->outputColumns()[i]);
+    ExprVector substitutable;
+    ExprVector blocked;
+    for (ExprCP conjunct : context.pending) {
+      (node->canFilterBelow(conjunct) ? substitutable : blocked)
+          .push_back(conjunct);
     }
-
-    auto [substitutable, blocked] =
-        partition(context.pending, aggregateOutputs);
-    blockNondeterministic(substitutable, blocked);
 
     ExprVector pushable;
     pushable.reserve(substitutable.size());
