@@ -648,6 +648,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"graphTableRepetition">(
       /*v2Only=*/true, /*singleNodeAndDistributed=*/true);
   registerQueryFile<"groupingsets">();
+  registerQueryFile<"hiveSampleRate">(/*v2Only=*/true);
   registerQueryFile<"informationSchema">(/*v2Only=*/true);
   registerQueryFile<"join">();
   registerQueryFile<"limit">();

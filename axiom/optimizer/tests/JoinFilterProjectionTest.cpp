@@ -109,7 +109,7 @@ TEST_F(JoinFilterProjectionTest, nonDeterministic) {
           .nestedLoopJoin(
               matchScan("u").project({"x", "cast(length(y) as DOUBLE) as pu"}),
               core::JoinType::kInner,
-              "pt + random() < pu")
+              "pt + rand() < pu")
           .build();
 
   AXIOM_ASSERT_PLAN(
