@@ -194,6 +194,7 @@ class SystemConnectorMetadataTest : public ::testing::Test {
     std::vector<int32_t> rejectedFilterIndices;
     auto tableHandle = table->primaryLayout()->createTableHandle(
         session,
+        /*tableReferenceId=*/0,
         std::move(handleList),
         evaluator,
         std::move(filters),
@@ -317,6 +318,7 @@ TEST_F(SystemConnectorMetadataTest, tableHandle) {
   std::vector<int32_t> rejectedFilterIndices;
   auto tableHandle = layouts[0]->createTableHandle(
       session,
+      /*tableReferenceId=*/0,
       {columnHandle},
       evaluator,
       std::move(filters),
@@ -338,7 +340,12 @@ TEST_F(SystemConnectorMetadataTest, splitSource) {
   std::vector<velox::core::TypedExprPtr> filters;
   std::vector<int32_t> rejectedFilterIndices;
   auto tableHandle = table->primaryLayout()->createTableHandle(
-      session, {}, evaluator, std::move(filters), rejectedFilterIndices);
+      session,
+      /*tableReferenceId=*/0,
+      {},
+      evaluator,
+      std::move(filters),
+      rejectedFilterIndices);
 
   auto* splitManager = metadata_->splitManager();
   auto partitions = folly::coro::blockingWait(
