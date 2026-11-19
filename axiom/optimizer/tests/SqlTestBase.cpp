@@ -35,6 +35,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::axiom::optimizer::test {
 
@@ -317,8 +318,10 @@ void SqlTestBase::assertResults(
   auto referenceSql = duckDbSql.value_or(std::string(sql));
   auto resultType = axiomResults[0]->rowType();
 
-  velox::exec::test::assertResults(
-      axiomResults, resultType, referenceSql, duckDbRunner());
+  velox::test::VectorAssertions::equalMultisets(
+      duckDbRunner().execute(referenceSql, resultType),
+      resultType,
+      axiomResults);
 
   if (checkColumnNames) {
     auto duckDbResult = duckDbRunner().execute(referenceSql);
@@ -344,20 +347,12 @@ void SqlTestBase::assertOrderedResults(
   auto referenceSql = duckDbSql.value_or(std::string(sql));
   auto resultType = axiomResults[0]->rowType();
 
-  auto expectedRows = duckDbRunner().executeOrdered(referenceSql, resultType);
-
-  // Materialize Axiom results into an ordered list of rows.
-  std::vector<velox::exec::test::MaterializedRow> actualRows;
-  for (const auto& batch : axiomResults) {
-    auto batchRows = velox::exec::test::materialize(batch);
-    actualRows.insert(actualRows.end(), batchRows.begin(), batchRows.end());
-  }
-
-  ASSERT_EQ(expectedRows.size(), actualRows.size());
-
-  for (size_t i = 0; i < expectedRows.size(); ++i) {
-    ASSERT_EQ(expectedRows[i], actualRows[i]) << "Mismatch at row " << i;
-  }
+  ASSERT_NO_FATAL_FAILURE(
+      velox::test::VectorAssertions::equalOrdered(
+          duckDbRunner().executeOrdered(referenceSql, resultType),
+          resultType,
+          axiomResults,
+          /*epsilon=*/false));
 
   if (checkColumnNames) {
     auto duckDbResult = duckDbRunner().execute(referenceSql);
