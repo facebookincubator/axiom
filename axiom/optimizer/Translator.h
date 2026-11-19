@@ -628,9 +628,11 @@ class Translator {
 
   // Evaluates the aggregation 'aggregate' describes from the listed
   // discrete-predicate (e.g. partition) values, returning one row Variant per
-  // result row, or nullopt when it is not foldable: its aggregates must all
-  // ignore duplicate inputs, and its input must be an optional Filter over a
-  // Scan of only discrete-predicate columns on a connector that can list them.
+  // result row, or nullopt when it is not foldable: its aggregates must ignore
+  // duplicate inputs or be DISTINCT, its grouping keys, aggregates and filter
+  // predicates must be deterministic, and its input must be an optional Filter
+  // over an unsampled Scan of only discrete-predicate columns on a connector
+  // that can list them.
   std::optional<std::vector<velox::Variant>> tryEvaluateOverDiscreteValues(
       const Aggregation::Key& aggregate);
 

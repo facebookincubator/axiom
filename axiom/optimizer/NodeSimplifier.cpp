@@ -390,20 +390,7 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
         condition = nullptr;
       }
 
-      if (condition != aggregate->condition()) {
-        aggregate = builder_.makeAggregate(
-            aggregate->name(),
-            aggregate->value(),
-            ExprVector{aggregate->args()},
-            aggregate->functions(),
-            aggregate->isDistinct(),
-            condition,
-            aggregate->intermediateType(),
-            ExprVector{aggregate->orderKeys()},
-            aggregate->orderTypes(),
-            aggregate->specialKind(),
-            aggregate->fallback());
-      }
+      aggregate = builder_.replaceCondition(aggregate, condition);
     }
 
     keptAggregates.push_back(aggregate);

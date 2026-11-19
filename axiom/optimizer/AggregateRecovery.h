@@ -79,13 +79,6 @@ class AggregateRecovery {
   optimizer::AggregateCP makeBoolOr(ExprCP arg);
 
  private:
-  // Returns a copy of `aggregate` with the FILTER condition replaced by
-  // `condition`. Other fields (name, args, distinct, orderKeys, etc.)
-  // are preserved.
-  optimizer::AggregateCP replaceCondition(
-      optimizer::AggregateCP aggregate,
-      ExprCP condition);
-
   Builder& builder_;
   ExprFactory& exprFactory_;
 };

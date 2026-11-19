@@ -286,6 +286,17 @@ TEST_P(SubqueryFoldTest, inSubqueryOverPartitions) {
           "SELECT x FROM pt WHERE ds IN (SELECT ds FROM pt WHERE k > 1)"),
       core::PlanMatcherBuilder().values().build());
 
+  // A sampled subquery is evaluated from the table.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(
+          "SELECT x FROM pt "
+          "WHERE ds IN (SELECT ds FROM pt TABLESAMPLE BERNOULLI (50))"),
+      matchHiveScan("pt")
+          .hashJoin(
+              matchHiveScan("pt", {}, "", /*sampleRate=*/0.5),
+              core::JoinType::kLeftSemiFilter)
+          .build());
+
   // A filter on the non-partition column 'x' prevents the fold: the subquery is
   // evaluated normally rather than by listing partitions.
   AXIOM_ASSERT_PLAN(
@@ -407,6 +418,54 @@ TEST_P(SubqueryFoldTest, foldableAggregationOverPartitions) {
     AXIOM_ASSERT_PLAN_V2(
         plan,
         matchHiveScan("pt").singleAggregation({}, {"max(x) as m"}).build());
+  }
+
+  // A query whose result is random reads the table.
+  {
+    auto plan =
+        toSingleNodePlan("SELECT count(DISTINCT length(ds) + rand()) FROM pt");
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchHiveScan("pt")
+            .project({"cast(length(ds) as double) + rand() as p"})
+            .singleAggregation({}, {"count(DISTINCT p)"})
+            .build());
+  }
+  {
+    auto plan =
+        toSingleNodePlan("SELECT max(ds) FILTER (WHERE rand() < 0.5) FROM pt");
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchHiveScan("pt")
+            .project({"ds", "rand() < 0.5 as m"})
+            .singleAggregation({}, {"max(ds) filter (where m)"})
+            .build());
+  }
+  {
+    auto plan =
+        toSingleNodePlan("SELECT length(ds) + rand() FROM pt GROUP BY 1");
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchHiveScan("pt")
+            .project({"cast(length(ds) as double) + rand() as p"})
+            .singleAggregation({"p"}, {})
+            .build());
+  }
+  for (const auto* sql :
+       {"SELECT DISTINCT ds FROM pt WHERE rand() < 0.5",
+        "SELECT DISTINCT ds FROM pt TABLESAMPLE BERNOULLI (50)"}) {
+    SCOPED_TRACE(sql);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(sql),
+        matchHiveScan("pt", {}, "", /*sampleRate=*/0.5)
+            .singleAggregation({"ds"}, {})
+            .build());
+  }
+  {
+    auto plan =
+        toSingleNodePlan("SELECT DISTINCT ds FROM pt TABLESAMPLE SYSTEM (50)");
+    AXIOM_ASSERT_PLAN_V2(
+        plan, matchHiveScan("pt").singleAggregation({"ds"}, {}).build());
   }
 }
 
