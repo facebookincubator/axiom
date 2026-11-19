@@ -239,6 +239,10 @@ with Velox. These components are:
   | [System](axiom/connectors/system/README.md) | Read-only metadata tables for session properties and active queries. |
   | [Test](axiom/connectors/tests/README.md) | In-memory read-write connector for unit testing. |
   | [File](axiom/connectors/file/README.md) | Read-only connector multi-utility for running sql on raw files |
+- Application helpers - pieces an application uses to combine the components
+  above, such as turning its session properties into each component's
+  configuration and generating query IDs.
+  - top-level “application” directory
 - [CLI](axiom/cli/README.md) - Interactive SQL command line for executing
   queries against in-memory TPC-H dataset and local Hive data.
   - top-level “cli” directory

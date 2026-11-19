@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/tests/SqlTestBase.h"
 #include <folly/coro/BlockingWait.h>
+#include "axiom/application/SessionProperties.h"
+#include "axiom/common/ConfigRegistry.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/SchemaResolver.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
@@ -29,9 +31,14 @@
 #include "axiom/sql/presto/PrestoParser.h"
 #include "axiom/sql/presto/SqlStatement.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/core/QueryConfigProvider.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/axiom/Register.h"
+#include "velox/functions/prestosql/PrestoConfigProvider.h"
+#include "velox/functions/prestosql/PrestoQueryConfig.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -40,6 +47,74 @@
 namespace facebook::axiom::optimizer::test {
 
 using namespace facebook::velox;
+
+namespace {
+
+// Ids of the registered connectors.
+std::vector<std::string> connectorIds() {
+  std::vector<std::string> ids;
+  for (const auto& [id, _] :
+       velox::connector::ConnectorRegistry::global().snapshot()) {
+    ids.push_back(id);
+  }
+  return ids;
+}
+
+// Properties queries can set, keyed by the prefixes above and connector ids.
+std::shared_ptr<const ConfigRegistry> makeConfigRegistry() {
+  auto registry = std::make_shared<ConfigRegistry>();
+  registry->add(
+      SqlTestBase::kOptimizerPrefix, std::make_shared<OptimizerOptions>());
+  registry->add(
+      SqlTestBase::kParserPrefix,
+      std::make_shared<::axiom::sql::presto::ParserOptions>());
+  registry->add(
+      SqlTestBase::kExecutionPrefix,
+      std::make_shared<velox::core::QueryConfigProvider>());
+  registry->add(
+      velox::functions::prestosql::PrestoQueryConfig::kPrefix,
+      std::make_shared<velox::functions::prestosql::PrestoConfigProvider>());
+  for (const auto& [id, connector] :
+       velox::connector::ConnectorRegistry::global().snapshot()) {
+    std::shared_ptr<const velox::config::ConfigProvider> executionProvider;
+    if (const auto* provider = connector->configProvider()) {
+      executionProvider = {connector, provider};
+    }
+    std::shared_ptr<const velox::config::ConfigProvider> metadataProvider;
+    if (const auto metadata =
+            connector::ConnectorMetadataRegistry::global().find(id)) {
+      if (const auto* provider = metadata->configProvider()) {
+        metadataProvider = {metadata, provider};
+      }
+    }
+    if (executionProvider == nullptr && metadataProvider == nullptr) {
+      continue;
+    }
+    registry->add(
+        id,
+        ConfigRegistry::combineProviders(
+            id,
+            {
+                {"execution", executionProvider},
+                {"metadata", metadataProvider},
+            }));
+  }
+  return registry;
+}
+} // namespace
+
+SessionConfig SqlTestBase::makeSessionConfig() {
+  SessionConfig session{makeConfigRegistry()};
+  session.set(
+      kExecutionPrefix,
+      velox::core::QueryConfig::kSessionTimezone,
+      "Asia/Kolkata");
+  session.set(
+      kParserPrefix,
+      ::axiom::sql::presto::ParserOptions::kGraphQueries,
+      "true");
+  return session;
+}
 
 void SqlTestBase::SetUpTestCase() {
   OperatorTestBase::SetUpTestCase();
@@ -61,6 +136,7 @@ void SqlTestBase::SetUp() {
 
   optimizerPool_ = rootPool_->addLeafChild("optimizer");
   executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  sessionConfig_.emplace(makeSessionConfig());
 }
 
 void SqlTestBase::TearDown() {
@@ -99,14 +175,16 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
     const std::shared_ptr<const FunctionRegistry>& functionRegistry,
     int32_t numWorkers,
     int32_t numDrivers,
-    bool syntacticJoinOrder,
+    const SessionConfig& session,
     PlanFn plan) {
   static std::atomic<int32_t> queryCounter{0};
   auto queryId = fmt::format("sql_test_{}", ++queryCounter);
+  const auto connectors = connectorIds();
   auto queryCtx = core::QueryCtx::create(
       executor,
-      core::QueryConfig{{}},
-      {},
+      core::QueryConfig{application::SessionProperties::queryConfig(
+          session, SqlTestBase::kExecutionPrefix)},
+      application::SessionProperties::connectorConfigs(session, connectors),
       asyncDataCache,
       rootPool->addAggregateChild(queryId),
       /*spillExecutor=*/nullptr,
@@ -136,15 +214,19 @@ std::shared_ptr<runner::LocalRunner> makeLocalRunnerImpl(
   options.maxLocalPartitions = numDrivers;
   options.queryId = queryId;
 
-  OptimizerOptions optimizerOptions;
-  optimizerOptions.syntacticJoinOrder = syntacticJoinOrder;
-  auto context = connector::makeTestContext(queryId);
+  auto context = connector::makeTestContext(
+      queryId,
+      "test",
+      application::SessionProperties::connectorProperties(session, connectors));
+  auto optimizerProperties =
+      session.effectiveValues(SqlTestBase::kOptimizerPrefix);
+  auto optimizerOptions = OptimizerOptions::from(optimizerProperties);
   auto optimizerSession = std::make_shared<OptimizerSession>(
       context,
       functionRegistry,
       connector::makeTestStatWriter(),
-      connector::Properties{},
-      optimizerOptions);
+      std::move(optimizerProperties),
+      std::move(optimizerOptions));
   auto runnerSession = std::make_shared<runner::RunnerSession>(
       context, connector::makeTestStatWriter(), runner::Properties{});
 
@@ -176,7 +258,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
     int32_t numWorkers,
     int32_t numDrivers,
-    bool syntacticJoinOrder) {
+    const SessionConfig& session) {
   return makeLocalRunnerImpl(
       logicalPlan,
       executor,
@@ -186,7 +268,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunner(
       functionRegistry_,
       numWorkers,
       numDrivers,
-      syntacticJoinOrder,
+      session,
       [](const logical_plan::LogicalPlanNode& logicalPlan,
          const connector::SchemaResolver& schemaResolver,
          velox::core::ExpressionEvaluator& evaluator,
@@ -217,7 +299,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
     const std::shared_ptr<memory::MemoryPool>& optimizerPool,
     int32_t numWorkers,
     int32_t numDrivers,
-    bool syntacticJoinOrder,
+    const SessionConfig& session,
     const std::vector<velox::Variant>& placeholderValues) {
   return makeLocalRunnerImpl(
       logicalPlan,
@@ -228,7 +310,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
       functionRegistry_,
       numWorkers,
       numDrivers,
-      syntacticJoinOrder,
+      session,
       [&placeholderValues](
           const logical_plan::LogicalPlanNode& logicalPlan,
           const connector::SchemaResolver& schemaResolver,
@@ -251,16 +333,21 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeLocalRunnerV2(
 std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
     std::string_view sql) {
   // Parse SQL to logical plan.
-  ::axiom::sql::presto::ParserOptions parserOptions;
-  parserOptions.graphQueries = true;
+  auto parserProperties = sessionConfig_->effectiveValues(kParserPrefix);
+  auto parserOptions =
+      ::axiom::sql::presto::ParserOptions::from(parserProperties);
   ::axiom::sql::presto::PrestoParser parser(
       connectorId_,
       defaultSchema_,
       std::make_shared<::axiom::sql::presto::ParserSession>(
-          connector::makeTestContext("test"),
+          connector::makeTestContext(
+              "test",
+              "test",
+              application::SessionProperties::connectorProperties(
+                  *sessionConfig_, connectorIds())),
           connector::makeTestStatWriter(),
-          connector::Properties{},
-          parserOptions,
+          std::move(parserProperties),
+          std::move(parserOptions),
           /*vectorIndexCodecTrainer=*/nullptr));
   auto statement = parser.parse(sql);
 
@@ -282,7 +369,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
         optimizerPool_,
         numWorkers_,
         numDrivers_,
-        syntacticJoinOrder_);
+        *sessionConfig_);
   }
   return makeLocalRunner(
       logicalPlan,
@@ -292,7 +379,7 @@ std::shared_ptr<runner::LocalRunner> SqlTestBase::makeRunner(
       optimizerPool_,
       numWorkers_,
       numDrivers_,
-      syntacticJoinOrder_);
+      *sessionConfig_);
 }
 
 std::vector<RowVectorPtr> SqlTestBase::runAndCollect(std::string_view sql) {

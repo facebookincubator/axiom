@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/cli/CatalogProperties.h"
+#include "axiom/application/CatalogProperties.h"
 
 #include <filesystem>
 #include <fstream>
@@ -25,7 +25,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 
-namespace axiom::sql {
+namespace facebook::axiom::application {
 namespace {
 
 class CatalogPropertiesTest : public ::testing::Test {
@@ -87,4 +87,4 @@ TEST_F(CatalogPropertiesTest, rejectInvalid) {
 }
 
 } // namespace
-} // namespace axiom::sql
+} // namespace facebook::axiom::application

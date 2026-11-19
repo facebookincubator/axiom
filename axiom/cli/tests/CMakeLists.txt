@@ -14,7 +14,6 @@
 
 add_executable(
   axiom_cli_test
-  CatalogPropertiesTest.cpp
   DeleteTest.cpp
   ExplainIoTest.cpp
   ExplainTest.cpp
@@ -26,7 +25,6 @@ add_executable(
   VectorIndexRefreshTest.cpp
   ConsoleTest.cpp
   LiveProgressDisplayTest.cpp
-  QueryIdGeneratorTest.cpp
   QueryInterruptHandlerTest.cpp
 )
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/cli/CatalogProperties.h"
+#include "axiom/application/CatalogProperties.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -23,7 +23,7 @@
 #include <folly/String.h>
 #include "velox/common/base/Exceptions.h"
 
-namespace axiom::sql {
+namespace facebook::axiom::application {
 namespace {
 
 constexpr std::string_view kConnectorNameProperty = "connector.name";
@@ -128,4 +128,4 @@ std::vector<CatalogProperties> loadCatalogProperties(std::string_view etcDir) {
   return catalogs;
 }
 
-} // namespace axiom::sql
+} // namespace facebook::axiom::application
