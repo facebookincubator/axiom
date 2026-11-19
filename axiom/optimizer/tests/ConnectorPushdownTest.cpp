@@ -82,7 +82,7 @@ class ConnectorPushdownTest : public QueryTestBase,
       const std::vector<std::string>& expected) {
     ASSERT_EQ(actual.size(), expected.size());
     for (size_t i = 0; i < actual.size(); ++i) {
-      core::ExprMatcher::match(actual[i], lp::Sql(expected[i]).expr());
+      core::ExprMatcher::match(actual[i], lp::DuckSql(expected[i]).expr());
     }
   }
 };

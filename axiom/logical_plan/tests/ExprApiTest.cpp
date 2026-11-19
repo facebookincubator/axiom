@@ -36,37 +36,41 @@ class ExprApiTest : public testing::Test {
 };
 
 TEST_F(ExprApiTest, arithmetic) {
-  EXPECT_EQ(toString(Col("a") + 1), toString(Sql("a + 1")));
-  EXPECT_EQ(toString(Col("a") - Lit(10)), toString(Sql("a - 10")));
-  EXPECT_EQ(toString(Col("a") * Col("b")), toString(Sql("a * b")));
-  EXPECT_EQ(toString(Col("a") / 1.2), toString(Sql("a / 1.2")));
+  EXPECT_EQ(toString(Col("a") + 1), toString(DuckSql("a + 1")));
+  EXPECT_EQ(toString(Col("a") - Lit(10)), toString(DuckSql("a - 10")));
+  EXPECT_EQ(toString(Col("a") * Col("b")), toString(DuckSql("a * b")));
+  EXPECT_EQ(toString(Col("a") / 1.2), toString(DuckSql("a / 1.2")));
 
-  EXPECT_EQ(toString(Call("mod", {Col("a"), Lit(3)})), toString(Sql("a % 3")));
-  EXPECT_EQ(toString(Call("plus", Col("a"), Lit(10))), toString(Sql("a + 10")));
+  EXPECT_EQ(
+      toString(Call("mod", {Col("a"), Lit(3)})), toString(DuckSql("a % 3")));
+  EXPECT_EQ(
+      toString(Call("plus", Col("a"), Lit(10))), toString(DuckSql("a + 10")));
 }
 
 TEST_F(ExprApiTest, call) {
-  EXPECT_EQ(toString(Call("rand")), toString(Sql("rand()")));
-  EXPECT_EQ(toString(Call("abs", Col("a"))), toString(Sql("abs(a)")));
+  EXPECT_EQ(toString(Call("rand")), toString(DuckSql("rand()")));
+  EXPECT_EQ(toString(Call("abs", Col("a"))), toString(DuckSql("abs(a)")));
   EXPECT_EQ(
-      toString(Call("gt", Col("a"), Sql("b * c"))), toString(Sql("a > b * c")));
+      toString(Call("gt", Col("a"), DuckSql("b * c"))),
+      toString(DuckSql("a > b * c")));
 }
 
 TEST_F(ExprApiTest, cast) {
   EXPECT_EQ(
-      toString(Cast(BIGINT(), Col("a"))), toString(Sql("cast(a as bigint)")));
-  EXPECT_EQ(toString(Cast(DOUBLE(), 1)), toString(Sql("1::double")));
+      toString(Cast(BIGINT(), Col("a"))),
+      toString(DuckSql("cast(a as bigint)")));
+  EXPECT_EQ(toString(Cast(DOUBLE(), 1)), toString(DuckSql("1::double")));
 }
 
 TEST_F(ExprApiTest, lambda) {
   EXPECT_EQ(
       toString(Call("filter", Col("a"), Lambda({"x"}, Col("x") > 0))),
-      toString(Sql("filter(a, x -> x > 0)")));
+      toString(DuckSql("filter(a, x -> x > 0)")));
 
   EXPECT_EQ(
       toString(Call(
           "transform_values", Col("m"), Lambda({"k", "v"}, Col("k") + 10))),
-      toString(Sql("transform_values(m, (k, v) -> k + 10)")));
+      toString(DuckSql("transform_values(m, (k, v) -> k + 10)")));
 }
 
 TEST_F(ExprApiTest, subquery) {

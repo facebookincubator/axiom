@@ -65,13 +65,13 @@ class ExprTest : public testing::Test {
 
   ExprPtr resolveScalar(const std::string& sql, const RowTypePtr& schema) {
     return ExprResolver(nullptr, &velox::TypeCoercer::defaults())
-        .resolveScalarTypes(Sql(sql).expr(), inputResolver(schema));
+        .resolveScalarTypes(DuckSql(sql).expr(), inputResolver(schema));
   }
 
   AggregateExprPtr resolveAggregate(const std::string& sql) {
     return ExprResolver(nullptr, &velox::TypeCoercer::defaults())
         .resolveAggregateTypes(
-            Sql(sql).expr(), inputResolver(schema_), nullptr, {}, false);
+            DuckSql(sql).expr(), inputResolver(schema_), nullptr, {}, false);
   }
 
   RowTypePtr schema_ =
