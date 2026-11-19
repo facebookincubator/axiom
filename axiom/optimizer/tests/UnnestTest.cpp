@@ -1132,7 +1132,7 @@ TEST_P(UnnestTest, nondeterministicCollectionUnderExists) {
               matchScan("t")
                   .unnest({"t_k", "t_other"}, {"t_items"})
                   .filter(
-                      "1 <= cardinality(filter(t_other, item -> random() < "
+                      "1 <= cardinality(filter(t_other, item -> rand() < "
                       "0.5))"),
               {.keys = {{"u_k = t_k"}}})
           .build();
@@ -1153,7 +1153,7 @@ TEST_P(UnnestTest, nondeterministicBelowJoin) {
   auto matcher =
       matchScan("t")
           .aliases({"t_k", "items"})
-          .project({"t_k", "filter(items, x -> random() < 0.5) AS filtered"})
+          .project({"t_k", "filter(items, x -> rand() < 0.5) AS filtered"})
           .unnest({"t_k"}, {"filtered"})
           .hashJoinInner(
               matchScan("u").aliases({"u_k"}), {.keys = {{"t_k = u_k"}}})

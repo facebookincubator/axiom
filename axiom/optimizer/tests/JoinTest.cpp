@@ -3566,7 +3566,7 @@ TEST_P(JoinTest, impliedFilterNonPropagation) {
 
     auto matcher = matchScan("t")
                        .hashJoinInner(matchScan("u"))
-                       .filter("a = cast(random() * 100.0 as bigint)")
+                       .filter("a = cast(rand() * 100.0 as bigint)")
                        .projectIf(useV2_, {"a", "b", "a as x", "y"})
                        .build();
 
@@ -3584,7 +3584,7 @@ TEST_P(JoinTest, impliedFilterNonPropagation) {
 
     auto matcher = matchScan("t")
                        .hashJoin(matchScan("u"), core::JoinType::kInner)
-                       .filter("a::double > 10000.0 * random()")
+                       .filter("a::double > 10000.0 * rand()")
                        .singleAggregation({}, {"count(*)"})
                        .build();
 

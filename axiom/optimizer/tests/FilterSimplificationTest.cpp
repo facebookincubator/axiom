@@ -97,5 +97,28 @@ TEST_F(FilterSimplificationTest, alwaysTrueIntegralDomain) {
       plan("i8 between -200 and 200 or i8 is null"), matchScan("t").build());
 }
 
+// A comparison of rand() with a literal folds to TRUE or FALSE when every value
+// in [0, 1) gives the same result; otherwise it stays a filter. rand(n) returns
+// an integer in [0, n), so its comparisons stay too.
+TEST_F(FilterSimplificationTest, randomComparisons) {
+  for (const auto* filter :
+       {"rand() < 0", "rand() <= -1", "rand() > 1", "rand() >= 1"}) {
+    SCOPED_TRACE(filter);
+    AXIOM_ASSERT_PLAN(plan(filter), matchValues().build());
+  }
+
+  for (const auto* filter :
+       {"rand() < 1", "rand() <= 1.5", "rand() > -1", "rand() >= 0"}) {
+    SCOPED_TRACE(filter);
+    AXIOM_ASSERT_PLAN(plan(filter), matchScan("t").build());
+  }
+
+  for (const auto* filter :
+       {"rand() <= 0.0", "rand() > 0.0", "rand() < 0.5", "rand(10) >= 1"}) {
+    SCOPED_TRACE(filter);
+    AXIOM_ASSERT_PLAN(plan(filter), matchScan("t").filter(filter).build());
+  }
+}
+
 } // namespace
 } // namespace facebook::axiom::optimizer::test

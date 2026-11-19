@@ -845,6 +845,13 @@ TEST_F(ExpressionParserTest, substringFrom) {
   testNationExpr("SUBSTRING(n_name FROM 2 FOR 3)", "substr(n_name, 2, 3)");
 }
 
+TEST_F(ExpressionParserTest, random) {
+  // random() is an alias for rand().
+  testNationExpr("random()", "rand()");
+  testNationExpr("RANDOM()", "rand()");
+  testNationExpr("random(10)", "rand(10)");
+}
+
 TEST_F(ExpressionParserTest, subscript) {
   EXPECT_EQ(
       "subscript(array_constructor(1, 2, 3), 1)",
