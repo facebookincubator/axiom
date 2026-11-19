@@ -369,6 +369,86 @@ SELECT a, (SELECT 1 FROM v WHERE v.a = t.a) AS one FROM t
 -- error_v1: (0 vs. 1)
 SELECT a, (SELECT count(*) FROM u WHERE u.a > t.a HAVING count(*) = 0) AS c FROM t
 ----
+-- A filter above a correlated global aggregate that reads only the outer row
+-- removes the aggregate's row: the scalar subquery is NULL and IN is false.
+SELECT
+  a,
+  (
+    SELECT c
+    FROM (SELECT count(*) AS c FROM u WHERE u.a = t.a)
+    WHERE t.a > 2
+  ) AS m
+FROM t
+----
+-- error_v1: expr references column not available at this layer
+SELECT
+  a,
+  (
+    SELECT c
+    FROM (SELECT count(*) AS c FROM u WHERE u.a > t.a)
+    WHERE t.a > 2
+  ) AS m
+FROM t
+----
+-- error_v1: IN over a correlated global aggregate is not supported yet
+SELECT
+  a,
+  0 IN (
+    SELECT c
+    FROM (SELECT count(*) AS c FROM u WHERE u.a > t.a + 2)
+    WHERE t.a > 2
+  ) AS m
+FROM t
+----
+-- A filter on a computed grouping key that also reads the outer row.
+-- error_v1: expr references column not available at this layer
+SELECT
+  a,
+  (
+    SELECT k
+    FROM (
+      SELECT u.a + 1 AS k, count(*) AS c
+      FROM u
+      WHERE u.a = t.a
+      GROUP BY u.a + 1)
+    WHERE k > t.a
+  ) AS m
+FROM t
+----
+-- A nondeterministic filter above a correlated grouped aggregate keeps or drops
+-- whole groups: every count that survives is the full count of 5.
+-- error_v1: Nested correlation across subquery boundaries is not supported yet
+-- duckdb: SELECT 0::BIGINT
+SELECT count_if(c <> 5)
+FROM (
+  SELECT
+    (
+      SELECT c
+      FROM (
+        SELECT u.a AS k, count(*) AS c
+        FROM u, v
+        WHERE u.a = t.a
+        GROUP BY u.a)
+      WHERE random() < 0.5
+    ) AS c
+  FROM t)
+----
+-- error_v1: Nested correlation across subquery boundaries is not supported yet
+-- duckdb: SELECT 0::BIGINT
+SELECT count_if(c <> 5)
+FROM (
+  SELECT
+    (
+      SELECT c
+      FROM (
+        SELECT u.a AS k, count(*) AS c
+        FROM u, v
+        WHERE u.a = t.a
+        GROUP BY u.a)
+      WHERE random() < 0.5 AND t.a > 0
+    ) AS c
+  FROM t)
+----
 -- Multiple correlated scalar count(*) subqueries with non-equi predicates
 -- in the same SELECT list, each correlating on a different outer column.
 SELECT

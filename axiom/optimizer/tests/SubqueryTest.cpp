@@ -961,6 +961,46 @@ TEST_P(SubqueryTest, correlatedScalarGroupedWithHaving) {
             .build());
   }
 
+  // A nondeterministic post-aggregation filter is drawn per outer row, so it
+  // takes the same per-outer-row shape even when it reads only the body.
+  {
+    auto query =
+        "SELECT (SELECT s.m FROM (SELECT max(u.x) AS m, count(*) AS c "
+        "FROM u WHERE u.y = t.b GROUP BY u.z) s WHERE rand() < 0.5) FROM t";
+    SCOPED_TRACE(query);
+
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("u")
+            .project()
+            .aliases({std::nullopt, std::nullopt, std::nullopt, "marker"})
+            .hashJoinRight(
+                matchScan("t").assignUniqueId("rn"), {.keys = {{"y = b"}}})
+            .singleAggregation(
+                {"rn", "z"},
+                {"max(x) filter (where marker) as m",
+                 "arbitrary(marker) as realGroup"})
+            .project(
+                {"m",
+                 "rn",
+                 "coalesce(realGroup and rand() < 0.5, false) as survives"})
+            .window(
+                {"bool_or(survives) OVER (PARTITION BY rn)",
+                 "row_number() OVER (PARTITION BY rn ROWS BETWEEN "
+                 "UNBOUNDED PRECEDING AND CURRENT ROW)"})
+            .aliases(
+                {std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 "any_match",
+                 "pad_rn"})
+            .filter("survives or (not any_match and pad_rn = 1)")
+            .enforceDistinct({"rn"})
+            .project()
+            .build());
+  }
+
   // A non-equi correlation with no post-aggregation filter drops no group,
   // so no window collapses the rows.
   {
@@ -1000,6 +1040,58 @@ TEST_P(SubqueryTest, correlatedScalarGroupedWithHaving) {
             .hashJoinLeft(
                 matchScan("u").singleAggregation({"y"}, {"max(x)"}),
                 {.keys = {{"b = y"}}})
+            .build());
+  }
+}
+
+TEST_P(SubqueryTest, correlatedExistsOverGroupedAggregate) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  testConnector_->addTable("u", ROW({"x", "y", "z"}, BIGINT()));
+
+  // A HAVING on a grouping key filters whole groups, so the body's
+  // aggregation is dropped and the HAVING filters the body's rows.
+  {
+    auto query =
+        "SELECT EXISTS (SELECT 1 FROM u WHERE u.y = t.b GROUP BY u.z "
+        "HAVING u.z > 0) FROM t";
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("t")
+            .hashJoin(
+                matchScan("u").filter("z > 0").project({"y"}),
+                velox::core::JoinType::kLeftSemiProject,
+                {.keys = {{"b = y"}}})
+            .project()
+            .build());
+  }
+
+  // A nondeterministic HAVING is drawn once per group, so the aggregation stays
+  // and the HAVING runs above it.
+  {
+    auto query =
+        "SELECT EXISTS (SELECT 1 FROM u WHERE u.y = t.b GROUP BY u.z "
+        "HAVING rand() < 0.5) FROM t";
+    SCOPED_TRACE(query);
+    auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
+    AXIOM_ASSERT_PLAN_V2(
+        plan,
+        matchScan("u")
+            .project({"y", "z", "true as matched"})
+            .hashJoinRight(
+                matchScan("t").assignUniqueId("rn"), {.keys = {{"y = b"}}})
+            .singleAggregation({"rn", "z"}, {"arbitrary(matched) as included"})
+            .project(
+                {"rn", "included", "coalesce(rand() < 0.5, false) as passes"})
+            .singleAggregation(
+                {"rn"},
+                {"bool_or(passes) filter (where included) as anyPasses"})
+            .project({"coalesce(anyPasses, false)"})
             .build());
   }
 }

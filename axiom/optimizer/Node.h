@@ -895,6 +895,17 @@ class Aggregation : public Node {
     return globalGroupingSets_;
   }
 
+  /// True if the aggregation returns a row even when its input is empty: it
+  /// has no grouping keys, or a global (empty) grouping set.
+  bool producesRowOnEmptyInput() const;
+
+  /// True if filtering this aggregation's output by 'conjunct' keeps the same
+  /// rows as filtering its input by 'conjunct', with each grouping-key output
+  /// replaced by its grouping key. That holds when the aggregation produces no
+  /// row on empty input, and 'conjunct' is deterministic and reads no aggregate
+  /// result. 'conjunct' may also read columns from outside the aggregation.
+  bool canFilterBelow(ExprCP conjunct) const;
+
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};
   }

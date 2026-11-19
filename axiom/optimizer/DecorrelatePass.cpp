@@ -16,6 +16,8 @@
 
 #include "axiom/optimizer/DecorrelatePass.h"
 
+#include <algorithm>
+
 #include <ranges>
 
 #include "axiom/optimizer/AggregateRecovery.h"
@@ -109,38 +111,22 @@ const Project* asPassThroughProject(NodeCP node) {
 }
 
 // True when a kLeftSemiProject Apply's body Aggregate can be dropped
-// without changing the mark: grouping keys are non-empty and neither
-// the accumulated filter nor `inBodyKey` references any aggregate-
-// result column.
+// without changing the mark: the accumulated filter and `inBodyKey` can all be
+// evaluated below the Aggregate (Aggregation::canFilterBelow).
 bool canElideBodyAggregate(
     ApplyCP node,
     AggregationCP aggregate,
     const ExprVector& accumulatedFilter) {
-  const size_t numGroupingKeys = aggregate->groupingKeys().size();
-  if (numGroupingKeys == 0) {
+  if (aggregate->producesRowOnEmptyInput()) {
     return false;
   }
-
-  if (accumulatedFilter.empty() && node->inBodyKey() == nullptr) {
-    return true;
-  }
-
-  PlanObjectSet aggregateResultColumns;
-  for (size_t i = numGroupingKeys; i < aggregate->outputColumns().size(); ++i) {
-    aggregateResultColumns.add(aggregate->outputColumns()[i]);
-  }
-
-  for (ExprCP conjunct : accumulatedFilter) {
-    if (conjunct->columns().hasIntersection(aggregateResultColumns)) {
-      return false;
-    }
-  }
-
   if (node->inBodyKey() != nullptr &&
-      node->inBodyKey()->columns().hasIntersection(aggregateResultColumns)) {
+      !aggregate->canFilterBelow(node->inBodyKey())) {
     return false;
   }
-  return true;
+  return std::ranges::all_of(accumulatedFilter, [&](ExprCP conjunct) {
+    return aggregate->canFilterBelow(conjunct);
+  });
 }
 
 // Returns nullptr if `expr` is null; otherwise delegates to
@@ -2432,7 +2418,7 @@ class Decorrelator : public NodeRewriter<> {
 
     const size_t numGroupingKeys = aggregate->groupingKeys().size();
     auto [filterPreConjuncts, filterPostConjuncts] =
-        splitFilterPreAndPost(accumulatedFilter, aggregate, numGroupingKeys);
+        splitFilterPreAndPost(accumulatedFilter, aggregate);
 
     // Equi-correlated scalar aggregate with no boundary pre-filter and
     // aggregates that don't reference the outer: group the body once by the
@@ -2440,11 +2426,15 @@ class Decorrelator : public NodeRewriter<> {
     // per key instead of once per outer row. Other correlations use the
     // general shape below.
     // With an inner GROUP BY the post-aggregation filter runs below the
-    // join-back, where the outer columns are not visible, so one that reads
-    // them takes the general shape instead. Without one it runs above the
-    // join, where they are, and reads whatever it likes.
+    // join-back, once per correlation key: one that reads outer columns, which
+    // are not visible there, or that is nondeterministic, which must draw once
+    // per outer row, takes the general shape instead. Without one it runs above
+    // the join, per outer row, and reads whatever it likes.
     const bool filterPostIsBodyLocal = numGroupingKeys == 0 ||
-        !readsOuter(filterPostConjuncts, input->outputColumns());
+        (!readsOuter(filterPostConjuncts, input->outputColumns()) &&
+         std::ranges::none_of(filterPostConjuncts, [](ExprCP conjunct) {
+           return conjunct->containsNonDeterministic();
+         }));
 
     if (filterPreConjuncts.empty() && filterPostIsBodyLocal &&
         !readsOuter(aggregate, input->outputColumns())) {
@@ -2639,36 +2629,25 @@ class Decorrelator : public NodeRewriter<> {
     return wraps;
   }
 
-  // Splits the accumulated Apply.filter into F_pre (no refs to
-  // aggregate-result columns; applied pre-aggregation as Join.filter)
-  // and F_post (refs aggregate-result columns; applied post-
-  // aggregation via the final Project's IF wrap per Case 3).
-  //
-  // Refs to grouping-key columns are treated as F_pre — those columns
-  // pass through the lifted Aggregate unchanged and are valid pre- or
-  // post-aggregation.
+  // Splits the accumulated Apply.filter into F_pre, the conjuncts that may
+  // move below the Aggregate (Aggregation::canFilterBelow), rewritten onto the
+  // grouping keys to run as the inner Apply's filter over the Aggregate's
+  // input, and F_post, the rest, which each caller applies above the Aggregate.
   std::pair<ExprVector, ExprVector> splitFilterPreAndPost(
       const ExprVector& accumulatedFilter,
-      AggregationCP aggregate,
-      size_t numGroupingKeys) {
-    if (accumulatedFilter.empty()) {
-      return {ExprVector{}, ExprVector{}};
-    }
-    PlanObjectSet aggregateResultColumns;
-    for (size_t i = numGroupingKeys; i < aggregate->outputColumns().size();
-         ++i) {
-      aggregateResultColumns.add(aggregate->outputColumns()[i]);
-    }
+      AggregationCP aggregate) {
+    const ColumnVector groupingKeyOutputs(
+        aggregate->outputColumns().begin(),
+        aggregate->outputColumns().begin() + aggregate->groupingKeys().size());
     ExprVector pre;
     ExprVector post;
     for (ExprCP conjunct : accumulatedFilter) {
-      bool referencesAggregateResult = false;
-      conjunct->columns().forEach<Column>([&](const Column* column) {
-        if (aggregateResultColumns.contains(column)) {
-          referencesAggregateResult = true;
-        }
-      });
-      (referencesAggregateResult ? post : pre).push_back(conjunct);
+      if (aggregate->canFilterBelow(conjunct)) {
+        pre.push_back(exprFactory_.substitute(
+            conjunct, groupingKeyOutputs, aggregate->groupingKeys()));
+      } else {
+        post.push_back(conjunct);
+      }
     }
     return {std::move(pre), std::move(post)};
   }
@@ -3568,8 +3547,7 @@ class Decorrelator : public NodeRewriter<> {
   }
 
   // Drops the body Aggregate and rewrites the Apply against its input.
-  // Caller must have verified via `canElideBodyAggregate` that no
-  // aggregate-result column is referenced.
+  // Caller must have verified `canElideBodyAggregate`.
   NodeCP aggregatePeelSemiDropAggregate(
       ApplyCP node,
       NodeCP input,
@@ -3646,7 +3624,7 @@ class Decorrelator : public NodeRewriter<> {
     const size_t numGroupingKeys = aggregate->groupingKeys().size();
 
     auto [filterPreConjuncts, filterPostConjuncts] =
-        splitFilterPreAndPost(accumulatedFilter, aggregate, numGroupingKeys);
+        splitFilterPreAndPost(accumulatedFilter, aggregate);
 
     // Case 5a: scalar agg with no HAVING. Per strict SQL, mark = TRUE
     // for every outer regardless of body content (scalar aggs always
@@ -3911,7 +3889,7 @@ class Decorrelator : public NodeRewriter<> {
     const size_t numGroupingKeys = aggregate->groupingKeys().size();
 
     auto [filterPreConjuncts, filterPostConjuncts] =
-        splitFilterPreAndPost(accumulatedFilter, aggregate, numGroupingKeys);
+        splitFilterPreAndPost(accumulatedFilter, aggregate);
 
     // Validator (same as Rule A): pure-outer aggregates need
     // outer-scope-collapse semantics not modeled here.
