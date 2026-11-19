@@ -469,7 +469,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                            .tableScan("t")
                            .aggregate({"a", "b"}, {})
                            .with({"a + b as d"})
-                           .aggregate({"a", "b", "d"}, {})
+                           .aggregate({"a", "b", "d"}, {"count(*) as n"})
                            .build();
     // The projection preserves partitioning on [a, b], which also co-locates
     // the second aggregation's groups on [a, b, d].
@@ -479,7 +479,7 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
                        .localPartition({"a", "b"})
                        .finalAggregation({"a", "b"}, {})
                        .project({"a", "b", "a + b as d"})
-                       .streamingAggregation({"a", "b", "d"}, {})
+                       .streamingAggregation({"a", "b", "d"}, {"count(*) as n"})
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planVelox(logicalPlan).plan, matcher);
@@ -505,6 +505,77 @@ TEST_P(AggregationTest, repartitionForAggPartitionSubset) {
     // v2 two-stages every eligible aggregate, so it plans partial + final
     // where the unique grouping keys above make single-stage the better plan.
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(planVelox(logicalPlan).plan, matcher);
+  }
+}
+
+TEST_P(AggregationTest, redundantDistinct) {
+  testConnector_->addTable("t", ROW({"a", "b", "c"}, BIGINT()));
+  SCOPE_EXIT {
+    testConnector_->dropTableIfExists("t");
+  };
+
+  {
+    SCOPED_TRACE("Input is unique on a subset of the grouping keys");
+    const auto logicalPlan = parseSelect(
+        "SELECT DISTINCT a, b, a + b AS d "
+        "FROM (SELECT a, b FROM t GROUP BY a, b)");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a", "b"}, {})
+            .project({"a", "b", "a + b"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Grouping keys are a subset of the inner grouping keys");
+    const auto logicalPlan = parseSelect(
+        "SELECT DISTINCT a, b FROM (SELECT DISTINCT a, b, c FROM t)");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t").singleAggregation({"a", "b"}, {}).build());
+  }
+
+  {
+    SCOPED_TRACE("Grouping keys are computed from the inner grouping keys");
+    const auto logicalPlan = parseSelect(
+        "SELECT DISTINCT a + b AS s FROM (SELECT DISTINCT a, b FROM t)");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .project({"a + b as s"})
+            .singleAggregation({"s"}, {})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Non-deterministic grouping key keeps the inner aggregate");
+    const auto logicalPlan = parseSelect(
+        "SELECT a + rand() AS r FROM (SELECT DISTINCT a, b FROM t) GROUP BY 1");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a", "b"}, {})
+            .project({"cast(a as double) + rand() as r"})
+            .singleAggregation({"r"}, {})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Aggregate functions keep both aggregates");
+    const auto logicalPlan = parseSelect(
+        "SELECT a, count(*) AS n FROM (SELECT DISTINCT a, b FROM t) GROUP BY a");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("t")
+            .singleAggregation({"a", "b"}, {})
+            .singleAggregation({"a"}, {"count(*) as n"})
+            .build());
   }
 }
 

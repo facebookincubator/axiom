@@ -1475,6 +1475,12 @@ Aggregation::Key Aggregation::key() const {
   };
 }
 
+bool Aggregation::isDistinctOnly(
+    const ExprVector& groupingKeys,
+    const AggregateCallVector& aggregates) {
+  return aggregates.empty() && !groupingKeys.empty();
+}
+
 Aggregation::Aggregation(Key key)
     : Node(
           NodeType::kAggregate,
@@ -2507,11 +2513,9 @@ bool anyUniqueKey(NodeCP node, Predicate matches) {
   }
   return std::ranges::any_of(node->relationalProperties().unique, matches);
 }
+} // namespace
 
-// True when 'node' has at most one row for each value of 'keys': some unique
-// key is a subset of the column keys. Keys that are not columns only refine
-// the values, so they are ignored.
-bool uniqueOn(NodeCP node, const ExprVector& keys) {
+bool Node::uniqueOn(const ExprVector& keys) const {
   VELOX_CHECK_GT(keys.size(), 0, "Unique key check must have keys");
   PlanObjectSet columns;
   for (ExprCP key : keys) {
@@ -2519,11 +2523,10 @@ bool uniqueOn(NodeCP node, const ExprVector& keys) {
       columns.add(key);
     }
   }
-  return anyUniqueKey(node, [&](const PlanObjectSet& unique) {
+  return anyUniqueKey(this, [&](const PlanObjectSet& unique) {
     return unique.isSubset(columns);
   });
 }
-} // namespace
 
 bool Node::atMostOneRow() const {
   return anyUniqueKey(
@@ -2540,7 +2543,7 @@ Join::Sides Join::emittedOnceSides(
   // True when 'side' has at most one row for each value of 'keys'. A cross
   // join has no keys and matches every row of 'side'.
   const auto matchesAtMostOne = [](NodeCP side, const ExprVector& keys) {
-    return keys.empty() ? side->atMostOneRow() : uniqueOn(side, keys);
+    return keys.empty() ? side->atMostOneRow() : side->uniqueOn(keys);
   };
   switch (joinType) {
     case JoinType::kInner:
