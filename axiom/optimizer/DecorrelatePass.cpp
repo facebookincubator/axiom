@@ -2584,9 +2584,9 @@ class Decorrelator : public NodeRewriter<> {
   // For each aggregate in the original Aggregate, decides what the
   // lifted Aggregate should emit (`liftedOutput`) and what the final
   // Project should produce at the original output position
-  // (`finalExpression`). Empty-input value resolution via the
-  // FunctionRegistry: aggregates whose empty value is non-NULL (count,
-  // count_if, etc.) need COALESCE; others pass through.
+  // (`finalExpression`). Aggregates whose empty-input value
+  // (Aggregate::emptyInputResult) is non-NULL, such as count and count_if, need
+  // COALESCE; others pass through.
   //
   // 'coalesceEmptyInput' restores an aggregate's empty-input value on an outer
   // row that reaches the final Project with no group behind it. Two shapes do
@@ -2618,19 +2618,11 @@ class Decorrelator : public NodeRewriter<> {
       bool coalesceEmptyInput) {
     std::vector<AggregateWrap> wraps;
     wraps.reserve(aggregate->aggregates().size());
-    const auto& registry = queryCtx()->functionRegistry();
     for (size_t i = 0; i < aggregate->aggregates().size(); ++i) {
       const auto* aggregateCall = aggregate->aggregates()[i];
       // outputColumns positional layout: [gby_cols, agg_result_cols].
       ColumnCP originalOutput = aggregate->outputColumns()[numGroupingKeys + i];
-
-      std::vector<const velox::Type*> argumentTypes;
-      argumentTypes.reserve(aggregateCall->args().size());
-      for (ExprCP argument : aggregateCall->args()) {
-        argumentTypes.push_back(argument->value().type);
-      }
-      velox::Variant emptyValue = registry.aggregateResultForEmptyInput(
-          aggregateCall->name(), argumentTypes);
+      velox::Variant emptyValue = aggregateCall->emptyInputResult();
 
       if (!coalesceEmptyInput || emptyValue.isNull()) {
         wraps.push_back({originalOutput, originalOutput});

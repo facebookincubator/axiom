@@ -369,6 +369,16 @@ bool Aggregate::KeyEq::operator()(
 }
 
 velox::Variant Aggregate::emptyInputResult() const {
+  if (specialKind_.has_value()) {
+    switch (*specialKind_) {
+      case logical_plan::SpecialAggregateKind::kMetadataRowCount:
+      case logical_plan::SpecialAggregateKind::kMetadataNullCount:
+      case logical_plan::SpecialAggregateKind::kMetadataNonNullCount:
+        return velox::Variant::create<velox::TypeKind::BIGINT>(0);
+    }
+    VELOX_UNREACHABLE(
+        "Unhandled SpecialAggregateKind: {}", static_cast<int>(*specialKind_));
+  }
   auto result = queryCtx()->functionRegistry().aggregateResultForEmptyInput(
       name(), rawInputType_);
   return result.isNull() ? velox::Variant::null(value().type->kind()) : result;
