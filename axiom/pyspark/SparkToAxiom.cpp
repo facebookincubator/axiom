@@ -456,6 +456,12 @@ void SparkToAxiom::visit(
 void SparkToAxiom::visit(
     const spark::connect::Aggregate& aggregate,
     SparkPlanVisitorContext& context) {
+  if (aggregate.group_type() != spark::connect::Aggregate::GROUP_TYPE_GROUPBY) {
+    COLLAGEN_NYI(
+        "Aggregate group type is not supported: {}",
+        spark::connect::Aggregate::GroupType_Name(aggregate.group_type()));
+  }
+
   // First visit the input relation
   SparkPlanVisitor::visit(aggregate.input(), context);
 
@@ -519,7 +525,6 @@ void SparkToAxiom::visit(
   }
 
   // Create the aggregate node
-  // For now, we only support simple GROUP BY (no grouping sets)
   std::vector<facebook::axiom::logical_plan::AggregateNode::GroupingSet>
       groupingSets;
 
@@ -967,7 +972,12 @@ void SparkToAxiom::visit(
     LOG(INFO) << "Successfully resolved '" << veloxFunctionName
               << "' as aggregate function";
     expr_ = std::make_shared<facebook::axiom::logical_plan::AggregateExpr>(
-        finalType, veloxFunctionName, std::move(params));
+        finalType,
+        veloxFunctionName,
+        std::move(params),
+        /*filter=*/nullptr,
+        /*ordering=*/std::vector<facebook::axiom::logical_plan::SortingField>{},
+        unresolvedFunction.is_distinct());
     return;
   }
 
