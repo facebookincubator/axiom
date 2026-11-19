@@ -859,7 +859,8 @@ class Aggregate : public Call {
     return fallback_;
   }
 
-  /// Returns the typed result for empty input from the function registry.
+  /// Returns the typed result for empty input: 0 for a special (metadata
+  /// count) aggregate, otherwise the function registry's value.
   velox::Variant emptyInputResult() const;
 
   std::string toString() const override;

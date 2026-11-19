@@ -47,6 +47,16 @@ SELECT k, approx_non_null_count(v) FROM m GROUP BY 1
 -- duckdb: SELECT 0::BIGINT
 SELECT approx_count_star() FROM m WHERE rand() < 0.000001
 ----
+-- A correlated scalar subquery returns 0, not NULL, for an outer row that
+-- matches no rows.
+-- duckdb: SELECT x.k, (SELECT count(*) FROM m WHERE m.k = x.k) FROM (VALUES (0), (1), (2), (3)) AS x(k)
+SELECT x.k, (SELECT approx_count_star() FROM m WHERE m.k = x.k)
+FROM (VALUES (0), (1), (2), (3)) AS x(k)
+----
+-- duckdb: SELECT x.k, (SELECT count(*) - count(v) FROM m WHERE m.k = x.k) FROM (VALUES (0), (1), (2), (3)) AS x(k)
+SELECT x.k, (SELECT approx_null_count(v) FROM m WHERE m.k = x.k)
+FROM (VALUES (0), (1), (2), (3)) AS x(k)
+----
 -- A regular aggregate alongside a metadata aggregate.
 -- duckdb: SELECT count(*), sum(v) FROM m
 SELECT approx_count_star(), sum(v) FROM m
