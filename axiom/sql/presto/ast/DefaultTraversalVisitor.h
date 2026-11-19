@@ -1036,6 +1036,64 @@ class DefaultTraversalVisitor : public AstVisitor {
   }
 
   void visitShowFunctions(ShowFunctions* /*node*/) override {}
+
+  void visitShowSchemas(ShowSchemas* /*node*/) override {}
+
+  void visitShowTables(ShowTables* node) override {
+    if (node->schemaName()) {
+      node->schemaName()->accept(this);
+    }
+  }
+
+  void visitShowCreateTable(ShowCreateTable* node) override {
+    if (node->name()) {
+      node->name()->accept(this);
+    }
+  }
+
+  void visitShowCreateView(ShowCreateView* node) override {
+    if (node->name()) {
+      node->name()->accept(this);
+    }
+  }
+
+  void visitShowStats(ShowStats* node) override {
+    if (node->table()) {
+      node->table()->accept(this);
+    }
+  }
+
+  void visitShowStatsForQuery(ShowStatsForQuery* node) override {
+    if (node->query()) {
+      node->query()->accept(this);
+    }
+  }
+
+  void visitShowSession(ShowSession* /*node*/) override {}
+
+  void visitSetSession(SetSession* node) override {
+    if (node->name()) {
+      node->name()->accept(this);
+    }
+    if (node->value()) {
+      node->value()->accept(this);
+    }
+  }
+
+  void visitResetSession(ResetSession* node) override {
+    if (node->name()) {
+      node->name()->accept(this);
+    }
+  }
+
+  void visitUse(Use* node) override {
+    if (node->catalog()) {
+      node->catalog()->accept(this);
+    }
+    if (node->schema()) {
+      node->schema()->accept(this);
+    }
+  }
 };
 
 } // namespace axiom::sql::presto
