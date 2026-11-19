@@ -68,10 +68,14 @@ class Folder : public NodeRewriter<NoContext> {
 
  private:
   // Folds an aggregation of only metadata aggregates directly over a Scan into
-  // a Values node. The caller guarantees that shape. Returns nullptr if a
-  // grouping key is neither a column nor a constant, or the connector declines.
+  // a Values node. The caller guarantees that shape. Returns nullptr if the
+  // scan is sampled with TABLESAMPLE SYSTEM, a grouping key is neither a column
+  // nor a constant, or the connector declines.
   NodeCP tryFold(AggregationCP node) {
     const auto* scan = node->input()->as<Scan>();
+    if (scan->baseTable()->sampledPercentage.has_value()) {
+      return nullptr;
+    }
     const auto* layout =
         scan->baseTable()->schemaTable->connectorTable->primaryLayout();
 

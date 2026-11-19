@@ -167,6 +167,25 @@ TEST_F(MetadataCountsTest, fallsBack) {
       toSingleNodePlan("SELECT approx_count_star() FROM t WHERE a > 5"),
       matchHiveScan("t").singleAggregation({}, {"count(*)"}).build());
 
+  // A sampled scan keeps an unknown subset of the rows, so the count is read
+  // from the data. This holds for TABLESAMPLE BERNOULLI, the equivalent rand()
+  // filter and TABLESAMPLE SYSTEM.
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(
+          "SELECT approx_count_star() FROM t TABLESAMPLE BERNOULLI (1)"),
+      matchHiveScan("t", {}, "", /*sampleRate=*/0.01)
+          .singleAggregation({}, {"count(*)"})
+          .build());
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan("SELECT approx_count_star() FROM t WHERE rand() < 0.01"),
+      matchHiveScan("t", {}, "", /*sampleRate=*/0.01)
+          .singleAggregation({}, {"count(*)"})
+          .build());
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(
+          "SELECT approx_count_star() FROM t TABLESAMPLE SYSTEM (1)"),
+      matchHiveScan("t").singleAggregation({}, {"count(*)"}).build());
+
   // A regular aggregate alongside a metadata aggregate.
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan("SELECT approx_count_star(), sum(a) FROM t"),

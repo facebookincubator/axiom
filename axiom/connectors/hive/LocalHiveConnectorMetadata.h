@@ -175,8 +175,8 @@ class LocalHiveTableLayout : public HiveTableLayout {
   /// persisted partition stats, one group per distinct tuple of
   /// 'groupingColumns' values. Declines (nullopt) if a grouping column is not a
   /// partition column, if any filter pushed into 'tableHandle' is not
-  /// partition-only, or if a grouping column's value is not available in the
-  /// partition metadata.
+  /// partition-only, if 'tableHandle' is sampled, or if a grouping column's
+  /// value is not available in the partition metadata.
   folly::coro::Task<std::optional<std::vector<MetadataCountGroup>>>
   co_metadataCounts(
       ConnectorSessionPtr session,

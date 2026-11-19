@@ -736,21 +736,14 @@ LocalHiveTableLayout::co_metadataCounts(
     groupingKeyColumns.push_back(it->second);
   }
 
-  // The counts are exact, so every filter pushed into the handle must be
-  // resolvable from partition metadata; decline otherwise. A remaining filter,
-  // or a subfield filter on a non-partition column (including $path/$bucket),
-  // cannot be evaluated from partition metadata alone.
-  if (hiveHandle->remainingFilter() != nullptr) {
+  if (!hasOnlyPartitionFilters(*hiveHandle)) {
     co_return std::nullopt;
   }
   std::vector<PartitionFilter> partitionFilters;
   for (const auto& [subfield, filter] : hiveHandle->subfieldFilters()) {
-    auto it = partitionColumnsByName.find(subfield.baseName());
-    if (it == partitionColumnsByName.end()) {
-      co_return std::nullopt;
-    }
+    const auto* column = partitionColumnsByName.at(subfield.baseName());
     partitionFilters.push_back(
-        PartitionFilter{subfield.baseName(), filter.get(), it->second});
+        PartitionFilter{subfield.baseName(), filter.get(), column});
   }
 
   std::vector<const Column*> nullCountColumns;

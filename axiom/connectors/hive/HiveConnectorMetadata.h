@@ -313,6 +313,12 @@ class HiveTableLayout : public TableLayout {
   std::vector<const Column*> nonPartitionFilterColumns(
       const velox::connector::hive::HiveTableHandle& handle) const;
 
+  // Returns true if partition metadata alone determines which rows 'handle'
+  // reads: it has no remaining filter, no sample, and subfield filters only on
+  // Hive partition columns. A sample keeps an unknown subset of the rows.
+  bool hasOnlyPartitionFilters(
+      const velox::connector::hive::HiveTableHandle& handle) const;
+
   // Returns the names in 'requested' followed by the columns from
   // `nonPartitionFilterColumns` that are not already there and that 'hasStats'
   // reports statistics for. Statistics for a column without any would be

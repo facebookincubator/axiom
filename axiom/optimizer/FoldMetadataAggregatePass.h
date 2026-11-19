@@ -26,10 +26,12 @@ namespace facebook::axiom::optimizer {
 /// aggregates, directly over a `Scan`, it asks the connector for the counts
 /// (`TableLayout::co_metadataCounts`) and, on success, replaces the aggregation
 /// with a `Values` node. The connector decides whether it can group the counts
-/// by the grouping keys and declines otherwise. When the fold does not apply,
-/// each metadata aggregate is replaced by its fallback (an ordinary count /
-/// count_if); a metadata aggregate with no fallback that cannot be answered
-/// from metadata is an error.
+/// by the grouping keys and declines otherwise. A scan sampled with
+/// TABLESAMPLE SYSTEM (`BaseTable::sampledPercentage`) is not folded: that
+/// sampling happens at split generation, where the connector cannot see it.
+/// When the fold does not apply, each metadata aggregate is replaced by its
+/// fallback (an ordinary count / count_if); a metadata aggregate with no
+/// fallback that cannot be answered from metadata is an error.
 ///
 /// Runs after `PushdownAndPrunePass`, which guarantees a `Scan` carries all of
 /// its filters (no `Filter` node sits directly over it). Every metadata
