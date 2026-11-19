@@ -73,7 +73,7 @@ AggregateCallVector AggregateRecovery::rewriteCountStar(
     ExprCP newCondition = aggregate->condition() == nullptr
         ? static_cast<ExprCP>(marker)
         : exprFactory_.makeAnd(aggregate->condition(), marker);
-    rewritten.push_back(replaceCondition(aggregate, newCondition));
+    rewritten.push_back(builder_.replaceCondition(aggregate, newCondition));
   }
   return rewritten;
 }
@@ -87,7 +87,7 @@ AggregateCallVector AggregateRecovery::addFilterCondition(
     ExprCP newCondition = aggregate->condition() == nullptr
         ? predicate
         : exprFactory_.makeAnd(aggregate->condition(), predicate);
-    rewritten.push_back(replaceCondition(aggregate, newCondition));
+    rewritten.push_back(builder_.replaceCondition(aggregate, newCondition));
   }
   return rewritten;
 }
@@ -122,7 +122,7 @@ optimizer::AggregateCP AggregateRecovery::makeBoolOr(ExprCP arg) {
       toType(velox::exec::resolveIntermediateType(*boolOrName, argTypes));
 
   const auto& metadata = velox::exec::getAggregateFunctionMetadata(*boolOrName);
-  FunctionSet functions = arg->functions();
+  FunctionSet functions;
   if (metadata.ignoreDuplicates) {
     functions = functions | FunctionSet::kIgnoreDuplicatesAggregate;
   }
@@ -139,21 +139,6 @@ optimizer::AggregateCP AggregateRecovery::makeBoolOr(ExprCP arg) {
       intermediateType,
       /*orderKeys=*/{},
       /*orderTypes=*/{});
-}
-
-optimizer::AggregateCP AggregateRecovery::replaceCondition(
-    optimizer::AggregateCP aggregate,
-    ExprCP condition) {
-  return builder_.makeAggregate(
-      aggregate->name(),
-      aggregate->value(),
-      aggregate->args(),
-      aggregate->functions(),
-      aggregate->isDistinct(),
-      condition,
-      aggregate->intermediateType(),
-      aggregate->orderKeys(),
-      aggregate->orderTypes());
 }
 
 } // namespace facebook::axiom::optimizer

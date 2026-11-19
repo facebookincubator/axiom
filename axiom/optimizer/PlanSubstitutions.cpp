@@ -116,19 +116,11 @@ optimizer::AggregateCP PlanSubstitutions::apply(
       fallback == aggregate->fallback()) {
     return aggregate;
   }
-  FunctionSet functions = Call::unionArgFunctions(FunctionSet{}, arguments);
-  if (aggregate->functions().contains(
-          FunctionSet::kIgnoreDuplicatesAggregate)) {
-    functions = functions | FunctionSet::kIgnoreDuplicatesAggregate;
-  }
-  if (aggregate->functions().contains(FunctionSet::kOrderSensitiveAggregate)) {
-    functions = functions | FunctionSet::kOrderSensitiveAggregate;
-  }
   return builder.makeAggregate(
       aggregate->name(),
       aggregate->value(),
       std::move(arguments),
-      functions,
+      aggregate->ownFunctions(),
       aggregate->isDistinct(),
       condition,
       aggregate->intermediateType(),

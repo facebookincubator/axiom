@@ -316,16 +316,13 @@ class Decorrelator : public NodeRewriter<> {
     result.reserve(aggregates.size());
     for (const optimizer::Aggregate* aggregate : aggregates) {
       result.push_back(
-          builder().makeAggregate(
-              aggregate->name(),
-              aggregate->value(),
+          builder().rebuildAggregate(
+              aggregate,
               exprFactory_.substitute(aggregate->args(), sources, targets),
-              aggregate->functions(),
               aggregate->isDistinct(),
               exprFactory_.substitute(aggregate->condition(), sources, targets),
-              aggregate->intermediateType(),
-              exprFactory_.substitute(aggregate->orderKeys(), sources, targets),
-              aggregate->orderTypes()));
+              exprFactory_.substitute(
+                  aggregate->orderKeys(), sources, targets)));
     }
     return result;
   }
@@ -4255,7 +4252,7 @@ class Decorrelator : public NodeRewriter<> {
     Value value(argument->value().type, argument->value().cardinality);
 
     const auto& metadata = velox::exec::getAggregateFunctionMetadata(nameStr);
-    FunctionSet functions = Call::unionArgFunctions(FunctionSet{}, arguments);
+    FunctionSet functions;
     if (metadata.ignoreDuplicates) {
       functions = functions | FunctionSet::kIgnoreDuplicatesAggregate;
     }

@@ -402,36 +402,15 @@ std::string Aggregate::toString() const {
   return out.str();
 }
 
-const Aggregate* Aggregate::dropDistinct() const {
-  if (!isDistinct_) {
-    return this;
+FunctionSet Aggregate::ownFunctions() const {
+  FunctionSet own;
+  if (functions().contains(FunctionSet::kIgnoreDuplicatesAggregate)) {
+    own = own | FunctionSet::kIgnoreDuplicatesAggregate;
   }
-  return make<Aggregate>(
-      name(),
-      value_,
-      args(),
-      functions(),
-      /*isDistinct=*/false,
-      condition_,
-      intermediateType_,
-      orderKeys_,
-      orderTypes_);
-}
-
-const Aggregate* Aggregate::replaceDistinctAndFilterByMarker(
-    ExprCP marker) const {
-  VELOX_CHECK(isDistinct_);
-  VELOX_CHECK_NOT_NULL(marker);
-  return make<Aggregate>(
-      name(),
-      value_,
-      args(),
-      functions(),
-      /*isDistinct=*/false,
-      marker,
-      intermediateType_,
-      orderKeys_,
-      orderTypes_);
+  if (functions().contains(FunctionSet::kOrderSensitiveAggregate)) {
+    own = own | FunctionSet::kOrderSensitiveAggregate;
+  }
+  return own;
 }
 
 std::string WindowFunction::toString() const {

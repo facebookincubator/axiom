@@ -1213,12 +1213,11 @@ const optimizer::Aggregate* Translator::toAggregateCall(
     const optimizer::Aggregate* fallback = special.fallback() != nullptr
         ? toAggregateCall(*special.fallback(), scope, liftTarget)
         : nullptr;
-    FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
     return builder_.makeAggregate(
         toName(aggregateExpr.name()),
         Value(toType(aggregateExpr.type())),
         std::move(arguments),
-        funcs,
+        FunctionSet{},
         /*isDistinct=*/false,
         /*condition=*/nullptr,
         toType(velox::BIGINT()),
@@ -1281,7 +1280,7 @@ const optimizer::Aggregate* Translator::toAggregateCall(
         translateOrdering(aggregateExpr.ordering(), scope, liftTarget);
   }
 
-  FunctionSet funcs = Call::unionArgFunctions(FunctionSet{}, arguments);
+  FunctionSet funcs;
   if (metadata.ignoreDuplicates) {
     funcs = funcs | FunctionSet::kIgnoreDuplicatesAggregate;
   } else if (
@@ -4132,6 +4131,22 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregation::Key& aggregate) {
     return std::nullopt;
   }
 
+  // The listing cannot reproduce which rows a sample keeps.
+  if (scan->baseTable()->sampledPercentage.has_value()) {
+    return std::nullopt;
+  }
+  const ExprVector& filters =
+      filter != nullptr ? filter->predicates() : ExprVector{};
+  const auto anyNonDeterministic = [](const auto& exprs) {
+    return std::ranges::any_of(
+        exprs, [](ExprCP expr) { return expr->containsNonDeterministic(); });
+  };
+  if (anyNonDeterministic(aggregate.groupingKeys) ||
+      anyNonDeterministic(aggregate.aggregates) ||
+      anyNonDeterministic(filters)) {
+    return std::nullopt;
+  }
+
   // The fold works only when every scanned column is a discrete-predicate
   // column; then the subquery's filters reference only those and can narrow the
   // listing.
@@ -4144,8 +4159,6 @@ Translator::tryEvaluateOverDiscreteValues(const Aggregation::Key& aggregate) {
   // Offer the filters to the connector so it narrows the listing. Which of
   // them it takes does not matter: the Filter over the listed values re-applies
   // all of them, so 'rejected' is not read.
-  const ExprVector& filters =
-      filter != nullptr ? filter->predicates() : ExprVector{};
   ExprVector rejected;
   // This handle only asks the connector for its discrete values; nothing reads
   // through it, so it requests no subfields.

@@ -51,6 +51,14 @@ SELECT max(ds) AS m FROM t UNION ALL SELECT min(ds) AS m FROM t
 -- count() counts rows, not partitions.
 SELECT count(*) FROM t
 ----
+-- A nondeterministic expression is evaluated once per row, not once per
+-- partition.
+-- duckdb: SELECT 4::BIGINT
+SELECT count(DISTINCT length(ds) + rand()) FROM t
+----
+-- count 4
+SELECT length(ds) + rand() FROM t GROUP BY 1
+----
 -- count 0
 SELECT u.d
 FROM u

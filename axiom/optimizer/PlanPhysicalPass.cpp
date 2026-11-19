@@ -224,16 +224,12 @@ AggregateCallVector precomputeAggregateArgs(
     for (ExprCP key : aggregate->orderKeys()) {
       orderKeys.push_back(precompute.toColumn(key));
     }
-    result.push_back(builder.makeAggregate(
-        aggregate->name(),
-        aggregate->value(),
+    result.push_back(builder.rebuildAggregate(
+        aggregate,
         std::move(args),
-        aggregate->functions(),
         aggregate->isDistinct(),
         condition,
-        aggregate->intermediateType(),
-        std::move(orderKeys),
-        aggregate->orderTypes()));
+        std::move(orderKeys)));
   }
   return result;
 }
@@ -341,8 +337,14 @@ DistinctExpansion expandDistinct(
   for (const auto* aggregate : aggregates) {
     if (auto it = aggregateToMarker.find(aggregate);
         it != aggregateToMarker.end()) {
-      newAggregates.push_back(
-          aggregate->replaceDistinctAndFilterByMarker(it->second));
+      // The marker replaces DISTINCT and any FILTER: it already encodes which
+      // rows pass the filter.
+      newAggregates.push_back(builder.rebuildAggregate(
+          aggregate,
+          aggregate->args(),
+          /*isDistinct=*/false,
+          it->second,
+          aggregate->orderKeys()));
     } else {
       // Either non-distinct, or distinct whose args are all in `groupingKeys`
       // (per-group dedup is implicit; Velox handles `distinct=true` natively
@@ -2820,18 +2822,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     finalAggregates.reserve(node->aggregates().size());
     for (const auto* aggregate : node->aggregates()) {
       finalAggregates.push_back(
-          aggregate->condition() == nullptr
-              ? aggregate
-              : builder().makeAggregate(
-                    aggregate->name(),
-                    aggregate->value(),
-                    ExprVector{aggregate->args()},
-                    aggregate->functions(),
-                    aggregate->isDistinct(),
-                    /*condition=*/nullptr,
-                    aggregate->intermediateType(),
-                    ExprVector{aggregate->orderKeys()},
-                    aggregate->orderTypes()));
+          builder().replaceCondition(aggregate, /*condition=*/nullptr));
     }
 
     NodeCP finalInput = !remoteExchange ? partial
