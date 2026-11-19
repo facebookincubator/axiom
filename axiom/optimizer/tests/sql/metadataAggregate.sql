@@ -43,6 +43,10 @@ SELECT approx_non_null_count(v) FROM m
 -- duckdb: SELECT k, count(v) FROM m GROUP BY 1
 SELECT k, approx_non_null_count(v) FROM m GROUP BY 1
 ----
+-- A sampled scan counts only the sampled rows.
+-- duckdb: SELECT 0::BIGINT
+SELECT approx_count_star() FROM m WHERE rand() < 0.000001
+----
 -- A regular aggregate alongside a metadata aggregate.
 -- duckdb: SELECT count(*), sum(v) FROM m
 SELECT approx_count_star(), sum(v) FROM m

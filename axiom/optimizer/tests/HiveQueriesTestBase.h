@@ -137,14 +137,16 @@ class HiveQueriesTestBase : public QueryTestBase {
 
   /// Matches a Hive TableScan of 'tableName' that has exactly 'subfieldFilters'
   /// pushed down and exactly 'remainingFilter' as its non-pushed filter -- an
-  /// empty 'remainingFilter' asserts the scan has no remaining filter. Use the
+  /// empty 'remainingFilter' asserts the scan has no remaining filter. When
+  /// 'sampleRate' is set, also asserts the scan's sample rate. Use the
   /// single-argument overload to match a scan regardless of its filters.
   static velox::core::PlanMatcherBuilder matchHiveScan(
       const std::string& tableName,
       velox::common::SubfieldFilters subfieldFilters,
-      const std::string& remainingFilter = "") {
+      const std::string& remainingFilter = "",
+      std::optional<double> sampleRate = std::nullopt) {
     return velox::core::PlanMatcherBuilder().hiveScan(
-        tableName, std::move(subfieldFilters), remainingFilter);
+        tableName, std::move(subfieldFilters), remainingFilter, sampleRate);
   }
 
   /// Sets a Hive connector session property for subsequently planned queries.

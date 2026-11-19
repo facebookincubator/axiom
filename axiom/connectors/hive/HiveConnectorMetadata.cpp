@@ -615,6 +615,19 @@ std::vector<const Column*> HiveTableLayout::nonPartitionFilterColumns(
   return filterColumns;
 }
 
+bool HiveTableLayout::hasOnlyPartitionFilters(
+    const velox::connector::hive::HiveTableHandle& handle) const {
+  if (handle.remainingFilter() != nullptr || handle.sampleRate() < 1.0) {
+    return false;
+  }
+  for (const auto& [subfield, filter] : handle.subfieldFilters()) {
+    if (!hivePartitionColumnsType_->containsChild(subfield.baseName())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::vector<std::string> HiveTableLayout::withFilterColumns(
     const velox::connector::hive::HiveTableHandle& handle,
     const std::vector<std::string>& requested,
