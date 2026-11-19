@@ -607,7 +607,9 @@ TEST_P(PlanTest, filterToJoinEdge) {
               lp::PlanBuilder(context)
                   .tableScan("region", regionType->names())
                   .filter("rand() < 3.0"))
-          .filter("n_regionkey + 1 = r_regionkey + 1 and rand() < 4.0")
+          .filter(
+              "n_regionkey + 1 = r_regionkey + 1 and "
+              "rand() < cast(n_regionkey + r_regionkey as double) + 4.0")
           .build();
 
   {
@@ -621,7 +623,8 @@ TEST_P(PlanTest, filterToJoinEdge) {
                     .aliases({"r_regionkey"})
                     .project({"r_regionkey + 1 as rk", "r_regionkey"}),
                 {.keys = {{"nk = rk"}},
-                 .filter = "rand() < 4.0",
+                 .filter =
+                     "rand() < cast(n_regionkey + r_regionkey as double) + 4.0",
                  .outputColumnNames = {{"n_regionkey", "r_regionkey"}}})
             .project({"n_regionkey", "r_regionkey"})
             .build();

@@ -1419,10 +1419,14 @@ lp::ExprApi ExpressionPlanner::toExpr(
       // function; encode it with a leading '.' so downstream resolution can
       // distinguish it from a builtin, which keeps its bare name. Both are
       // lower-cased because function names are case-insensitive.
+      // `random` is an alias for `rand`; the optimizer recognizes the function
+      // by one name.
+      const std::string builtinName =
+          lowerFuncName == "random" ? "rand" : lowerFuncName;
       auto callExpr = lp::Call(
           call->name()->parts().size() > 1
               ? canonicalizeName("." + call->name()->fullyQualifiedName())
-              : lowerFuncName,
+              : builtinName,
           args);
 
       if (call->window() != nullptr) {
