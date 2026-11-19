@@ -16,6 +16,7 @@
 
 #include "axiom/optimizer/FunctionRegistry.h"
 
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/functions/FunctionRegistry.h"
 
@@ -307,7 +308,9 @@ bool isInferenceFunction(Name name) {
 FunctionSet functionBits(Name name, bool specialForm) {
   FunctionSet bits;
 
-  if (specialForm) {
+  // Velox callable special forms carry no function metadata, so they get the
+  // same conservative properties as logical special forms.
+  if (specialForm || velox::exec::isFunctionCallToSpecialFormRegistered(name)) {
     bits = bits | FunctionSet::kNonDefaultNullBehavior;
   } else if (
       const auto inference =
