@@ -208,7 +208,7 @@ ExprApi MetadataNonNullCount(const ExprApi& input) {
       std::vector<velox::core::ExprPtr>{input.expr()})};
 }
 
-ExprApi Sql(const std::string& sql) {
+ExprApi DuckSql(const std::string& sql) {
   return ExprApi{velox::parse::DuckSqlExpressionsParser().parseExpr(sql)};
 }
 

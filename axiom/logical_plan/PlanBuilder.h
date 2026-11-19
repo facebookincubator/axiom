@@ -73,7 +73,7 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
 ///   "sum(x) filter (where y > 0)". Parsed using DuckDB SQL dialect by
 ///   default. Callers can provide a custom SQL parser via Context.
 /// - **ExprApi-based** — accept ExprApi objects built programmatically with
-///   Col(), Lit(), Sql(), Subquery(), etc. Required for subqueries.
+///   Col(), Lit(), DuckSql(), Subquery(), etc. Required for subqueries.
 ///
 /// Example using SQL strings:
 ///
@@ -88,7 +88,7 @@ class ThrowingSqlExpressionsParser : public velox::parse::SqlExpressionsParser {
 ///   PlanBuilder(ctx)
 ///     .tableScan("orders")
 ///     .filter(Col("o_totalprice") > 100)
-///     .aggregate({Col("o_custkey")}, {Sql("sum(o_totalprice)")})
+///     .aggregate({Col("o_custkey")}, {DuckSql("sum(o_totalprice)")})
 ///     .build();
 ///
 /// Share a Context across multiple PlanBuilder instances when building queries

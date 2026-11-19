@@ -96,13 +96,14 @@ TEST_P(UnnestTest, unnest) {
   {
     SCOPED_TRACE("unnest");
 
-    auto logicalPlan = lp::PlanBuilder{}
-                           .values({rowVector_})
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder{}
+            .values({rowVector_})
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().build();
@@ -111,17 +112,18 @@ TEST_P(UnnestTest, unnest) {
   {
     SCOPED_TRACE("unnest after unnest");
 
-    auto logicalPlan = lp::PlanBuilder{}
-                           .values({rowVector_})
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .unnest({
-                               lp::Sql("array_distinct(a_y)").unnestAs("y"),
-                               lp::Sql("array_distinct(a_z)").unnestAs("z"),
-                           })
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder{}
+            .values({rowVector_})
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .unnest({
+                lp::DuckSql("array_distinct(a_y)").unnestAs("y"),
+                lp::DuckSql("array_distinct(a_z)").unnestAs("z"),
+            })
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().project().unnest().build();
@@ -132,18 +134,19 @@ TEST_P(UnnestTest, unnest) {
 
     const std::vector<std::string> expectedNames{"x", "y"};
 
-    auto logicalPlan = lp::PlanBuilder{}
-                           .values({rowVector_})
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .unnest({
-                               lp::Sql("array_distinct(a_y)").unnestAs("y"),
-                               lp::Sql("array_distinct(a_z)").unnestAs("z"),
-                           })
-                           .project(expectedNames)
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder{}
+            .values({rowVector_})
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .unnest({
+                lp::DuckSql("array_distinct(a_y)").unnestAs("y"),
+                lp::DuckSql("array_distinct(a_z)").unnestAs("z"),
+            })
+            .project(expectedNames)
+            .build();
     auto plan = toSingleNodePlan(logicalPlan);
 
     auto matcher =
@@ -164,13 +167,14 @@ TEST_P(UnnestTest, unnest) {
   {
     SCOPED_TRACE("unnest without replicated columns");
 
-    auto logicalPlan = lp::PlanBuilder{}
-                           .values({rowVector_})
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                           })
-                           .project({"a_y"})
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder{}
+            .values({rowVector_})
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+            })
+            .project({"a_y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().build();
@@ -181,7 +185,7 @@ TEST_P(UnnestTest, unnest) {
 
     auto logicalPlan = lp::PlanBuilder{}
                            .unnest({
-                               lp::Sql("array[1, 2, 3]").unnestAs("e"),
+                               lp::DuckSql("array[1, 2, 3]").unnestAs("e"),
                            })
                            .project({"e"})
                            .build();
@@ -193,14 +197,15 @@ TEST_P(UnnestTest, unnest) {
   {
     SCOPED_TRACE("unnest array and map");
 
-    auto logicalPlan = lp::PlanBuilder{}
-                           .unnest({
-                               lp::Sql("array[1, 2, 3]").unnestAs("e"),
-                               lp::Sql("map(array['1', '2'], array[10, 20])")
-                                   .unnestAs("k", "v"),
-                           })
-                           .project({"v", "e"})
-                           .build();
+    auto logicalPlan =
+        lp::PlanBuilder{}
+            .unnest({
+                lp::DuckSql("array[1, 2, 3]").unnestAs("e"),
+                lp::DuckSql("map(array['1', '2'], array[10, 20])")
+                    .unnestAs("k", "v"),
+            })
+            .project({"v", "e"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().unnest().project({"v", "e"}).build();
@@ -243,13 +248,14 @@ TEST_P(UnnestTest, project) {
   {
     SCOPED_TRACE("project after unnest (independent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x + 1 AS x1", "a_y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x + 1 AS x1", "a_y"})
+            .build();
 
     // TODO We probably want pushdown projection closer to data source.
     // Because compared to other joins, unnest only increase work.
@@ -260,13 +266,14 @@ TEST_P(UnnestTest, project) {
   {
     SCOPED_TRACE("project after unnest (dependent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "array_distinct(a_y) AS a_y_d"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "array_distinct(a_y) AS a_y_d"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().project().build();
@@ -282,14 +289,15 @@ TEST_P(UnnestTest, filter) {
   {
     SCOPED_TRACE("filter before unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .filter("x % 2 = 0")
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .filter("x % 2 = 0")
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().filter().project().unnest().project().build();
@@ -298,14 +306,15 @@ TEST_P(UnnestTest, filter) {
   {
     SCOPED_TRACE("filter after unnest (independent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .filter("x % 2 = 0")
-                           .project({"x", "a_y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .filter("x % 2 = 0")
+            .project({"x", "a_y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().filter().project().unnest().project().build();
@@ -314,18 +323,19 @@ TEST_P(UnnestTest, filter) {
   {
     SCOPED_TRACE("filter after unnest (dependent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .unnest({
-                               lp::Sql("array_distinct(a_y)").unnestAs("y"),
-                               lp::Sql("array_distinct(a_z)").unnestAs("z"),
-                           })
-                           .filter("y % 2 = 0")
-                           .project({"x", "y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .unnest({
+                lp::DuckSql("array_distinct(a_y)").unnestAs("y"),
+                lp::DuckSql("array_distinct(a_z)").unnestAs("z"),
+            })
+            .filter("y % 2 = 0")
+            .project({"x", "y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues()
@@ -341,18 +351,19 @@ TEST_P(UnnestTest, filter) {
   {
     SCOPED_TRACE("filter between unnest (independent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .filter("x % 2 = 0")
-                           .unnest({
-                               lp::Sql("array_distinct(a_y)").unnestAs("y"),
-                               lp::Sql("array_distinct(a_z)").unnestAs("z"),
-                           })
-                           .project({"x", "y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .filter("x % 2 = 0")
+            .unnest({
+                lp::DuckSql("array_distinct(a_y)").unnestAs("y"),
+                lp::DuckSql("array_distinct(a_z)").unnestAs("z"),
+            })
+            .project({"x", "y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues()
@@ -368,18 +379,19 @@ TEST_P(UnnestTest, filter) {
   {
     SCOPED_TRACE("filter between unnest (dependent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .filter("cardinality(a_z) % 2 = 0")
-                           .unnest({
-                               lp::Sql("array_distinct(a_y)").unnestAs("y"),
-                               lp::Sql("array_distinct(a_z)").unnestAs("z"),
-                           })
-                           .project({"x", "y"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .filter("cardinality(a_z) % 2 = 0")
+            .unnest({
+                lp::DuckSql("array_distinct(a_y)").unnestAs("y"),
+                lp::DuckSql("array_distinct(a_z)").unnestAs("z"),
+            })
+            .project({"x", "y"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues()
@@ -404,14 +416,15 @@ TEST_P(UnnestTest, groupBy) {
   {
     SCOPED_TRACE("group by before unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .aggregate(names, {})
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .aggregate(names, {})
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().singleAggregation().project().unnest().build();
@@ -420,13 +433,14 @@ TEST_P(UnnestTest, groupBy) {
   {
     SCOPED_TRACE("group by after unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .aggregate({"x", "a_y", "a_z"}, {})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .aggregate({"x", "a_y", "a_z"}, {})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().singleAggregation().build();
@@ -444,14 +458,15 @@ TEST_P(UnnestTest, orderBy) {
   {
     SCOPED_TRACE("order by before unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .orderBy(names)
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .orderBy(names)
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().orderBy().project().unnest().build();
@@ -460,14 +475,15 @@ TEST_P(UnnestTest, orderBy) {
   {
     SCOPED_TRACE("order by after unnest (independent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .orderBy({"x"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .orderBy({"x"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().orderBy().build();
@@ -476,14 +492,15 @@ TEST_P(UnnestTest, orderBy) {
   {
     SCOPED_TRACE("order by after unnest (dependent on unnested columns)");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .orderBy({"x", "a_y", "a_z"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .orderBy({"x", "a_y", "a_z"})
+            .build();
 
     // TODO We probably want pushdown orderBy closer to data source.
     // Because compared to other joins, unnest only increase work.
@@ -501,14 +518,15 @@ TEST_P(UnnestTest, limit) {
   {
     SCOPED_TRACE("limit before unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .limit(1, 1)
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .limit(1, 1)
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().limit().project().unnest().build();
@@ -517,14 +535,15 @@ TEST_P(UnnestTest, limit) {
   {
     SCOPED_TRACE("limit after unnest");
 
-    auto logicalPlan = startLogicalPlan()
-                           .unnest({
-                               lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                               lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
-                           })
-                           .project({"x", "a_y", "a_z"})
-                           .limit(1, 1)
-                           .build();
+    auto logicalPlan =
+        startLogicalPlan()
+            .unnest({
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
+            })
+            .project({"x", "a_y", "a_z"})
+            .limit(1, 1)
+            .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     auto matcher = matchValues().project().unnest().limit().build();
@@ -553,12 +572,12 @@ TEST_P(UnnestTest, join) {
                 "x1 = x2",
                 lp::JoinType::kInner)
             .unnest({
-                lp::Sql("array_distinct(a_a_y1)").unnestAs("a_y1"),
-                lp::Sql("array_distinct(a_a_z1)").unnestAs("a_z1"),
+                lp::DuckSql("array_distinct(a_a_y1)").unnestAs("a_y1"),
+                lp::DuckSql("array_distinct(a_a_z1)").unnestAs("a_z1"),
             })
             .unnest({
-                lp::Sql("array_distinct(a_a_y2)").unnestAs("a_y2"),
-                lp::Sql("array_distinct(a_a_z2)").unnestAs("a_z2"),
+                lp::DuckSql("array_distinct(a_a_y2)").unnestAs("a_y2"),
+                lp::DuckSql("array_distinct(a_a_z2)").unnestAs("a_z2"),
             })
             .project(expectedNames)
             .build();
@@ -590,12 +609,12 @@ TEST_P(UnnestTest, join) {
                 "a_a_y1 = a_a_y2",
                 lp::JoinType::kInner)
             .unnest({
-                lp::Sql("array_distinct(a_a_y1)").unnestAs("a_y1"),
-                lp::Sql("array_distinct(a_a_z1)").unnestAs("a_z1"),
+                lp::DuckSql("array_distinct(a_a_y1)").unnestAs("a_y1"),
+                lp::DuckSql("array_distinct(a_a_z1)").unnestAs("a_z1"),
             })
             .unnest({
-                lp::Sql("array_distinct(a_a_y2)").unnestAs("a_y2"),
-                lp::Sql("array_distinct(a_a_z2)").unnestAs("a_z2"),
+                lp::DuckSql("array_distinct(a_a_y2)").unnestAs("a_y2"),
+                lp::DuckSql("array_distinct(a_a_z2)").unnestAs("a_z2"),
             })
             .project(expectedNames)
             .build();
@@ -621,15 +640,15 @@ TEST_P(UnnestTest, join) {
     auto logicalPlan =
         startLogicalPlan(ctx)
             .unnest({
-                lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
+                lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
             })
             .as("t")
             .join(
                 startLogicalPlan(ctx)
                     .unnest({
-                        lp::Sql("array_distinct(a_a_y)").unnestAs("a_y"),
-                        lp::Sql("array_distinct(a_a_z)").unnestAs("a_z"),
+                        lp::DuckSql("array_distinct(a_a_y)").unnestAs("a_y"),
+                        lp::DuckSql("array_distinct(a_a_z)").unnestAs("a_z"),
                     })
                     .as("u"),
                 "t.x = u.x",
@@ -670,15 +689,15 @@ TEST_P(UnnestTest, join) {
         startLogicalPlan(ctx)
             .project({"x AS x1", "a_a_y AS a_a_y1", "a_a_z AS a_a_z1"})
             .unnest({
-                lp::Sql("array_distinct(a_a_y1)").unnestAs("a_y1"),
-                lp::Sql("array_distinct(a_a_z1)").unnestAs("a_z1"),
+                lp::DuckSql("array_distinct(a_a_y1)").unnestAs("a_y1"),
+                lp::DuckSql("array_distinct(a_a_z1)").unnestAs("a_z1"),
             })
             .join(
                 startLogicalPlan(ctx)
                     .project({"x AS x2", "a_a_y AS a_a_y2", "a_a_z AS a_a_z2"})
                     .unnest({
-                        lp::Sql("array_distinct(a_a_y2)").unnestAs("a_y2"),
-                        lp::Sql("array_distinct(a_a_z2)").unnestAs("a_z2"),
+                        lp::DuckSql("array_distinct(a_a_y2)").unnestAs("a_y2"),
+                        lp::DuckSql("array_distinct(a_a_z2)").unnestAs("a_z2"),
                     }),
                 "a_y1 = a_y2",
                 lp::JoinType::kInner)

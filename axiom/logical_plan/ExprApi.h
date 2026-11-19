@@ -34,10 +34,26 @@
 /// - Subquery(<plan>) - correlated (or not) subquery expression
 /// - Placeholder(<type>, <position>) - value bound when the plan is optimized
 ///
-/// The API supports basic arithmetic and comparison operations:
+/// The API supports basic arithmetic, comparison and logical operators:
 /// - Col("a") + Col("b")
 /// - Col("a") * 10
 /// - Col("a") < 0
+///
+/// Each operator becomes a call that uses the Presto SQL function name:
+///
+///   a + b    plus(a, b)
+///   a - b    minus(a, b)
+///   a * b    multiply(a, b)
+///   a / b    divide(a, b)
+///   a % b    mod(a, b)
+///   a < b    lt(a, b)
+///   a <= b   lte(a, b)
+///   a > b    gt(a, b)
+///   a >= b   gte(a, b)
+///   a == b   eq(a, b)
+///   a != b   neq(a, b)
+///   a && b   and(a, b)
+///   a || b   or(a, b)
 
 namespace facebook::axiom::logical_plan {
 
@@ -435,7 +451,10 @@ ExprApi MetadataNullCount(const ExprApi& input);
 /// (SpecialAggregateKind::kMetadataNonNullCount) over 'input'.
 ExprApi MetadataNonNullCount(const ExprApi& input);
 
-ExprApi Sql(const std::string& sql);
+/// Parses 'sql' into an untyped expression. The core syntax, such as literals,
+/// operators and CAST, follows the DuckDB SQL dialect. Function names are kept
+/// as written.
+ExprApi DuckSql(const std::string& sql);
 
 /// Placeholder for an ordinality column in unnest operations. Use with
 /// ExprApi::as() to specify a custom alias.

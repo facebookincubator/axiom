@@ -792,7 +792,7 @@ TEST_F(PlanPrinterTest, unnest) {
     PlanBuilder::Context context;
     context.coercer = &velox::TypeCoercer::defaults();
     auto plan = PlanBuilder(context)
-                    .unnest({Sql("map(array[1, 2, 3], array[10, 20, 30])")
+                    .unnest({DuckSql("map(array[1, 2, 3], array[10, 20, 30])")
                                  .unnestAs("x", "y")})
                     .project({"x + y"})
                     .build();
