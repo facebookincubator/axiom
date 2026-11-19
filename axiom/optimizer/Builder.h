@@ -115,11 +115,12 @@ class Builder {
   /// whenever both are non-null, as with equi-join keys above a full join.
   ExprCP canonicalizeCoalesce(ExprCP a, ExprCP b);
 
-  /// Returns a canonical aggregate `Call`. Result type and 'intermediateType'
+  /// Returns a canonical aggregate `Call`. 'functions' is the aggregate's own
+  /// bits (see Aggregate::ownFunctions()). Result type and 'intermediateType'
   /// are determined by (name, args), so identity excludes them. 'specialKind'
   /// and 'fallback' mark a metadata aggregate (see optimizer::Aggregate); they
   /// are also excluded from identity (determined by 'name').
-  const optimizer::Aggregate* makeAggregate(
+  AggregateCP makeAggregate(
       Name name,
       const Value& value,
       ExprVector args,
@@ -131,7 +132,22 @@ class Builder {
       OrderTypeVector orderTypes,
       std::optional<logical_plan::SpecialAggregateKind> specialKind =
           std::nullopt,
-      const optimizer::Aggregate* fallback = nullptr);
+      AggregateCP fallback = nullptr);
+
+  /// Returns 'aggregate' with the given arguments, DISTINCT flag, FILTER
+  /// condition (nullptr for none) and order keys, keeping every other field.
+  /// 'orderKeys' must match the aggregate's order types.
+  AggregateCP rebuildAggregate(
+      AggregateCP aggregate,
+      ExprVector args,
+      bool isDistinct,
+      ExprCP condition,
+      ExprVector orderKeys);
+
+  /// Returns 'aggregate' with its FILTER condition replaced by 'condition'
+  /// (nullptr for none), keeping every other field. Returns 'aggregate' itself
+  /// when the condition is unchanged.
+  AggregateCP replaceCondition(AggregateCP aggregate, ExprCP condition);
 
   /// Canonical `Literal` for boolean constant 'value'.
   const Literal* makeBoolean(bool value) {

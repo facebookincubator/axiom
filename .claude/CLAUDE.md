@@ -535,7 +535,8 @@ Optimize as well as the available information, models, and search budget allow.
 Producing the globally best plan for every query is not a requirement.
 
 - Preserve query semantics using explicit, verifiable invariants. Statistical
-  estimates do not provide correctness guarantees.
+  estimates do not provide correctness guarantees. A query with `rand()` or a
+  sample has a distribution of results, and a rewrite keeps that distribution.
 - Use coherent cardinality and cost models. Document their assumptions and
   limitations, and verify their predictions against observed behavior. Costs
   must account consistently for the work each candidate requires.

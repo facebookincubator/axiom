@@ -765,9 +765,10 @@ using BaseTableCP = const BaseTable*;
 
 using TypeVector = QGVector<const velox::Type*>;
 
-// Aggregate function. The aggregation and arguments are in the
-// inherited Call. The Value pertains to the aggregation
-// result or accumulator.
+/// Aggregate function. The aggregation and arguments are in the inherited
+/// Call. The Value pertains to the aggregation result or accumulator.
+/// functions() is kAggregate and the aggregate's own bits (see ownFunctions())
+/// together with the functions of its arguments, condition and order keys.
 class Aggregate : public Call {
  public:
   Aggregate(
@@ -787,8 +788,12 @@ class Aggregate : public Call {
             PlanType::kAggregateExpr,
             name,
             value,
-            std::move(args),
-            functions | FunctionSet::kAggregate),
+            args,
+            unionArgFunctions(
+                unionArgFunctions(functions | FunctionSet::kAggregate, args),
+                orderKeys) |
+                (condition == nullptr ? FunctionSet{}
+                                      : condition->functions())),
         isDistinct_(isDistinct),
         condition_(condition),
         intermediateType_(intermediateType),
@@ -812,6 +817,12 @@ class Aggregate : public Call {
   ExprCP condition() const {
     return condition_;
   }
+
+  /// Returns the aggregate's own function bits, without those of its
+  /// arguments, condition and order keys: kIgnoreDuplicatesAggregate and
+  /// kOrderSensitiveAggregate when set. Pass these when rebuilding an aggregate
+  /// with different arguments, condition or order keys.
+  FunctionSet ownFunctions() const;
 
   bool isDistinct() const {
     return isDistinct_;
@@ -850,14 +861,6 @@ class Aggregate : public Call {
 
   /// Returns the typed result for empty input from the function registry.
   velox::Variant emptyInputResult() const;
-
-  /// Returns a copy with isDistinct set to false.
-  const Aggregate* dropDistinct() const;
-
-  /// Returns a copy with isDistinct cleared and condition replaced by 'marker'.
-  /// Any prior FILTER condition is dropped because the marker already encodes
-  /// which rows pass the filter.
-  const Aggregate* replaceDistinctAndFilterByMarker(ExprCP marker) const;
 
   std::string toString() const override;
 

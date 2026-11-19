@@ -170,7 +170,7 @@ ExprCP Builder::canonicalizeCoalesce(ExprCP a, ExprCP b) {
   return ExprFactory(*this).makeCoalesce(a, b);
 }
 
-const optimizer::Aggregate* Builder::makeAggregate(
+AggregateCP Builder::makeAggregate(
     Name name,
     const Value& value,
     ExprVector args,
@@ -181,7 +181,7 @@ const optimizer::Aggregate* Builder::makeAggregate(
     ExprVector orderKeys,
     OrderTypeVector orderTypes,
     std::optional<logical_plan::SpecialAggregateKind> specialKind,
-    const optimizer::Aggregate* fallback) {
+    AggregateCP fallback) {
   optimizer::Aggregate::KeyView view{
       name, args, isDistinct, condition, orderKeys, orderTypes};
   if (auto it = aggregateCalls_.find(view); it != aggregateCalls_.end()) {
@@ -201,6 +201,38 @@ const optimizer::Aggregate* Builder::makeAggregate(
       fallback);
   aggregateCalls_.insert(aggregate);
   return aggregate;
+}
+
+AggregateCP Builder::rebuildAggregate(
+    AggregateCP aggregate,
+    ExprVector args,
+    bool isDistinct,
+    ExprCP condition,
+    ExprVector orderKeys) {
+  return makeAggregate(
+      aggregate->name(),
+      aggregate->value(),
+      std::move(args),
+      aggregate->ownFunctions(),
+      isDistinct,
+      condition,
+      aggregate->intermediateType(),
+      std::move(orderKeys),
+      aggregate->orderTypes(),
+      aggregate->specialKind(),
+      aggregate->fallback());
+}
+
+AggregateCP Builder::replaceCondition(AggregateCP aggregate, ExprCP condition) {
+  if (condition == aggregate->condition()) {
+    return aggregate;
+  }
+  return rebuildAggregate(
+      aggregate,
+      aggregate->args(),
+      aggregate->isDistinct(),
+      condition,
+      aggregate->orderKeys());
 }
 
 namespace {

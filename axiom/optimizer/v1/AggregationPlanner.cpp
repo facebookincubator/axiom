@@ -176,12 +176,30 @@ std::optional<ExprVector> getCommonDistinctArgs(
   return commonDistinctArgs;
 }
 
+// Returns a copy of 'aggregate' with isDistinct cleared and its condition
+// replaced by 'condition'.
+AggregateCP rebuildNonDistinct(AggregateCP aggregate, ExprCP condition) {
+  return make<Aggregate>(
+      aggregate->name(),
+      aggregate->value(),
+      aggregate->args(),
+      aggregate->ownFunctions(),
+      /*isDistinct=*/false,
+      condition,
+      aggregate->intermediateType(),
+      aggregate->orderKeys(),
+      aggregate->orderTypes());
+}
+
 // Returns a copy of aggregates with isDistinct set to false.
 AggregateVector dropDistinctFromAggregates(const AggregateVector& aggregates) {
   AggregateVector result;
   result.reserve(aggregates.size());
   for (const auto* aggregate : aggregates) {
-    result.push_back(aggregate->dropDistinct());
+    result.push_back(
+        aggregate->isDistinct()
+            ? rebuildNonDistinct(aggregate, aggregate->condition())
+            : aggregate);
   }
   return result;
 }
@@ -297,8 +315,8 @@ MarkDistinctResult addMarkDistinctNodes(
       newAggregates.push_back(aggregate);
       continue;
     }
-    newAggregates.push_back(
-        aggregate->replaceDistinctAndFilterByMarker(it->second));
+    // The marker already encodes which rows pass any prior FILTER.
+    newAggregates.push_back(rebuildNonDistinct(aggregate, it->second));
   }
 
   return {std::move(plan), std::move(newAggregates), totalCost};
