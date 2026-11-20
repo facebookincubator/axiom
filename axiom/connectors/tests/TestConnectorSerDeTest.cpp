@@ -48,6 +48,7 @@ class TestConnectorSerDeTest : public testing::Test {
     auto clone = ISerializable::deserialize<TestTableHandle>(obj, pool.get());
     ASSERT_EQ(handle.toString(), clone->toString());
     ASSERT_EQ(handle.connectorId(), clone->connectorId());
+    ASSERT_EQ(handle.tableReferenceId(), clone->tableReferenceId());
     ASSERT_EQ(handle.schemaTableName(), clone->schemaTableName());
     ASSERT_EQ(handle.name(), clone->name());
     ASSERT_EQ(handle.size(), clone->size());
@@ -83,7 +84,11 @@ TEST_F(TestConnectorSerDeTest, tableHandle) {
 
   // No column handles, no filters.
   auto handle1 = TestTableHandle(
-      connectorId, SchemaTableName{"schema1", "table1"}, 10, {});
+      connectorId,
+      /*tableReferenceId=*/1,
+      SchemaTableName{"schema1", "table1"},
+      10,
+      {});
   testSerde(handle1);
 
   // With column handles.
@@ -92,11 +97,16 @@ TEST_F(TestConnectorSerDeTest, tableHandle) {
       std::make_shared<TestColumnHandle>("c2", VARCHAR()),
   };
   auto handle2 = TestTableHandle(
-      connectorId, SchemaTableName{"schema2", "table2"}, 5, std::move(columns));
+      connectorId,
+      /*tableReferenceId=*/2,
+      SchemaTableName{"schema2", "table2"},
+      5,
+      std::move(columns));
   testSerde(handle2);
 
   // Empty schema and name.
-  auto handle4 = TestTableHandle(connectorId, SchemaTableName{"", ""}, 0, {});
+  auto handle4 = TestTableHandle(
+      connectorId, /*tableReferenceId=*/3, SchemaTableName{"", ""}, 0, {});
   testSerde(handle4);
 }
 

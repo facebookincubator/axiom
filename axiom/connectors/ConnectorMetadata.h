@@ -859,6 +859,13 @@ class TableLayout {
   /// specify casting from maps to structs by giving a struct in the place of a
   /// map.
   ///
+  /// 'tableReferenceId' identifies the table reference this handle is built
+  /// for: one occurrence of a table in the planned query. A self-join reads
+  /// two references. A connector can key per-reference query state by it:
+  /// - Two table references planned on one 'session' never share an ID.
+  /// - Several handles may carry one ID. They can differ in columns, filters
+  ///   and lookup keys, and some feed only metadata calls.
+  ///
   /// The optimizer normalizes 'filters' into a canonical form a connector may
   /// rely on:
   /// - A top-level conjunction is flattened: 'filters' holds one entry per
@@ -882,6 +889,7 @@ class TableLayout {
   /// ARRAY encoding.
   virtual velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
+      int32_t tableReferenceId,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,

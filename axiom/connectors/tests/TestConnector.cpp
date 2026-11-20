@@ -1178,6 +1178,7 @@ velox::connector::ColumnHandlePtr TestTableLayout::createColumnHandle(
 
 velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
+    int32_t tableReferenceId,
     std::vector<velox::connector::ColumnHandlePtr> columnHandles,
     velox::core::ExpressionEvaluator& /* evaluator */,
     std::vector<velox::core::TypedExprPtr> filters,
@@ -1203,7 +1204,10 @@ velox::connector::ConnectorTableHandlePtr TestTableLayout::createTableHandle(
   rejectedFilterIndices.resize(filters.size());
   std::iota(rejectedFilterIndices.begin(), rejectedFilterIndices.end(), 0);
   return std::make_shared<TestTableHandle>(
-      *this, std::move(columnHandles), lookupKeys.has_value());
+      *this,
+      tableReferenceId,
+      std::move(columnHandles),
+      lookupKeys.has_value());
 }
 
 std::shared_ptr<TestTable> TestConnectorMetadata::addLookupTable(

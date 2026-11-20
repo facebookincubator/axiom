@@ -45,7 +45,8 @@ using ConnectorContextPtr = std::shared_ptr<ConnectorContext>;
 /// lets connector metadata initialize optional query state, and builds the
 /// session once. The application makes one when a query begins,
 /// drops it when the query is finished with, and gives every component session
-/// of that query the same one.
+/// of that query the same one. A query that optimizes more than one plan gives
+/// each optimization a context of its own.
 ///
 /// A component is handed its property slice and writer directly
 /// (`BaseSession(context, stats.writerFor(kOptimizer), properties)`) while a

@@ -1260,7 +1260,7 @@ SqlQueryRunner::co_runExplainStatement(
           plan,
           explain,
           options,
-          context,
+          makeStatementContext(queryId, options, explain.queryKind()),
           timing,
           schemaResolver,
           placeholderValues);
@@ -1518,13 +1518,15 @@ folly::coro::Task<velox::RowVectorPtr> SqlQueryRunner::co_runRefreshVectorIndex(
                            std::string& text) -> folly::coro::Task<void> {
     auto planOptions = options;
     planOptions.queryId = fmt::format("{}_{}", queryId, name);
+    const auto planContext =
+        makeStatementContext(queryId, planOptions, refresh.queryKind());
     std::vector<velox::Variant> placeholderValues;
     placeholderValues.emplace_back(codecId);
     if (analyze) {
       text = co_await co_runExplainAnalyze(
           plan,
           planOptions,
-          context,
+          planContext,
           timing,
           /*schemaResolver=*/nullptr,
           std::move(placeholderValues));
@@ -1535,7 +1537,7 @@ folly::coro::Task<velox::RowVectorPtr> SqlQueryRunner::co_runRefreshVectorIndex(
         co_runLogicalPlan(
             plan,
             planOptions,
-            context,
+            planContext,
             timing,
             text,
             /*schemaResolver=*/nullptr,
@@ -2085,11 +2087,8 @@ SqlQueryRunner::executeSelectOrInsert(
   checkLogicalPlan(*logicalPlan);
 
   auto queryCtx = newQuery(options);
-  const auto context = makeConnectorContext(queryCtx->queryId(), options);
-  context->setQueryKind(statement.queryKind());
-  if (options.tokenProvider != nullptr) {
-    context->setTokenProvider(options.tokenProvider);
-  }
+  const auto context =
+      makeStatementContext(queryCtx->queryId(), options, statement.queryKind());
   auto planAndStats = optimize(logicalPlan, queryCtx, options, context);
   return makeLocalRunner(planAndStats, queryCtx, options, context);
 }
@@ -2228,6 +2227,18 @@ connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
           *sessionConfig_, metadataRegistry_.ids()),
       options.connectorStatWriterProvider,
       metadataRegistry_);
+}
+
+connector::ConnectorContextPtr SqlQueryRunner::makeStatementContext(
+    std::string_view queryId,
+    const RunOptions& options,
+    connector::QueryKind queryKind) const {
+  auto context = makeConnectorContext(queryId, options);
+  context->setQueryKind(queryKind);
+  if (options.tokenProvider != nullptr) {
+    context->setTokenProvider(options.tokenProvider);
+  }
+  return context;
 }
 
 connector::ConnectorSessionPtr SqlQueryRunner::makeConnectorSession(
