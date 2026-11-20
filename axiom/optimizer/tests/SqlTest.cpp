@@ -678,6 +678,7 @@ int main(int argc, char** argv) {
   registerQueryFile<"set">();
   registerQueryFile<"sort">();
   registerQueryFile<"subfield">();
+  registerQueryFile<"subfieldPruning">(/*v2Only=*/true);
   registerQueryFile<"subquery">();
   registerQueryFile<"subqueryAggregate">();
   registerQueryFile<"subqueryInBody">();

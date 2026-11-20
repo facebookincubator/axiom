@@ -19,6 +19,7 @@
 #include <algorithm>
 
 #include <folly/String.h>
+#include <folly/hash/Hash.h>
 #include "axiom/optimizer/BitSet.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -208,7 +209,8 @@ int32_t Step::fieldIndex(const velox::RowType& rowType) const {
 }
 
 bool Step::operator==(const Step& other) const {
-  return kind == other.kind && field == other.field && id == other.id;
+  return kind == other.kind && field == other.field && id == other.id &&
+      allFields == other.allFields;
 }
 
 bool Step::operator<(const Step& other) const {
@@ -216,17 +218,19 @@ bool Step::operator<(const Step& other) const {
     return kind < other.kind;
   }
 
-  if (kind != StepKind::kField) {
-    if (field != other.field) {
-      return field < other.field;
-    }
+  if (field != other.field) {
+    return field < other.field;
   }
 
-  return id < other.id;
+  if (id != other.id) {
+    return id < other.id;
+  }
+
+  return allFields < other.allFields;
 }
 
 size_t Step::hash() const {
-  return 1 + static_cast<int32_t>(kind) + reinterpret_cast<size_t>(field) + id;
+  return folly::hash::hash_combine(kind, field, id, allFields);
 }
 
 size_t Path::hash() const {
@@ -273,6 +277,54 @@ bool Path::hasPrefix(const Path& prefix) const {
     }
   }
   return true;
+}
+
+bool Path::covers(const Path& other) const {
+  if (steps_.size() > other.steps_.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < steps_.size(); ++i) {
+    const auto& step = steps_[i];
+    const auto& otherStep = other.steps_[i];
+    if (step == otherStep) {
+      continue;
+    }
+    if (!step.allFields) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Path::hasWildcard() const {
+  return std::ranges::any_of(
+      steps_, [](const Step& step) { return step.allFields; });
+}
+
+void Path::dropCoveredByWildcards(BitSet& subfields) {
+  auto ctx = queryCtx();
+  std::vector<PathCP> wildcards;
+  subfields.forEach([&](auto id) {
+    PathCP path = ctx->pathById(id);
+    if (path->hasWildcard()) {
+      wildcards.push_back(path);
+    }
+  });
+  if (wildcards.empty()) {
+    return;
+  }
+
+  const BitSet candidates = subfields;
+  candidates.forEach([&](auto id) {
+    PathCP path = ctx->pathById(id);
+    for (PathCP wildcard : wildcards) {
+      if (wildcard != path && wildcard->covers(*path)) {
+        subfields.erase(id);
+        return;
+      }
+    }
+  });
 }
 
 std::string Path::toString() const {
@@ -357,10 +409,10 @@ void Path::subfieldSkyline(BitSet& subfields) {
       for (int32_t size = i + 1; size < bySize.size(); ++size) {
         ptrdiff_t firstErase = -1;
         auto& paths = bySize[size];
-        auto it = std::ranges::lower_bound(paths, path);
-        if (it != paths.end() && !(*it)->hasPrefix(*path)) {
-          ++it;
-        }
+        auto it = std::ranges::lower_bound(
+            paths, path, [](PathCP left, PathCP right) {
+              return *left < *right;
+            });
         while (it != paths.end() && (*it)->hasPrefix(*path)) {
           if (firstErase < 0) {
             firstErase = it - paths.begin();
