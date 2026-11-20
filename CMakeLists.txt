@@ -194,6 +194,7 @@ endif()
 
 add_subdirectory(velox)
 add_subdirectory(axiom/common)
+add_subdirectory(axiom/application)
 add_subdirectory(axiom/sql/presto)
 add_subdirectory(axiom/logical_plan)
 add_subdirectory(axiom/runner)

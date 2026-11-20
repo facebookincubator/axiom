@@ -29,8 +29,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
+#include "axiom/application/QueryIdGenerator.h"
 #include "axiom/cli/Connectors.h"
-#include "axiom/cli/QueryIdGenerator.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/cli/common/QueryRuntimeStats.h"
 #include "axiom/cli/tests/SqlQueryRunnerTestBase.h"
@@ -1068,7 +1068,8 @@ TEST_F(SqlQueryRunnerTest, generateQueryIdDefault) {
 }
 
 TEST_F(SqlQueryRunnerTest, generateQueryIdCustomGenerator) {
-  auto generator = std::make_shared<cli::QueryIdGenerator>();
+  auto generator =
+      std::make_shared<facebook::axiom::application::QueryIdGenerator>();
   auto runner = makeRunner("test_custom_gen", [generator]() {
     return generator->createNextQueryId();
   });

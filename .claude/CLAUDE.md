@@ -601,6 +601,7 @@ violation is a bug in the code that owns the invariant; fix it there.
 | `axiom/runner/` | Multi-stage Velox execution |
 | `axiom/connectors/` | Velox connector extensions |
 | `axiom/common/` | Shared utilities |
+| `axiom/application/` | Helpers applications use to combine the components |
 | `axiom/cli/` | Command-line SQL interface |
 
 ## Key Documentation

@@ -18,7 +18,7 @@
 #include <mutex>
 #include <string>
 
-namespace axiom::cli {
+namespace facebook::axiom::application {
 
 /// Generates unique query IDs in the format
 /// `YYYYMMdd_HHmmss_NNNNN_suffix`.
@@ -55,4 +55,4 @@ class QueryIdGenerator {
   std::mutex mutex_;
 };
 
-} // namespace axiom::cli
+} // namespace facebook::axiom::application

@@ -37,7 +37,8 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/process/ProcessBase.h"
 
-#include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/application/QueryIdGenerator.h"
+#include "axiom/application/SessionProperties.h"
 #include "axiom/cli/common/ComponentMetrics.h"
 #include "axiom/connectors/ConnectorMetadata.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
@@ -363,7 +364,7 @@ void SqlQueryRunner::initialize(
   if (queryIdGenerator) {
     queryIdGenerator_ = std::move(queryIdGenerator);
   } else {
-    auto generator = std::make_shared<cli::QueryIdGenerator>();
+    auto generator = std::make_shared<application::QueryIdGenerator>();
     queryIdGenerator_ = [generator]() {
       return generator->createNextQueryId();
     };
@@ -458,21 +459,6 @@ void SqlQueryRunner::registerSystemCatalog() {
 }
 
 namespace {
-
-// Returns per-connector property maps for connectors with at least one
-// effective value set.
-connector::ConnectorProperties collectConnectorProperties(
-    const SessionConfig& config,
-    const connector::ConnectorMetadataRegistry::Registry& metadataRegistry) {
-  connector::ConnectorProperties result;
-  for (const auto& id : metadataRegistry.ids()) {
-    connector::Properties properties = config.effectiveValues(id);
-    if (!properties.empty()) {
-      result.emplace(id, std::move(properties));
-    }
-  }
-  return result;
-}
 
 // Fires the start callback if set, swallowing exceptions.
 void onStart(
@@ -1697,35 +1683,20 @@ std::shared_ptr<velox::core::QueryCtx> SqlQueryRunner::newQuery(
   const auto queryId =
       options.queryId.value_or(fmt::format("query_{}", ++queryCounter_));
 
-  // Build Velox QueryConfig from session properties.
-  auto executionProps = sessionConfig_->effectiveValues(kExecutionPrefix);
-  std::unordered_map<std::string, std::string> queryConfig(
-      executionProps.begin(), executionProps.end());
-  // effectiveValues() strips the prefix; re-qualify (e.g. 'foo' ->
-  // 'presto.foo') so PrestoQueryConfig accessors find the value.
-  for (const auto& [name, value] : sessionConfig_->effectiveValues(
-           velox::functions::prestosql::PrestoQueryConfig::kPrefix)) {
-    queryConfig[velox::functions::prestosql::PrestoQueryConfig::qualify(name)] =
-        value;
-  }
+  auto queryConfig = application::SessionProperties::queryConfig(
+      *sessionConfig_, kExecutionPrefix);
   // Per-query value, not a session property.
   queryConfig[velox::core::QueryConfig::kSessionStartTime] = std::to_string(
       options.sessionStartTimeMs.value_or(velox::getCurrentTimeMs()));
 
-  // Build per-connector session properties.
-  std::unordered_map<std::string, std::shared_ptr<velox::config::ConfigBase>>
-      connectorConfigs;
+  std::vector<std::string> connectorIds;
   for (const auto& [connectorId, connector] : connectorRegistry_.snapshot()) {
     if (connector->configProvider()) {
-      auto connectorProps = sessionConfig_->effectiveValues(connectorId);
-      if (!connectorProps.empty()) {
-        connectorConfigs[connectorId] =
-            std::make_shared<velox::config::ConfigBase>(
-                std::unordered_map<std::string, std::string>(
-                    connectorProps.begin(), connectorProps.end()));
-      }
+      connectorIds.push_back(connectorId);
     }
   }
+  auto connectorConfigs = application::SessionProperties::connectorConfigs(
+      *sessionConfig_, connectorIds);
 
   velox::core::QueryConfig config(std::move(queryConfig));
   const auto maxMemory = config.queryMaxMemoryPerNode();
@@ -2253,7 +2224,8 @@ connector::ConnectorContextPtr SqlQueryRunner::makeConnectorContext(
   return std::make_shared<connector::ConnectorContext>(
       std::string(queryId),
       user_,
-      collectConnectorProperties(*sessionConfig_, metadataRegistry_),
+      application::SessionProperties::connectorProperties(
+          *sessionConfig_, metadataRegistry_.ids()),
       options.connectorStatWriterProvider,
       metadataRegistry_);
 }

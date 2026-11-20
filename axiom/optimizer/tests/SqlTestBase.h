@@ -21,6 +21,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <functional>
 #include <optional>
+#include "axiom/common/SessionConfig.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/session/BaseSession.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -64,6 +65,11 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
  public:
   static constexpr const char* kTestConnectorId = "test";
 
+  /// Prefixes of the optimizer, parser and execution session properties.
+  static constexpr std::string_view kOptimizerPrefix = "optimizer";
+  static constexpr std::string_view kParserPrefix = "parser";
+  static constexpr std::string_view kExecutionPrefix = "execution";
+
   /// Registers Presto scalar, aggregate, and window functions.
   static void SetUpTestCase();
 
@@ -80,6 +86,12 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       const std::string& name,
       const std::vector<velox::RowVectorPtr>& data);
 
+  /// Returns the session queries run with by default. Queries can set the
+  /// optimizer, parser, execution and Presto function properties, and those of
+  /// each registered connector that has any. The session runs in Asia/Kolkata
+  /// (UTC+5:30) and parses graph queries.
+  static SessionConfig makeSessionConfig();
+
   /// Builds a LocalRunner for 'logicalPlan' using caller-supplied
   /// infrastructure. Suite-scoped fixtures use this to bind their static
   /// MemoryManager / executor / AsyncDataCache into a runnerFactory for
@@ -90,9 +102,9 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       velox::cache::AsyncDataCache* asyncDataCache,
       const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
       const std::shared_ptr<velox::memory::MemoryPool>& optimizerPool,
-      int32_t numWorkers = 4,
-      int32_t numDrivers = 4,
-      bool syntacticJoinOrder = false);
+      int32_t numWorkers,
+      int32_t numDrivers,
+      const SessionConfig& session);
 
   /// Like makeLocalRunner, but optimizes 'logicalPlan' through the v2
   /// optimizer pipeline (axiom/optimizer) instead of v1.
@@ -104,9 +116,9 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
       velox::cache::AsyncDataCache* asyncDataCache,
       const std::shared_ptr<velox::memory::MemoryPool>& rootPool,
       const std::shared_ptr<velox::memory::MemoryPool>& optimizerPool,
-      int32_t numWorkers = 4,
-      int32_t numDrivers = 4,
-      bool syntacticJoinOrder = false,
+      int32_t numWorkers,
+      int32_t numDrivers,
+      const SessionConfig& session,
       const std::vector<velox::Variant>& placeholderValues = {});
 
   /// Runs SQL through Axiom and DuckDB, asserts unordered results match.
@@ -138,9 +150,8 @@ class SqlTestBase : public velox::exec::test::OperatorTestBase {
   int32_t numWorkers_{4};
   int32_t numDrivers_{4};
 
-  // When true, queries are optimized with cost-based join ordering disabled,
-  // placing tables in the order they appear in the query.
-  bool syntacticJoinOrder_{false};
+  // Session properties queries run with. Set by SetUp.
+  std::optional<SessionConfig> sessionConfig_;
 
   // When true, makeRunner routes queries through the v2 optimizer
   // (axiom/optimizer) instead of v1.

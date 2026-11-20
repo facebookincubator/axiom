@@ -12,17 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(axiom_query_id_generator QueryIdGenerator.cpp)
-
-target_link_libraries(axiom_query_id_generator fmt::fmt)
-
 add_library(axiom_query_runtime_stats common/QueryRuntimeStats.cpp)
 
 target_link_libraries(axiom_query_runtime_stats velox_common_base Folly::folly fmt::fmt)
 
 add_library(
   axiom_cli
-  CatalogProperties.cpp
   Connectors.cpp
   Console.cpp
   LiveProgressDisplay.cpp
@@ -37,7 +32,7 @@ add_library(
 
 target_link_libraries(
   axiom_cli
-  axiom_query_id_generator
+  axiom_application
   axiom_connectors
   velox_connector_registry
   velox_functions_axiom
