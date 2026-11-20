@@ -1353,6 +1353,24 @@ AggregateExprPtr ExprResolver::resolveSpecialFormAgg(
       expr.specialAggregateKind(), std::move(inputs), std::move(fallback));
 }
 
+ExprPtr ExprResolver::coerceToBoolean(
+    const ExprPtr& predicate,
+    std::string_view label) const {
+  if (predicate->type()->isBoolean()) {
+    return predicate;
+  }
+
+  VELOX_USER_CHECK_NOT_NULL(
+      coercer_, "{} must be boolean: {}", label, predicate->type()->toString());
+  VELOX_USER_CHECK(
+      coercer_->coerce(predicate->type(), velox::BOOLEAN()).has_value(),
+      "{} must be coercible to boolean: {}",
+      label,
+      predicate->type()->toString());
+
+  return applyCoercion(predicate, velox::BOOLEAN(), planNodeIdGenerator_);
+}
+
 AggregateExprPtr ExprResolver::resolveAggregateTypes(
     const velox::core::ExprPtr& expr,
     const InputNameResolver& inputNameResolver,
@@ -1372,7 +1390,8 @@ AggregateExprPtr ExprResolver::resolveAggregateTypes(
 
   ExprPtr resolvedFilter;
   if (filter != nullptr) {
-    resolvedFilter = resolveScalarTypes(filter, inputNameResolver);
+    resolvedFilter = coerceToBoolean(
+        resolveScalarTypes(filter, inputNameResolver), "Aggregate filter");
   }
 
   std::vector<SortingField> sortingFields;

@@ -200,6 +200,13 @@ FROM t
 -- sum and count do not depend on input order, so the ORDER BY has no effect.
 SELECT sum(b ORDER BY a), count(c ORDER BY b) FROM t
 ----
+-- A CASE whose only WHEN condition is NULL is NULL, and an aggregate in it
+-- still makes the query an aggregation.
+SELECT CASE WHEN NULL THEN count(*) END FROM t
+----
+-- An aggregate FILTER that is NULL keeps no rows.
+SELECT count(*) FILTER (WHERE NULL), count(*) FILTER (WHERE a > 1) FROM t
+----
 -- A filtered grouping key remains fixed above an aggregation.
 SELECT CASE WHEN a = 1 THEN 10 ELSE 20 END FROM t WHERE a = 1 GROUP BY a
 ----

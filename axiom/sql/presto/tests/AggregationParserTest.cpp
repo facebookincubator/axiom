@@ -244,6 +244,15 @@ TEST_F(AggregationParserTest, aggregateCoercions) {
   auto matcher = matchScan().aggregate().output();
 
   testSelect("SELECT corr(n_nationkey, 1.2) FROM nation", matcher);
+
+  // A NULL filter is coerced to boolean.
+  testSelect("SELECT count(*) FILTER (WHERE NULL) FROM nation", matcher);
+
+  // An aggregate under a CASE whose only condition is NULL still makes the
+  // query an aggregation.
+  testSelect(
+      "SELECT CASE WHEN NULL THEN count(*) END FROM nation",
+      matchScan().aggregate().project().output());
 }
 
 TEST_F(AggregationParserTest, simpleGroupBy) {
