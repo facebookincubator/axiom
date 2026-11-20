@@ -881,11 +881,13 @@ class Enumerator {
   // it by a gather, or by no exchange when the plan is already there. A plan
   // every worker already holds needs no exchange. Null
   // when `cover` has no costable plan, or when its estimated size exceeds the
-  // broadcast limit (it would not fit in each task's memory) — the caller then
-  // relies on the co-partition candidate.
+  // broadcast limit (it would not fit in each task's memory) and
+  // 'enforceSizeLimit' is set — the caller then relies on the co-partition
+  // candidate.
   MemoOpCP replicatedChild(
       RelationSet cover,
-      const Partitioning& probePartitioning) {
+      const Partitioning& probePartitioning,
+      bool enforceSizeLimit) {
     const auto it = memo_.find(cover);
     if (it == memo_.end()) {
       return nullptr;
@@ -894,7 +896,8 @@ class Enumerator {
     if (base == nullptr) {
       return nullptr;
     }
-    if (!CostModel::broadcastSizeIfFits(base, graph_, broadcastSizeLimit_)
+    if (enforceSizeLimit &&
+        !CostModel::broadcastSizeIfFits(base, graph_, broadcastSizeLimit_)
              .has_value()) {
       return nullptr;
     }
@@ -1246,10 +1249,17 @@ class Enumerator {
         right->outputPartitioning().is(PartitionKind::kBroadcast);
     if (leftReplicated || rightReplicated) {
       const auto broadcast = Partitioning::globalBroadcast();
-      MemoOpCP replicatedLeft =
-          leftReplicated ? left : replicatedChild(left->cover(), broadcast);
-      MemoOpCP replicatedRight =
-          rightReplicated ? right : replicatedChild(right->cover(), broadcast);
+      MemoOpCP replicatedLeft = leftReplicated ? left
+                                               : replicatedChild(
+                                                     left->cover(),
+                                                     broadcast,
+                                                     /*enforceSizeLimit=*/true);
+      MemoOpCP replicatedRight = rightReplicated
+          ? right
+          : replicatedChild(
+                right->cover(),
+                broadcast,
+                /*enforceSizeLimit=*/true);
       if (replicatedLeft != nullptr && replicatedRight != nullptr) {
         addDistributedJoinCandidate(
             replicatedLeft,
@@ -1281,93 +1291,41 @@ class Enumerator {
       }
     }
 
-    if (!leftKeys.empty()) {
-      // Partition strategy: co-partition both inputs on the join keys. A join
-      // with a preserved side exposes that side's keys for same-key reuse
-      // above; a full join exposes the canonical coalesce of each key pair. A
-      // null-aware anti/semi join (NOT IN / IN) needs the existence side's null
-      // keys on every probe partition; the existence side is the edge's right
-      // operand, which may be either physical child depending on orientation.
-      const auto& edge = graph_.edges()[edgeIndex];
-      const auto addPartitioned = [&](MemoOpCP leftPart, MemoOpCP rightPart) {
-        if (leftPart == nullptr || rightPart == nullptr) {
-          return;
-        }
-        addDistributedJoinCandidate(
-            leftPart,
-            rightPart,
-            edgeIndex,
-            joinType,
-            combined,
-            reversedAnti,
-            keyEdges,
-            filterEdges,
-            leftKeys,
-            rightKeys);
-      };
-      if (edge.nullAware()) {
-        // Reusing connector bucketing would confine an existence-side null to
-        // one bucket, so probe rows in other buckets would miss it.
-        const bool existenceOnLeft =
-            edge.rightEligibility().isSubset(left->cover());
-        const bool existenceOnRight =
-            edge.rightEligibility().isSubset(right->cover());
-        MemoOpCP leftPart =
-            repartitioned(left->cover(), leftKeys, existenceOnLeft);
-        MemoOpCP rightPart =
-            repartitioned(right->cover(), rightKeys, existenceOnRight);
-        addPartitioned(leftPart, rightPart);
-      } else {
-        const auto leftOffers = partitioningOffers(left, leftKeys);
-        const auto rightOffers = partitioningOffers(right, rightKeys);
-        addCoPartitionedCandidate(
-            left,
-            right,
-            leftKeys,
-            rightKeys,
-            edgeIndex,
-            joinType,
-            combined,
-            reversedAnti,
-            keyEdges,
-            filterEdges,
-            leftOffers.hash,
-            rightOffers.hash);
-        addCoPartitionedCandidate(
-            left,
-            right,
-            leftKeys,
-            rightKeys,
-            edgeIndex,
-            joinType,
-            combined,
-            reversedAnti,
-            keyEdges,
-            filterEdges,
-            leftOffers.connector,
-            rightOffers.connector);
+    const auto& edge = graph_.edges()[edgeIndex];
+    // The column sets only matter for splitting a null-aware join's filter.
+    const bool nullAware = edge.nullAware();
+    const auto partitionKeys = Join::hashPartitionKeys(
+        nullAware,
+        leftKeys,
+        rightKeys,
+        edge.filter(),
+        nullAware ? graph_.coverColumns(left->cover()) : PlanObjectSet{},
+        nullAware ? graph_.coverColumns(right->cover()) : PlanObjectSet{});
 
-        // Under the current cost model, retaining an offer cannot cost more
-        // than shuffling that side, while the other side pays the same shuffle
-        // in either candidate.
-        // TODO: Restore the shuffle-both candidate when costing accounts for
-        // skew from reusing a subset of the join keys.
-        if (leftOffers.empty() && rightOffers.empty()) {
-          MemoOpCP leftPart = repartitioned(left->cover(), leftKeys, false);
-          MemoOpCP rightPart = repartitioned(right->cover(), rightKeys, false);
-          addPartitioned(leftPart, rightPart);
-        }
-      }
+    if (!leftKeys.empty() && partitionKeys.has_value()) {
+      addPartitionedCandidates(
+          left,
+          right,
+          edgeIndex,
+          joinType,
+          combined,
+          reversedAnti,
+          keyEdges,
+          filterEdges,
+          *partitionKeys);
     }
 
     // Replicate the build (right); the probe (left) keeps its partitioning.
     // Only when the join does not preserve the build — replicating a preserved
     // side would emit its rows on every task. A reversed anti join builds on
     // its preserved (left) side, so its build is preserved and cannot be
-    // replicated.
+    // replicated. A join that cannot be partitioned has no partitioned plan,
+    // so its build is replicated whatever its size.
     if (Join::canBroadcastBuild(joinType) && !reversedAnti) {
-      MemoOpCP replicatedBuild =
-          replicatedChild(right->cover(), left->outputPartitioning());
+      MemoOpCP replicatedBuild = replicatedChild(
+          right->cover(),
+          left->outputPartitioning(),
+          /*enforceSizeLimit=*/partitionKeys.has_value());
       if (replicatedBuild != nullptr) {
         addDistributedJoinCandidate(
             left,
@@ -1381,6 +1339,102 @@ class Enumerator {
             leftKeys,
             rightKeys);
       }
+    }
+  }
+
+  // Partition strategy: co-partition both inputs on 'partitionKeys'. A join
+  // with a preserved side exposes that side's keys for same-key reuse above; a
+  // full join exposes the canonical coalesce of each key pair.
+  void addPartitionedCandidates(
+      MemoOpCP left,
+      MemoOpCP right,
+      size_t edgeIndex,
+      velox::core::JoinType joinType,
+      RelationSet combined,
+      bool reversedAnti,
+      const std::vector<size_t>& keyEdges,
+      const std::vector<size_t>& filterEdges,
+      const Join::HashPartitionKeys& partitionKeys) {
+    const ExprVector& leftKeys = partitionKeys.leftKeys;
+    const ExprVector& rightKeys = partitionKeys.rightKeys;
+    const auto addPartitioned = [&](MemoOpCP leftPart, MemoOpCP rightPart) {
+      if (leftPart == nullptr || rightPart == nullptr) {
+        return;
+      }
+      addDistributedJoinCandidate(
+          leftPart,
+          rightPart,
+          edgeIndex,
+          joinType,
+          combined,
+          reversedAnti,
+          keyEdges,
+          filterEdges,
+          leftKeys,
+          rightKeys);
+    };
+
+    const auto& edge = graph_.edges()[edgeIndex];
+    if (edge.nullAware()) {
+      // Shuffles both sides, since an existing partitioning cannot replicate
+      // the existence side's NULL keys. The existence side is the edge's right
+      // operand, which may be either physical child depending on orientation.
+      // TODO: Reuse an existing partitioning on the correlation's columns,
+      // which needs no replication.
+      const bool existenceOnLeft =
+          edge.rightEligibility().isSubset(left->cover());
+      const bool existenceOnRight =
+          edge.rightEligibility().isSubset(right->cover());
+      addPartitioned(
+          repartitioned(
+              left->cover(),
+              leftKeys,
+              partitionKeys.replicateNullsAndAny && existenceOnLeft),
+          repartitioned(
+              right->cover(),
+              rightKeys,
+              partitionKeys.replicateNullsAndAny && existenceOnRight));
+      return;
+    }
+
+    const auto leftOffers = partitioningOffers(left, leftKeys);
+    const auto rightOffers = partitioningOffers(right, rightKeys);
+    addCoPartitionedCandidate(
+        left,
+        right,
+        leftKeys,
+        rightKeys,
+        edgeIndex,
+        joinType,
+        combined,
+        reversedAnti,
+        keyEdges,
+        filterEdges,
+        leftOffers.hash,
+        rightOffers.hash);
+    addCoPartitionedCandidate(
+        left,
+        right,
+        leftKeys,
+        rightKeys,
+        edgeIndex,
+        joinType,
+        combined,
+        reversedAnti,
+        keyEdges,
+        filterEdges,
+        leftOffers.connector,
+        rightOffers.connector);
+
+    // Under the current cost model, retaining an offer cannot cost more than
+    // shuffling that side, while the other side pays the same shuffle in either
+    // candidate.
+    // TODO: Restore the shuffle-both candidate when costing accounts for skew
+    // from reusing a subset of the join keys.
+    if (leftOffers.empty() && rightOffers.empty()) {
+      addPartitioned(
+          repartitioned(left->cover(), leftKeys, false),
+          repartitioned(right->cover(), rightKeys, false));
     }
   }
 

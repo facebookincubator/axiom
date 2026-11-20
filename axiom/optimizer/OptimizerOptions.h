@@ -207,8 +207,9 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// A keyed join's build side is eligible for broadcast only if its estimated
   /// size (rows × row width) is at most this many bytes, so a broadcast copy
   /// fits in each worker's memory. Configured as a capacity string ("100MB",
-  /// "1GB"); "0B" disables broadcast for keyed joins. A keyless join may still
-  /// broadcast because it has no partitioned distributed shape.
+  /// "1GB"); "0B" disables broadcast for keyed joins. A join with no
+  /// partitioned distributed shape may still broadcast: a keyless join, or an
+  /// IN / NOT IN whose correlation has no equality.
   int64_t broadcastSizeLimit{kBroadcastSizeLimitDefaultBytes};
 
   /// Maximum number of connected-subgraph/complement pairs the DPhyp join

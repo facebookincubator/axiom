@@ -25,6 +25,7 @@
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/Builder.h"
 #include "axiom/optimizer/ExprFactory.h"
+#include "axiom/optimizer/JoinCondition.h"
 #include "axiom/optimizer/NodePrinter.h"
 #include "axiom/optimizer/NodeVisitor.h"
 #include "axiom/optimizer/Schema.h"
@@ -3069,6 +3070,44 @@ bool Join::canBroadcastBuild(velox::core::JoinType joinType) {
   return joinType == JoinType::kInner || joinType == JoinType::kLeft ||
       joinType == JoinType::kLeftSemiFilter ||
       joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti;
+}
+
+std::optional<Join::HashPartitionKeys> Join::hashPartitionKeys(
+    bool nullAware,
+    const ExprVector& leftKeys,
+    const ExprVector& rightKeys,
+    const ExprVector& filter,
+    const PlanObjectSet& leftColumns,
+    const PlanObjectSet& rightColumns) {
+  HashPartitionKeys joinKeys{
+      .leftKeys = leftKeys,
+      .rightKeys = rightKeys,
+      .replicateNullsAndAny = nullAware,
+  };
+  if (!nullAware) {
+    return joinKeys;
+  }
+  // A deterministic conjunct that reads no right column accepts every right
+  // row or none.
+  ExprVector rightFilter;
+  for (ExprCP conjunct : filter) {
+    if (conjunct->containsNonDeterministic() ||
+        conjunct->columns().hasIntersection(rightColumns)) {
+      rightFilter.push_back(conjunct);
+    }
+  }
+  if (rightFilter.empty()) {
+    return joinKeys;
+  }
+  JoinCondition::Split split =
+      JoinCondition::splitEquiKeys(rightFilter, leftColumns, rightColumns);
+  if (split.leftKeys.empty()) {
+    return std::nullopt;
+  }
+  return HashPartitionKeys{
+      .leftKeys = std::move(split.leftKeys),
+      .rightKeys = std::move(split.rightKeys),
+  };
 }
 
 bool Join::canBroadcastProbe(velox::core::JoinType joinType) {

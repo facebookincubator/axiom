@@ -172,8 +172,9 @@ std::vector<ConfigProperty> buildProperties(
           "Maximum estimated build size eligible for broadcast in a keyed "
           "join, as a capacity string (e.g. \"100MB\", \"1GB\"). A broadcast "
           "copy must fit in each worker's memory. \"0B\" disables broadcast "
-          "for keyed joins; keyless joins may still broadcast because they "
-          "have no partitioned distributed shape.",
+          "for keyed joins. Joins with no partitioned distributed shape may "
+          "still broadcast: keyless joins, and IN / NOT IN whose correlation "
+          "has no equality.",
       },
       {
           std::string(OptimizerOptions::kDphypEnumerationBudget),

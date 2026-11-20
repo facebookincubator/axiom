@@ -3,6 +3,19 @@
 CREATE TABLE u AS FROM (VALUES (1), (2), (3), (4), (5)) AS _(a)
 ----
 CREATE TABLE v AS FROM (VALUES (2), (4), (6), (8), (10)) AS _(a)
+----
+CREATE TABLE w AS
+SELECT (u1.a - 1) * 5 + u2.a AS a, CAST(NULL AS BIGINT) AS b
+FROM u AS u1, u AS u2
+UNION ALL
+VALUES (26, 182), (27, 5), (28, 5), (NULL, NULL), (NULL, 5)
+----
+CREATE TABLE x AS
+SELECT a AS c, 7 * a AS d
+FROM w
+WHERE a <= 25
+UNION ALL
+VALUES (26, 182), (27, 189), (28, NULL), (NULL, 5)
 -- end_setup
 
 SELECT EXISTS(SELECT 1), EXISTS(SELECT 1), EXISTS(SELECT 3), NOT EXISTS(SELECT 1), NOT EXISTS(SELECT 1 WHERE false)
@@ -268,6 +281,30 @@ FROM (
     (CAST(NULL AS INTEGER), 100),
     (1, 0)
 ) outer_u(a, b)
+----
+-- With joins partitioned across workers, a correlated IN / NOT IN is NULL for
+-- a NULL left side when a subquery row passes the correlation, and for an
+-- unmatched left side when such a row has a NULL key. A NULL outer column
+-- matches no row.
+-- session: optimizer.broadcast_size_limit = 0B
+-- disabled_v1: v1 returns FALSE / TRUE where the result is NULL
+SELECT
+  a,
+  b IN (SELECT d FROM x WHERE x.c = w.a),
+  b NOT IN (SELECT d FROM x WHERE x.c = w.a)
+FROM w
+----
+-- With joins partitioned across workers, a correlated NOT IN drops the rows
+-- whose result is NULL.
+-- session: optimizer.broadcast_size_limit = 0B
+-- disabled_v1: v1 keeps the rows whose result is NULL
+SELECT a FROM w WHERE b NOT IN (SELECT d FROM x WHERE x.c = w.a)
+----
+-- With joins partitioned across workers, a correlated IN without an equality
+-- correlation is NULL for a NULL left side when a subquery row passes the
+-- correlation.
+-- session: optimizer.broadcast_size_limit = 0B
+SELECT a, b IN (SELECT d FROM x WHERE x.c > w.a) FROM w
 ----
 -- A scalar subquery over more than one row fails, whether or not a projection
 -- sits over the rows.
