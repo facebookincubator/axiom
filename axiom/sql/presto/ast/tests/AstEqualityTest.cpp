@@ -1156,14 +1156,14 @@ TEST(AstEqualityTest, queryNotEqualLimit) {
       makeQuerySpec(emptySelect()),
       nullptr,
       nullptr,
-      std::string{"10"});
+      int64_t{10});
   auto b = std::make_shared<Query>(
       loc(),
       nullptr,
       makeQuerySpec(emptySelect()),
       nullptr,
       nullptr,
-      std::string{"20"});
+      int64_t{20});
   EXPECT_FALSE(*a == *b);
 }
 
@@ -1798,15 +1798,15 @@ TEST(AstEqualityTest, orderByNotEqual) {
 }
 
 TEST(AstEqualityTest, offsetEquals) {
-  auto a = std::make_shared<Offset>(loc(0, 0), "10");
-  auto b = std::make_shared<Offset>(loc(5, 5), "10");
+  auto a = std::make_shared<Offset>(loc(0, 0), 10);
+  auto b = std::make_shared<Offset>(loc(5, 5), 10);
   EXPECT_TRUE(*a == *b);
   EXPECT_EQ(a->hash(), b->hash());
 }
 
 TEST(AstEqualityTest, offsetNotEqual) {
-  auto a = std::make_shared<Offset>(loc(), "10");
-  auto b = std::make_shared<Offset>(loc(), "20");
+  auto a = std::make_shared<Offset>(loc(), 10);
+  auto b = std::make_shared<Offset>(loc(), 20);
   EXPECT_FALSE(*a == *b);
 }
 

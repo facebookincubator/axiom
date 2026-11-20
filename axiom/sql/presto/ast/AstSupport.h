@@ -471,16 +471,16 @@ using OrderByPtr = std::shared_ptr<OrderBy>;
 
 class Offset : public Node {
  public:
-  explicit Offset(NodeLocation location, const std::string& offset)
+  explicit Offset(NodeLocation location, int64_t offset)
       : Node(NodeType::kOffset, location), offset_(offset) {}
 
-  const std::string& offset() const {
+  int64_t offset() const {
     return offset_;
   }
   void accept(AstVisitor* visitor) override;
 
   size_t hash() const override {
-    return std::hash<std::string>{}(offset_);
+    return std::hash<int64_t>{}(offset_);
   }
 
  protected:
@@ -489,7 +489,7 @@ class Offset : public Node {
   }
 
  private:
-  std::string offset_;
+  int64_t offset_;
 };
 
 using OffsetPtr = std::shared_ptr<Offset>;
