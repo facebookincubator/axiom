@@ -330,6 +330,18 @@ TEST_F(EstimateProviderTest, projection) {
         EXPECT_EQ(c.cardinality, 2);
       });
 
+  // A predicate is true in as many rows as a filter on it keeps: 'a = 5' in 1
+  // of every 1'000, and it is never null, as 'a' is not.
+  verifyEstimate(
+      "SELECT a = 5 AS p FROM t",
+      10'000,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& p = column(root, estimate, "p");
+        ASSERT_TRUE(p.trueFraction.has_value());
+        EXPECT_FLOAT_EQ(p.trueFraction.value(), 0.001f);
+        EXPECT_EQ(p.nullFraction, 0);
+      });
+
   // A lambda's inputs are the columns it reads from outside: 'a', 1'000
   // values.
   verifyEstimate(

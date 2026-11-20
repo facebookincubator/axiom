@@ -702,16 +702,25 @@ Estimate EstimateProvider::compute(NodeCP node) {
     }
 
     case NodeType::kProject: {
-      // Each output takes the estimate of its expression over the input's.
+      // Each output takes the estimate of its expression over the input's. A
+      // predicate is true in as many rows as a filter on it would keep.
       const auto* project = node->as<Project>();
       const auto& input = estimate(node->inputs()[0]);
       Estimate result = input;
       ConstraintMap expressions = input.constraints;
       ExprEstimator estimator{expressions};
       for (size_t i = 0; i < project->exprs().size(); ++i) {
+        ExprCP expr = project->exprs()[i];
+        Value output = estimator.estimate(expr);
+        if (output.type->isBoolean() && expr->is(PlanType::kCallExpr)) {
+          if (const auto selectivity =
+                  exprSelectivity(expressions, expr, false)) {
+            output.trueFraction = selectivity->trueFraction;
+            output.nullFraction = selectivity->nullFraction;
+          }
+        }
         result.constraints.insert_or_assign(
-            project->outputColumns()[i]->id(),
-            estimator.estimate(project->exprs()[i]));
+            project->outputColumns()[i]->id(), std::move(output));
       }
       return result;
     }
