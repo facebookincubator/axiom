@@ -371,6 +371,7 @@ class InformationSchemaTableLayout : public TableLayout {
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
+      int32_t tableReferenceId,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
@@ -415,6 +416,7 @@ class InformationSchemaTable : public Table {
 velox::connector::ConnectorTableHandlePtr
 InformationSchemaTableLayout::createTableHandle(
     const ConnectorSessionPtr& session,
+    int32_t /*tableReferenceId*/,
     std::vector<velox::connector::ColumnHandlePtr> /*columnHandles*/,
     velox::core::ExpressionEvaluator& evaluator,
     std::vector<velox::core::TypedExprPtr> filters,

@@ -107,6 +107,37 @@ TEST_P(TestConnectorQueryTest, selectFiltered) {
   }
 }
 
+// The two sides of a self-join are separate table references, so their scans
+// carry different IDs.
+TEST_P(TestConnectorQueryTest, tableReferenceId) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+
+  auto logicalPlan =
+      parseSelect("SELECT count(*) FROM t x JOIN t y ON x.a = y.b");
+
+  std::vector<int32_t> ids;
+  const auto captureId = [&ids](const core::PlanNodePtr& node) {
+    ids.push_back(node->as<core::TableScanNode>()
+                      ->tableHandle()
+                      ->asChecked<connector::TestTableHandle>()
+                      ->tableReferenceId());
+  };
+  const auto table = SchemaTableName{"default", "t"}.toString();
+  const auto matcher =
+      core::PlanMatcherBuilder()
+          .tableScan(table, captureId)
+          .hashJoinInner(core::PlanMatcherBuilder().tableScan(table, captureId))
+          .singleAggregation({}, {"count(*)"})
+          .build();
+  AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
+  ASSERT_EQ(ids.size(), 2);
+  EXPECT_NE(ids[0], ids[1]);
+}
+
 TEST_P(TestConnectorQueryTest, writeFiltered) {
   auto vector = makeRowVector(
       {"b", "c"},

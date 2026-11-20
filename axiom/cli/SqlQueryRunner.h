@@ -626,6 +626,13 @@ class SqlQueryRunner {
       std::string_view queryId,
       const RunOptions& options) const;
 
+  // Builds the context for 'queryId' as makeConnectorContext() does, and
+  // records the statement's 'queryKind' and the 'options' token provider on it.
+  facebook::axiom::connector::ConnectorContextPtr makeStatementContext(
+      std::string_view queryId,
+      const RunOptions& options,
+      facebook::axiom::connector::QueryKind queryKind) const;
+
   // Builds an OptimizerSession from the current session config's optimizer
   // properties, attaching 'context', the explain flag, the
   // optimizer's stat writer, and the connector stat-writer provider.

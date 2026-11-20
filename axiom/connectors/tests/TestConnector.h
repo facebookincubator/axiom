@@ -197,6 +197,7 @@ class TestTableLayout : public TableLayout {
 
   velox::connector::ConnectorTableHandlePtr createTableHandle(
       const ConnectorSessionPtr& session,
+      int32_t tableReferenceId,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       velox::core::ExpressionEvaluator& evaluator,
       std::vector<velox::core::TypedExprPtr> filters,
@@ -568,10 +569,12 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
  public:
   TestTableHandle(
       const std::string& connectorId,
+      int32_t tableReferenceId,
       const SchemaTableName& name,
       int64_t size,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles)
       : ConnectorTableHandle(connectorId),
+        tableReferenceId_(tableReferenceId),
         name_(name),
         size_(size),
         columnHandles_(std::move(columnHandles)),
@@ -579,10 +582,12 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
 
   TestTableHandle(
       const TableLayout& layout,
+      int32_t tableReferenceId,
       std::vector<velox::connector::ColumnHandlePtr> columnHandles,
       bool lookup = false)
       : TestTableHandle(
             layout.connector()->connectorId(),
+            tableReferenceId,
             layout.table().name(),
             getTableSize(layout),
             std::move(columnHandles)) {
@@ -596,6 +601,11 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
   static int64_t getTableSize(const TableLayout& layout) {
     auto& table = dynamic_cast<const TestTable&>(layout.table());
     return table.data().size();
+  }
+
+  /// Returns the table reference ID the handle was created for.
+  int32_t tableReferenceId() const {
+    return tableReferenceId_;
   }
 
   const SchemaTableName& schemaTableName() const {
@@ -625,6 +635,7 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = TestTableHandle::getClassName();
     obj["connectorId"] = connectorId();
+    obj["tableReferenceId"] = tableReferenceId_;
     obj["schemaName"] = name_.schema;
     obj["tableName"] = name_.table;
     obj["size"] = size_;
@@ -653,6 +664,7 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
     }
     return std::make_shared<TestTableHandle>(
         connectorId,
+        static_cast<int32_t>(obj["tableReferenceId"].asInt()),
         SchemaTableName(schema, tableName),
         size,
         std::move(columnHandles));
@@ -665,6 +677,7 @@ class TestTableHandle : public velox::connector::ConnectorTableHandle {
   VELOX_DEFINE_CLASS_NAME(TestTableHandle)
 
  private:
+  const int32_t tableReferenceId_;
   const SchemaTableName name_;
   const int64_t size_;
   const std::vector<velox::connector::ColumnHandlePtr> columnHandles_;
