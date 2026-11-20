@@ -60,6 +60,11 @@ SqlStatementPtr PrestoParserTestBase::parseSql(std::string_view sql) {
   return parser.parse(sql, true);
 }
 
+SqlStatementPtr PrestoParserTestBase::parseStrictSql(std::string_view sql) {
+  SCOPED_TRACE(sql);
+  return makeStrictParser().parse(sql, true);
+}
+
 lp::LogicalPlanNodePtr PrestoParserTestBase::parseSelect(std::string_view sql) {
   auto statement = parseSql(sql);
   VELOX_CHECK(statement->isSelect(), "Expected SELECT statement");

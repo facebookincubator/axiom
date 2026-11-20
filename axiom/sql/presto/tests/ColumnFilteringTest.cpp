@@ -194,12 +194,12 @@ TEST_F(ColumnFilteringTest, selectStarModifiersErrors) {
 TEST_F(ColumnFilteringTest, friendlySqlDisabled) {
   // EXCLUDE requires friendlySql.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse("SELECT * EXCLUDE (n_name) FROM nation"),
+      parseStrictSql("SELECT * EXCLUDE (n_name) FROM nation"),
       "EXCLUDE and REPLACE modifiers require Friendly SQL mode");
 
   // COLUMNS requires friendlySql.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse("SELECT COLUMNS('.*') FROM nation"),
+      parseStrictSql("SELECT COLUMNS('.*') FROM nation"),
       "COLUMNS() requires Friendly SQL mode");
 }
 
