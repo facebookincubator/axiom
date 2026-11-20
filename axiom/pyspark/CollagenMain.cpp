@@ -99,7 +99,8 @@ void CollagenMain::init() {
 }
 
 void CollagenMain::run() {
-  CollagenSignalHandler handler(folly::getEventBase(), server_.get());
+  auto eventBaseKeepAlive = folly::getEventBaseKeepAlive();
+  CollagenSignalHandler handler(eventBaseKeepAlive.get(), server_.get());
   server_->Wait();
 }
 
