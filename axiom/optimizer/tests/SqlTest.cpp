@@ -26,6 +26,7 @@
 #include "axiom/connectors/system/SystemConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnectorContext.h"
 #include "axiom/optimizer/ConstantExprEvaluator.h"
+#include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/tests/SqlFile.h"
 #include "axiom/optimizer/tests/SqlTestBase.h"
 #include "axiom/optimizer/tests/TestDataPath.h"
@@ -217,8 +218,7 @@ template <FileName Name, bool UseV2>
 class SqlTest : public SqlTestBase {
  public:
   SqlTest(QueryEntry entry, bool syntacticJoinOrder, bool singleNode)
-      : entry_(std::move(entry)) {
-    this->syntacticJoinOrder_ = syntacticJoinOrder;
+      : entry_(std::move(entry)), syntacticJoinOrder_{syntacticJoinOrder} {
     this->useV2_ = UseV2;
     if (singleNode) {
       this->numWorkers_ = 1;
@@ -255,7 +255,7 @@ class SqlTest : public SqlTestBase {
                 suiteOptimizerPool_,
                 /*numWorkers=*/1,
                 /*numDrivers=*/1,
-                /*syntacticJoinOrder=*/false);
+                makeSessionConfig());
           }
           return makeLocalRunnerV2(
               plan,
@@ -265,7 +265,7 @@ class SqlTest : public SqlTestBase {
               suiteOptimizerPool_,
               /*numWorkers=*/1,
               /*numDrivers=*/1,
-              /*syntacticJoinOrder=*/false,
+              makeSessionConfig(),
               placeholderValues);
         };
 
@@ -418,6 +418,10 @@ class SqlTest : public SqlTestBase {
 
   void SetUp() override {
     SqlTestBase::SetUp();
+    sessionConfig_->set(
+        kOptimizerPrefix,
+        OptimizerOptions::kSyntacticJoinOrder,
+        syntacticJoinOrder_ ? "true" : "false");
     // connector_ is suite-scoped (null in the hive suite, where queries resolve
     // via the connector registry).
     connector_ = suiteConnector_;
@@ -470,6 +474,8 @@ class SqlTest : public SqlTestBase {
   static connector::hive::LocalHiveConnectorMetadata* suiteHiveMetadata_;
 
   QueryEntry entry_;
+  // Whether the query runs with syntactic join order.
+  const bool syntacticJoinOrder_;
 };
 
 template <FileName Name, bool UseV2>

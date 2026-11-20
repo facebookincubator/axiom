@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/application/QueryIdGenerator.h"
 #include <gtest/gtest.h>
 #include <re2/re2.h>
 
-namespace axiom::cli {
+namespace facebook::axiom::application {
 namespace {
 
 // YYYYMMdd_HHmmss_NNNNN_suffix (27 chars).
@@ -43,4 +43,4 @@ TEST(QueryIdGeneratorTest, counterIncrements) {
 }
 
 } // namespace
-} // namespace axiom::cli
+} // namespace facebook::axiom::application

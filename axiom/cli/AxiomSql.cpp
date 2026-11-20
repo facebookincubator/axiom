@@ -23,7 +23,7 @@
 #include <filesystem>
 #include <iostream>
 #include <set>
-#include "axiom/cli/CatalogProperties.h"
+#include "axiom/application/CatalogProperties.h"
 #include "axiom/cli/Connectors.h"
 #include "axiom/cli/Console.h"
 #include "axiom/cli/SystemUser.h"
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     }
 
     for (auto& catalogProperties :
-         axiom::sql::loadCatalogProperties(FLAGS_etc_dir)) {
+         facebook::axiom::application::loadCatalogProperties(FLAGS_etc_dir)) {
       // Expose the catalog directory so connectors can resolve relative file
       // paths in their properties (e.g. the test connector's `tables`).
       catalogProperties.connectorConfig.insert_or_assign(

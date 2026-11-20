@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "axiom/cli/QueryIdGenerator.h"
+#include "axiom/application/QueryIdGenerator.h"
 #include <fmt/format.h>
 #include <chrono>
 #include <random>
 #include <thread>
 
-namespace axiom::cli {
+namespace facebook::axiom::application {
 
 // Base-32 alphabet: a-z, 2-9, excluding l, o, 0, 1.
 constexpr char kBase32[] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
@@ -86,4 +86,4 @@ std::string QueryIdGenerator::createNextQueryId() {
   return fmt::format("{}_{:05d}_{}", lastTimestamp_, counter_++, suffix_);
 }
 
-} // namespace axiom::cli
+} // namespace facebook::axiom::application

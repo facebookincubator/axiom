@@ -21,7 +21,7 @@
 
 #include <folly/container/F14Map.h>
 
-namespace axiom::sql {
+namespace facebook::axiom::application {
 
 /// Describes one connector catalog properties file.
 struct CatalogProperties {
@@ -38,4 +38,4 @@ struct CatalogProperties {
 /// Loads connector catalogs from `${etcDir}/*.properties`.
 std::vector<CatalogProperties> loadCatalogProperties(std::string_view etcDir);
 
-} // namespace axiom::sql
+} // namespace facebook::axiom::application

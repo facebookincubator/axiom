@@ -227,6 +227,7 @@ add_library(axiom_optimizer_tests_sql_test_base SqlTestBase.cpp)
 
 target_link_libraries(
   axiom_optimizer_tests_sql_test_base
+  axiom_application
   axiom_common
   axiom_optimizer_core
   axiom_optimizer_v1
@@ -240,6 +241,8 @@ target_link_libraries(
   velox_expression
   velox_functions_axiom
   velox_functions_prestosql
+  velox_presto_query_config
+  velox_query_config_provider
   velox_aggregates
   velox_window
 )
