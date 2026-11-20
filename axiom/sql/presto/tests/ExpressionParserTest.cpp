@@ -654,19 +654,25 @@ TEST_F(ExpressionParserTest, unaryArithmetic) {
 }
 
 TEST_F(ExpressionParserTest, integerLiteralBoundaries) {
-  auto expectInt64 = [&](std::string_view sql, int64_t expected) {
+  auto expectLiteral = [&](std::string_view sql, const Variant& expected) {
     SCOPED_TRACE(sql);
     auto expr = parseExpr(sql);
     ASSERT_TRUE(expr->isConstant());
-    VELOX_EXPECT_EQ_TYPES(expr->type(), BIGINT());
-    auto value = expr->as<lp::ConstantExpr>()->value();
-    ASSERT_FALSE(value->isNull());
-    EXPECT_EQ(value->value<int64_t>(), expected);
+    VELOX_EXPECT_EQ_TYPES(expr->type(), expected.inferType());
+    EXPECT_EQ(*expr->as<lp::ConstantExpr>()->value(), expected);
   };
 
-  expectInt64("9223372036854775807", std::numeric_limits<int64_t>::max());
-  expectInt64("-9223372036854775808", std::numeric_limits<int64_t>::min());
-  expectInt64("-9223372036854775807", std::numeric_limits<int64_t>::min() + 1);
+  // A literal is INTEGER when its signed value fits in INTEGER. Presto types
+  // -2147483648 as BIGINT.
+  expectLiteral("2147483647", std::numeric_limits<int32_t>::max());
+  expectLiteral("-2147483648", std::numeric_limits<int32_t>::min());
+  expectLiteral("2147483648", int64_t{2'147'483'648});
+  expectLiteral("-2147483649", int64_t{-2'147'483'649});
+
+  expectLiteral("9223372036854775807", std::numeric_limits<int64_t>::max());
+  expectLiteral("-9223372036854775808", std::numeric_limits<int64_t>::min());
+  expectLiteral(
+      "-9223372036854775807", std::numeric_limits<int64_t>::min() + 1);
 
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("9223372036854775808"), "out of range");

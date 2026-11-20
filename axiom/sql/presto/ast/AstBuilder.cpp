@@ -2867,6 +2867,9 @@ ArithmeticUnaryExpression::Sign toArithmeticSign(size_t tokenType) {
   }
 }
 
+// A folded literal is typed by its signed value, so -2147483648 is INTEGER.
+// Presto types it BIGINT because it negates 2147483648; Axiom intentionally
+// differs.
 std::shared_ptr<LongLiteral> tryFoldNegatedIntegerLiteral(
     PrestoSqlParser::ArithmeticUnaryContext* ctx,
     ArithmeticUnaryExpression::Sign sign,
