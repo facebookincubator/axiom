@@ -3153,16 +3153,15 @@ TEST_P(SubqueryTest, inSubqueryWithCorrelatedNotExists) {
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
-// Verifies that the distributed plan for IN / NOT IN subqueries sets
-// replicateNullsAndAny on the PartitionedOutput feeding the null-aware join.
-// Without this flag, NULL rows on the right side are hash-partitioned to only
-// one worker, producing wrong results:
-//   NOT IN: workers missing the NULL incorrectly return rows.
-//   IN: workers missing the NULL produce false instead of NULL for the mark.
-TEST_P(SubqueryTest, inReplicateNullsAndAny) {
-  // replicateNullsAndAny only appears on a hash-partitioned build. Cap the
-  // broadcast size limit low so the build is hash partitioned regardless of its
-  // size.
+// A distributed IN / NOT IN brings to each probe row every build row its
+// three-valued result depends on. Without a correlation, or with one that
+// reads only the probe row, both sides are partitioned on the IN key and the
+// build's NULL keys and one arbitrary row reach every worker. Otherwise both
+// sides are partitioned on the correlation's equalities, or the build is
+// broadcast when it has none.
+TEST_P(SubqueryTest, nullAwareDistribution) {
+  // Cap the broadcast size limit low so a build is broadcast only when no
+  // partitioning is correct.
   optimizerOptions_.broadcastSizeLimit = 1024;
 
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
@@ -3176,64 +3175,185 @@ TEST_P(SubqueryTest, inReplicateNullsAndAny) {
           {{"c", {.numDistinct = 1'000'000}},
            {"d", {.numDistinct = 1'000'000}}});
 
-  // NOT IN: the build side (u) must use replicateNullsAndAny=true.
-  {
-    auto query = "SELECT * FROM t WHERE a NOT IN (SELECT c FROM u)";
-    SCOPED_TRACE(query);
+  // How a case distributes the join's inputs.
+  struct Distribution {
+    // Partition keys of t and u, or none when u is broadcast.
+    std::vector<std::string> tKeys;
+    std::vector<std::string> uKeys;
+    // Which side replicates its NULL keys and one arbitrary row.
+    bool tReplicatesNulls{false};
+    bool uReplicatesNulls{false};
+    // Projection of t that computes an expression partition key, and the join
+    // filter, which reads the key.
+    std::vector<std::string> tProjection;
+    std::optional<std::string> filter;
+  };
 
-    auto matcher =
-        matchScan("t")
-            .shuffle({"a"})
-            .hashJoin(
-                matchScan("u").shuffle({"c"}, /*replicateNullsAndAny=*/true),
-                velox::core::JoinType::kAnti,
-                {.nullAware = true})
-            .gather()
-            .build();
+  struct Case {
+    std::string query;
+    velox::core::JoinType joinType;
+    velox::core::HashJoinDetails join;
+    Distribution distribution;
+    // Output columns of a projected IN; empty for IN / NOT IN in WHERE.
+    std::vector<std::string> projection;
+    // Whether the case runs under syntactic join order too.
+    bool correlated{false};
+  };
 
-    auto distributedPlan = planVelox(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
-  }
+  const auto matcher = [&](const Case& testCase, bool distributed) {
+    const auto& distribution = testCase.distribution;
+    const bool broadcast = distribution.uKeys.empty();
+    auto build = matchScan("u");
+    build
+        .shuffleIf(
+            distributed && !broadcast,
+            distribution.uKeys,
+            distribution.uReplicatesNulls)
+        .broadcastIf(distributed && broadcast);
+    auto join = testCase.join;
+    auto builder = matchScan("t");
+    if (distributed && !distribution.tProjection.empty()) {
+      builder.project(distribution.tProjection);
+      join.filter = distribution.filter;
+    }
+    builder
+        .shuffleIf(
+            distributed && !broadcast,
+            distribution.tKeys,
+            distribution.tReplicatesNulls)
+        .hashJoin(std::move(build), testCase.joinType, join);
+    if (!testCase.projection.empty()) {
+      builder.aliases({std::nullopt, "m"}).project(testCase.projection);
+    }
+    return builder.gatherIf(distributed).build();
+  };
 
-  // IN in projection: stays as kLeftSemiProject with null-aware. The build
-  // side needs replicateNullsAndAny so all workers can produce NULL (not
-  // false) when the build side contains a NULL.
-  {
-    auto query = "SELECT a, a IN (SELECT c FROM u) AS flag FROM t";
-    SCOPED_TRACE(query);
+  const Distribution onInKey{
+      .tKeys = {"a"}, .uKeys = {"c"}, .uReplicatesNulls = true};
+  const Distribution onCorrelation{.tKeys = {"a"}, .uKeys = {"c"}};
+  const Distribution broadcastU;
 
-    auto matcher =
-        matchScan("t")
-            .shuffle({"a"})
-            .hashJoin(
-                matchScan("u").shuffle({"c"}, /*replicateNullsAndAny=*/true),
-                velox::core::JoinType::kLeftSemiProject,
-                {.nullAware = true})
-            .project()
-            .gather()
-            .build();
+  const std::vector<Case> cases = {
+      // Without a correlation, both sides are partitioned on the IN key.
+      {
+          .query = "SELECT * FROM t WHERE a NOT IN (SELECT c FROM u)",
+          .joinType = velox::core::JoinType::kAnti,
+          .join = {.nullAware = true, .keys = {{"a = c"}}},
+          .distribution = onInKey,
+      },
+      {
+          .query = "SELECT a, a IN (SELECT c FROM u) AS flag FROM t",
+          .joinType = velox::core::JoinType::kLeftSemiProject,
+          .join = {.nullAware = true, .keys = {{"a = c"}}},
+          .distribution = onInKey,
+          .projection = {"a", "m"},
+      },
+      // u probes and t builds, so t replicates its NULL keys.
+      {
+          .query = "SELECT c, c IN (SELECT a FROM t) AS flag FROM u",
+          .joinType = velox::core::JoinType::kRightSemiProject,
+          .join = {.nullAware = true, .keys = {{"a = c"}}},
+          .distribution =
+              {.tKeys = {"a"}, .uKeys = {"c"}, .tReplicatesNulls = true},
+          .projection = {"c", "m"},
+      },
+      // A NULL left side gives NULL when any build row passes the correlation
+      // filter, so each probe row must see every build row that can pass it.
+      // An equality correlation partitions both sides on the correlated
+      // columns.
+      {
+          .query =
+              "SELECT * FROM t WHERE b NOT IN (SELECT d FROM u WHERE u.c = t.a)",
+          .joinType = velox::core::JoinType::kAnti,
+          .join = {.nullAware = true, .keys = {{"b = d"}}, .filter = "a = c"},
+          .distribution = onCorrelation,
+          .correlated = true,
+      },
+      {
+          .query =
+              "SELECT a, b IN (SELECT d FROM u WHERE u.c = t.a) AS flag FROM t",
+          .joinType = velox::core::JoinType::kLeftSemiProject,
+          .join = {.nullAware = true, .keys = {{"b = d"}}, .filter = "a = c"},
+          .distribution = onCorrelation,
+          .projection = {"a", "m"},
+          .correlated = true,
+      },
+      {
+          .query =
+              "SELECT a, b IN (SELECT d FROM u WHERE u.c = t.a + 1) AS flag "
+              "FROM t",
+          .joinType = velox::core::JoinType::kLeftSemiProject,
+          .join =
+              {.nullAware = true, .keys = {{"b = d"}}, .filter = "c = a + 1"},
+          .distribution =
+              {.tKeys = {"p"},
+               .uKeys = {"c"},
+               .tProjection = {"a", "b", "a + 1 AS p"},
+               .filter = "c = p"},
+          .projection = {"a", "m"},
+          .correlated = true,
+      },
+      // A deterministic filter that reads only the probe row accepts every
+      // build row or none, so partitioning on the IN key stays correct.
+      {
+          .query =
+              "SELECT a, b IN (SELECT d FROM u WHERE t.a > 0) AS flag FROM t",
+          .joinType = velox::core::JoinType::kLeftSemiProject,
+          .join = {.nullAware = true, .keys = {{"b = d"}}, .filter = "a > 0"},
+          .distribution =
+              {.tKeys = {"b"}, .uKeys = {"d"}, .uReplicatesNulls = true},
+          .projection = {"a", "m"},
+          .correlated = true,
+      },
+      // A nondeterministic filter is evaluated per row pair, and without an
+      // equality correlation no partitioning keeps the rows it accepts
+      // together, so the build is broadcast whatever its size.
+      {
+          .query =
+              "SELECT a, b IN (SELECT d FROM u WHERE t.a > rand()) AS flag "
+              "FROM t",
+          .joinType = velox::core::JoinType::kLeftSemiProject,
+          .join =
+              {.nullAware = true,
+               .keys = {{"b = d"}},
+               .filter = "cast(a as double) > rand()"},
+          .distribution = broadcastU,
+          .projection = {"a", "m"},
+          .correlated = true,
+      },
+      {
+          .query =
+              "SELECT * FROM t WHERE b NOT IN (SELECT d FROM u WHERE u.c > t.a)",
+          .joinType = velox::core::JoinType::kAnti,
+          .join = {.nullAware = true, .keys = {{"b = d"}}, .filter = "a < c"},
+          .distribution = broadcastU,
+          .correlated = true,
+      },
+  };
 
-    auto distributedPlan = planVelox(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
-  }
+  for (const auto& testCase : cases) {
+    for (const bool syntacticJoinOrder : {false, true}) {
+      if (syntacticJoinOrder && !testCase.correlated) {
+        continue;
+      }
+      SCOPED_TRACE(
+          fmt::format(
+              "{} (syntacticJoinOrder: {})",
+              testCase.query,
+              syntacticJoinOrder));
+      optimizerOptions_.syntacticJoinOrder = syntacticJoinOrder;
+      auto logicalPlan = parseSelect(testCase.query, kTestConnectorId);
 
-  // IN in projection with reversed table sizes — exercises joinByHashRight.
-  {
-    auto query = "SELECT c, c IN (SELECT a FROM t) AS flag FROM u";
-    SCOPED_TRACE(query);
-
-    auto matcher = matchScan("t")
-                       .shuffle({"a"}, /*replicateNullsAndAny=*/true)
-                       .hashJoin(
-                           matchScan("u").shuffle({"c"}),
-                           velox::core::JoinType::kRightSemiProject,
-                           {.nullAware = true})
-                       .project()
-                       .gather()
-                       .build();
-
-    auto distributedPlan = planVelox(parseSelect(query, kTestConnectorId));
-    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+      AXIOM_ASSERT_PLAN_V2(
+          toSingleNodePlan(logicalPlan), matcher(testCase, false));
+      if (testCase.correlated) {
+        AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+            planVelox(logicalPlan).plan, matcher(testCase, true));
+      } else {
+        AXIOM_ASSERT_DISTRIBUTED_PLAN(
+            planVelox(logicalPlan).plan, matcher(testCase, true));
+      }
+    }
   }
 }
 

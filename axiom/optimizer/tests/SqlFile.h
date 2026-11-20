@@ -63,6 +63,9 @@ struct QueryEntry {
   /// fails with a message states it as `-- error_v1:` and keeps running.
   /// Empty when the query runs under both.
   std::optional<std::string> disabledV1Reason;
+  /// Session properties the query runs with, set by `-- session: <name> =
+  /// <value>` lines and keyed by the qualified property name.
+  std::map<std::string, std::string> sessionProperties;
   int32_t lineNumber{0};
 
   /// True if at least one optimizer both runs the query and is expected to
@@ -146,6 +149,9 @@ struct SqlFile {
   ///   -- disabled        -> skip this query
   ///   -- disabled_v1: reason -> run under v2 only; the reason states what v1
   ///                             does with the query
+  ///   -- session: name = value -> run the query with session property
+  ///                               'name' set to 'value', as SET SESSION
+  ///                               does; may appear once per property
   /// `-- disabled_v1:` requires a non-empty reason and cannot be combined with
   /// `-- disabled` or with `-- error:`/`-- error_v1:`.
   /// Every directive that takes a value requires one, and accepts it with or

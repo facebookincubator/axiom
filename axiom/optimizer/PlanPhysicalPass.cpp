@@ -1930,6 +1930,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     placeJoinInputs(
         join.joinType,
         join.nullAware,
+        join.filter,
         join.left,
         join.right,
         join.leftKeys,
@@ -1939,10 +1940,12 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Adds the exchanges that bring the rows a join of 'joinType' matches to the
   // same worker: the inputs of a join and of a vector search, whose output
-  // rows are each tied to one row of each input.
+  // rows are each tied to one row of each input. Rewrites 'filter' to read the
+  // partition keys it computes.
   void placeJoinInputs(
       velox::core::JoinType joinType,
       bool nullAware,
+      ExprVector& filter,
       NodeCP& left,
       NodeCP& right,
       ExprVector& leftKeys,
@@ -1955,17 +1958,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return;
     }
     if (leftKeys.empty()) {
-      if (Join::canBroadcastBuild(joinType)) {
-        right = replicate(right, left);
-      } else {
-        left = ensureGathered(left);
-        right = ensureGathered(right);
-      }
+      placeUnpartitionedInputs(joinType, left, right);
       return;
     }
     // An already partitioned side can co-locate the join without a full
-    // shuffle. Not for null-aware anti/semi: an existence side confines a
-    // null key to one partition, so it must shuffle-replicate.
+    // shuffle. A null-aware anti/semi join shuffles both sides: it partitions
+    // on its keys with the existence side's NULL keys replicated, or on its
+    // correlation's columns.
+    // TODO: Reuse an existing partitioning on the correlation's columns.
     if (!nullAware &&
         coPartitionJoinSides(
             left,
@@ -1979,15 +1979,57 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         left, leftKeys, builder(), simplifier_);
     std::tie(right, rightKeys) = PrecomputeProjections::materializeKeys(
         right, rightKeys, builder(), simplifier_);
+    const auto partitionKeys = Join::hashPartitionKeys(
+        nullAware,
+        leftKeys,
+        rightKeys,
+        filter,
+        PlanObjectSet::fromObjects(left->outputColumns()),
+        PlanObjectSet::fromObjects(right->outputColumns()));
+    if (!partitionKeys.has_value()) {
+      placeUnpartitionedInputs(joinType, left, right);
+      return;
+    }
     const bool rightIsBuild = Join::canBroadcastBuild(joinType);
     if (rightIsBuild && broadcastFits(right)) {
       right = replicate(right, left);
       return;
     }
-    // A partitioned null-aware anti/semi join sends null keys from its
-    // existence side to every probe partition.
-    left = partition(left, leftKeys, nullAware && !rightIsBuild);
-    right = partition(right, rightKeys, nullAware && rightIsBuild);
+    ExprVector leftPartitionKeys;
+    ExprVector rightPartitionKeys;
+    std::tie(left, leftPartitionKeys) = PrecomputeProjections::materializeKeys(
+        left, partitionKeys->leftKeys, builder(), simplifier_);
+    std::tie(right, rightPartitionKeys) =
+        PrecomputeProjections::materializeKeys(
+            right, partitionKeys->rightKeys, builder(), simplifier_);
+    // The filter reads an expression partition key as the column computed for
+    // it.
+    ExprFactory::ExprSubstitution computedKeys;
+    for (size_t i = 0; i < leftPartitionKeys.size(); ++i) {
+      computedKeys.emplace(partitionKeys->leftKeys[i], leftPartitionKeys[i]);
+      computedKeys.emplace(partitionKeys->rightKeys[i], rightPartitionKeys[i]);
+    }
+    filter = exprFactory_.replace(filter, computedKeys);
+    // The existence side of a null-aware join is the build when the right
+    // side builds.
+    const bool replicateNulls = partitionKeys->replicateNullsAndAny;
+    left = partition(left, leftPartitionKeys, replicateNulls && !rightIsBuild);
+    right =
+        partition(right, rightPartitionKeys, replicateNulls && rightIsBuild);
+  }
+
+  // Places the inputs of a join that cannot be hash partitioned: replicates
+  // the build when the join allows it, else runs the join on one task.
+  void placeUnpartitionedInputs(
+      velox::core::JoinType joinType,
+      NodeCP& left,
+      NodeCP& right) {
+    if (Join::canBroadcastBuild(joinType)) {
+      right = replicate(right, left);
+    } else {
+      left = ensureGathered(left);
+      right = ensureGathered(right);
+    }
   }
 
   // Places the inputs of a join with an input replicated on every worker. A
@@ -2960,9 +3002,11 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       std::swap(key.leftKeys, key.rightKeys);
       key.indexSide = VectorSearch::IndexSide::kProbe;
     }
+    ExprVector noFilter;
     placeJoinInputs(
         key.joinType,
         /*nullAware=*/false,
+        noFilter,
         key.left,
         key.right,
         key.leftKeys,
