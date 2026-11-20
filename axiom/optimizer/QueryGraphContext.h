@@ -365,6 +365,7 @@ struct FunctionNames {
   Name between{nullptr};
   Name like{nullptr};
   Name random{nullptr};
+  Name fail{nullptr};
 
   /// Aggregate functions.
   Name arbitrary{nullptr};

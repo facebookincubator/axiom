@@ -138,6 +138,10 @@ class SelectivityEngine {
 
   std::optional<Selectivity> callSelectivity(Expr expr, bool updateConstraints);
 
+  // True when evaluating 'expr' always fails the query: a call to `fail`, or a
+  // call that always evaluates an argument that always fails.
+  bool alwaysFails(Expr expr) const;
+
   // Extracts the IN list from an IN call as a registered array Variant,
   // handling both the constant-array in(column, ARRAY[...]) and variadic
   // in(column, v1, ...) encodings. Returns nullptr if any element is not a
@@ -879,6 +883,22 @@ std::optional<Selectivity> SelectivityEngine<Policy>::callSelectivity(
   }
 
   if (funcName == SpecialFormCallNames::kOr) {
+    // An assertion, such as `x > 0 OR fail('...') IS NULL`: a row the other
+    // disjuncts leave false or null fails the query, so the filter keeps every
+    // row and the other disjuncts' OR holds on all of them. A single one left
+    // narrows the constraints as a filter on it would.
+    std::vector<Expr> others;
+    for (const auto& arg : args) {
+      if (!alwaysFails(arg)) {
+        others.push_back(arg);
+      }
+    }
+    if (others.size() < args.size()) {
+      if (updateConstraints && others.size() == 1) {
+        exprSelectivity(others.front(), true);
+      }
+      return Selectivity{1.0, 0.0};
+    }
     std::vector<std::optional<Selectivity>> disjuncts;
     disjuncts.reserve(args.size());
     for (const auto& arg : args) {
@@ -918,6 +938,26 @@ std::optional<Selectivity> SelectivityEngine<Policy>::callSelectivity(
 
   // Other (unmodelable) function - heuristic default, stats not the issue.
   return Selectivity::likelyTrue();
+}
+
+template <SelectivityPolicy Policy>
+bool SelectivityEngine<Policy>::alwaysFails(Expr expr) const {
+  if (!policy_.isCall(expr)) {
+    return false;
+  }
+  const auto name = policy_.name(expr);
+  const auto& fail = queryCtx()->functionNames().fail;
+  if (fail != nullptr && name == fail) {
+    return true;
+  }
+  // A function evaluates its first argument on every row it reads, and so
+  // does CAST. Other special forms may not: TRY catches the failure, AND and OR
+  // may decide on another argument first.
+  const auto args = policy_.args(expr);
+  return !args.empty() &&
+      (!SpecialFormCallNames::isSpecialForm(name) ||
+       name == SpecialFormCallNames::kCast) &&
+      alwaysFails(args[0]);
 }
 
 template <SelectivityPolicy Policy>

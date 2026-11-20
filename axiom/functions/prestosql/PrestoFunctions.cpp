@@ -160,6 +160,7 @@ void PrestoFunctions::registerAll(
   registry.registerBetween(fullName("between"));
   registry.registerLike(fullName("like"));
   registry.registerRandom(fullName("rand"));
+  registry.registerFail(fullName("fail"));
   registry.registerRowNumber(fullName("row_number"));
   registry.registerRank(fullName("rank"));
   registry.registerDenseRank(fullName("dense_rank"));
