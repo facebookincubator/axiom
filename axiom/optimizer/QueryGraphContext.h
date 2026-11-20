@@ -203,11 +203,12 @@ struct Step {
   /// Map key if kind is kSubscript. Struct field if kind is kField.
   Name field{nullptr};
 
-  /// Zero-based array index if kind is kSubscript.
+  /// Integer map key or one-based array index if kind is kSubscript.
   int64_t id{0};
 
   /// True if all fields/keys are accessed at this level but there is a subset
-  /// of fields accessed at a child level.
+  /// of fields accessed at a child level. Such a wildcard step has no key:
+  /// 'field' is null and 'id' is 0.
   bool allFields{false};
 
   /// Returns the index in 'rowType' of the field a kField step reads.
@@ -246,6 +247,15 @@ class Path {
 
   /// True if 'prefix' is a prefix of 'this', but doesn't equal to 'this'.
   bool hasPrefix(const Path& prefix) const;
+
+  /// True if reading 'this' reads all of 'other': 'this' is no longer than
+  /// 'other', and each of its steps equals the step of 'other' at the same
+  /// position or is a wildcard. Given [*].a, covers [0].a and [0].a.b but not
+  /// [0].b.
+  bool covers(const Path& other) const;
+
+  /// True if a step of 'this' is a wildcard subscript.
+  bool hasWildcard() const;
 
   Path* field(const char* name) {
     VELOX_CHECK(mutable_);
@@ -311,6 +321,10 @@ class Path {
   /// because it held a zero-step path, which stands for the whole column and
   /// makes every other path redundant.
   static void subfieldSkyline(BitSet& subfields);
+
+  /// Drops every path in 'subfields' that a path with a wildcard step covers
+  /// (see 'covers'): given {m[0].a, m[*].a}, keeps {m[*].a}.
+  static void dropCoveredByWildcards(BitSet& subfields);
 
  private:
   StepVector steps_;

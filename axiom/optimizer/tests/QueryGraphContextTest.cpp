@@ -231,16 +231,21 @@ TEST_F(QueryGraphContextTest, stepOrdering) {
     EXPECT_EQ(b, b);
   }
 
-  // Steps with same kind but different fields.
+  // Steps with same kind but different fields are ordered one way.
   {
     Step a{.kind = StepKind::kField, .field = toName("a")};
     Step b{.kind = StepKind::kField, .field = toName("b")};
-    // kField steps compare by id, not field pointer.
-    // Both have id=0, so neither is less than the other.
-    EXPECT_GE(a, b);
-    EXPECT_GE(b, a);
-    EXPECT_FALSE(a > b);
-    EXPECT_FALSE(b > a);
+    EXPECT_NE(a, b);
+    EXPECT_NE(a < b, b < a);
+  }
+
+  // A wildcard subscript differs from the constant subscript with id 0.
+  {
+    Step wildcard{.kind = StepKind::kSubscript, .allFields = true};
+    Step zero{.kind = StepKind::kSubscript};
+    EXPECT_NE(wildcard, zero);
+    EXPECT_NE(wildcard < zero, zero < wildcard);
+    EXPECT_NE(toPath({&wildcard, 1}), toPath({&zero, 1}));
   }
 
   // Steps with same kind but different ids.
@@ -295,6 +300,48 @@ TEST_F(QueryGraphContextTest, pathOrdering) {
     EXPECT_FALSE(pathValues[i] < pathValues[i - 1])
         << "Sort result not ordered at index " << i;
   }
+}
+
+TEST_F(QueryGraphContextTest, pathCovers) {
+  const Step wildcard{.kind = StepKind::kSubscript, .allFields = true};
+  const Step zero{.kind = StepKind::kSubscript};
+  const Step a{.kind = StepKind::kField, .field = toName("a")};
+  const Step b{.kind = StepKind::kField, .field = toName("b")};
+
+  auto path = [](std::vector<Step> steps) { return toPath(steps); };
+
+  // [*].a reads [0].a and anything below it.
+  EXPECT_TRUE(path({wildcard, a})->covers(*path({zero, a})));
+  EXPECT_TRUE(path({wildcard, a})->covers(*path({zero, a, b})));
+  // A prefix covers the paths below it.
+  EXPECT_TRUE(path({zero})->covers(*path({zero, a})));
+  // [*].a does not read [0].b, nor all of [0].
+  EXPECT_FALSE(path({wildcard, a})->covers(*path({zero, b})));
+  EXPECT_FALSE(path({wildcard, a})->covers(*path({zero})));
+  // A constant key does not read every key.
+  EXPECT_FALSE(path({zero, a})->covers(*path({wildcard, a})));
+}
+
+TEST_F(QueryGraphContextTest, dropCoveredByWildcards) {
+  const Step wildcard{.kind = StepKind::kSubscript, .allFields = true};
+  const Step zero{.kind = StepKind::kSubscript};
+  const Step one{.kind = StepKind::kSubscript, .id = 1};
+  const Step a{.kind = StepKind::kField, .field = toName("a")};
+  const Step b{.kind = StepKind::kField, .field = toName("b")};
+
+  auto id = [](std::vector<Step> steps) { return toPath(steps)->id(); };
+
+  BitSet paths;
+  paths.add(id({wildcard, a}));
+  paths.add(id({zero, a}));
+  paths.add(id({one, a}));
+  paths.add(id({zero, b}));
+  Path::dropCoveredByWildcards(paths);
+
+  BitSet expected;
+  expected.add(id({wildcard, a}));
+  expected.add(id({zero, b}));
+  EXPECT_EQ(paths, expected);
 }
 
 TEST_F(QueryGraphContextTest, planObjectLimit) {

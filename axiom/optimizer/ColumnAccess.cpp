@@ -142,6 +142,7 @@ PathSet ColumnAccess::subfieldsOf(ColumnCP column) const {
   }
   PathSet paths = it->second;
   Path::subfieldSkyline(paths);
+  Path::dropCoveredByWildcards(paths);
   return paths;
 }
 
@@ -238,14 +239,14 @@ bool ColumnAccess::addPathStep(
     return false;
   }
   const Name name = call->name();
+  // element_at reads the same entries as a subscript, so both record a
+  // subscript step.
   const bool isSubscript = name == subscript_ || name == elementAt_;
   const bool isDereference = name == SpecialFormCallNames::kDereference;
   if (!isSubscript && !isDereference) {
     return false;
   }
 
-  const StepKind subscriptKind =
-      name == elementAt_ ? StepKind::kElementAt : StepKind::kSubscript;
   ExprCP operand = call->args()[0];
 
   Step step;
@@ -260,7 +261,7 @@ bool ColumnAccess::addPathStep(
       }
       step = {.kind = StepKind::kField, .field = field};
     } else {
-      step = {.kind = subscriptKind};
+      step = {.kind = StepKind::kSubscript};
       setKey(step, key);
       // A non-positive array index counts from the end of the array, which no
       // prefix bound can express, and Velox rejects it outright. Reading every
@@ -276,7 +277,7 @@ bool ColumnAccess::addPathStep(
     // A key computed at run time selects no entry, so every entry at this
     // level is read; anything below it still prunes. The key expression is a
     // read of its own.
-    step = {.kind = subscriptKind, .allFields = true};
+    step = {.kind = StepKind::kSubscript, .allFields = true};
     add(call->args()[1]);
   } else {
     return false;

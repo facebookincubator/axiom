@@ -1022,15 +1022,82 @@ TEST_P(SubfieldTest, pushedFilter) {
 TEST_P(SubfieldTest, mapOfRow) {
   auto rowType = ROW({
       {"m", MAP(VARCHAR(), ROW({{"f1", BIGINT()}, {"f2", BIGINT()}}))},
+      {"k", VARCHAR()},
+      {"n", MAP(INTEGER(), ROW("f1", BIGINT()))},
+      {"i", INTEGER()},
   });
   createTable("t_map_of_row", makeVectors(rowType, 1, 1));
 
   // A constant map key followed by a field reads one key and one field.
-  auto logicalPlan = parseSelect("SELECT m['x'].f1 FROM t_map_of_row");
+  {
+    auto logicalPlan = parseSelect("SELECT m['x'].f1 FROM t_map_of_row");
 
-  AXIOM_ASSERT_PLAN_V2(
-      toSingleNodePlan(logicalPlan),
-      matchHiveScan("t_map_of_row", {{"m", {"[\"x\"].f1"}}}).project().build());
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan("t_map_of_row", {{"m", {"[\"x\"].f1"}}})
+            .project({"m['x'].f1"})
+            .build());
+  }
+
+  // A computed key reads that field of every key, which includes the constant
+  // key's.
+  {
+    auto logicalPlan =
+        parseSelect("SELECT m['x'].f1, m[k].f1 FROM t_map_of_row");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan("t_map_of_row", {{"m", {"[*].f1"}}, {"k", {}}})
+            .project({"m['x'].f1", "m[k].f1"})
+            .build());
+  }
+
+  // The same with integer keys, where the constant key is 0.
+  {
+    auto logicalPlan = parseSelect("SELECT n[0].f1, n[i].f1 FROM t_map_of_row");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan("t_map_of_row", {{"n", {"[*].f1"}}, {"i", {}}})
+            .project({"n[0].f1", "n[i].f1"})
+            .build());
+  }
+
+  // A computed key's field leaves the constant key's other field to read.
+  {
+    auto logicalPlan =
+        parseSelect("SELECT m['x'].f2, m[k].f1 FROM t_map_of_row");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan(
+            "t_map_of_row", {{"m", {"[\"x\"].f2", "[*].f1"}}, {"k", {}}})
+            .project({"m['x'].f2", "m[k].f1"})
+            .build());
+  }
+
+  // v1 fails with a duplicate output column.
+  if (!useV2_) {
+    return;
+  }
+
+  // element_at reads the same entries as a subscript.
+  {
+    auto logicalPlan = parseSelect(
+        "SELECT element_at(m, 'x').f1, m['x'].f1, element_at(m, k).f2, m['y'].f2 "
+        "FROM t_map_of_row");
+
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan(
+            "t_map_of_row", {{"m", {"[\"x\"].f1", "[*].f2"}}, {"k", {}}})
+            .project(
+                {"element_at(m, 'x').f1",
+                 "m['x'].f1",
+                 "element_at(m, k).f2",
+                 "m['y'].f2"})
+            .build());
+  }
 }
 
 TEST_P(SubfieldTest, negativeArrayIndex) {

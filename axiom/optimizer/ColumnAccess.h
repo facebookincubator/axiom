@@ -40,7 +40,8 @@ namespace facebook::axiom::optimizer {
 ///   toSubfields(column->name(), access_.subfieldsOf(column), ...);
 ///
 /// An expression is decomposed into a column and a path when it is a chain of
-/// struct dereferences and constant subscripts: `m[1].x` reads `[1].x` of `m`.
+/// struct dereferences and subscripts: `m[1].x` reads `[1].x` of `m`, and
+/// `m[k].x`, with a key computed at run time, reads `[*].x`.
 /// A chain rooted at anything else contributes the whole of every column it
 /// reaches, which is the current behavior of every read and therefore always
 /// safe. Note that an unrecognized call gives up only its own result: its
