@@ -285,6 +285,37 @@ TEST_F(EstimateProviderTest, filter) {
         AXIOM_ASSERT_RANGE(c, 5, 5);
         EXPECT_EQ(c.nullFraction, 0);
       });
+
+  // An assertion fails the query on a row where its other disjuncts are false
+  // or null, so it keeps every row and they hold on all of them. A call fails
+  // wherever its first argument does, so a cast of 'fail' asserts too. With two
+  // failing disjuncts, 'a < 100' still holds on every row.
+  for (std::string_view sql : {
+           "SELECT a FROM t WHERE a < 100 OR fail('a is too large') IS NULL",
+           "SELECT a FROM t "
+           "WHERE a < 100 OR CAST(fail('a is too large') AS BOOLEAN)",
+           "SELECT a FROM t "
+           "WHERE a < 100 OR fail('a is too large') IS NULL "
+           "  OR fail('a is negative') IS NULL",
+       }) {
+    verifyEstimate(sql, 10'000, [&](NodeCP root, const Estimate& estimate) {
+      const Value& a = column(root, estimate, "a");
+      EXPECT_EQ(a.cardinality, 100);
+      AXIOM_ASSERT_RANGE(a, 0, 99);
+    });
+  }
+
+  // With two disjuncts left, the assertion guarantees only their OR, and an OR
+  // narrows no column: 'a' keeps its 1'000 values from 0 to 999.
+  verifyEstimate(
+      "SELECT a FROM t "
+      "WHERE a < 100 OR b > 0 OR fail('a is too large') IS NULL",
+      10'000,
+      [&](NodeCP root, const Estimate& estimate) {
+        const Value& a = column(root, estimate, "a");
+        EXPECT_EQ(a.cardinality, 1'000);
+        AXIOM_ASSERT_RANGE(a, 0, 999);
+      });
 }
 
 TEST_F(EstimateProviderTest, projection) {

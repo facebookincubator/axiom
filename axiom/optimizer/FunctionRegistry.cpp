@@ -210,6 +210,15 @@ bool FunctionRegistry::registerRandom(std::string_view name) {
   return true;
 }
 
+bool FunctionRegistry::registerFail(std::string_view name) {
+  VELOX_USER_CHECK(!name.empty());
+  if (fail_.has_value() && fail_.value() != name) {
+    return false;
+  }
+  fail_ = name;
+  return true;
+}
+
 bool FunctionRegistry::registerRowNumber(std::string_view name) {
   VELOX_USER_CHECK(!name.empty());
   if (rowNumber_.has_value() && rowNumber_.value() != name) {

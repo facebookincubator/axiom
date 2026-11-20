@@ -557,6 +557,17 @@ class FunctionRegistry {
     return random_;
   }
 
+  /// Registers function 'name' that has semantics of Presto's 'fail', i.e.
+  /// fails the query with its message whenever it is evaluated.
+  /// @return true if successfully registered, false if a different 'fail'
+  /// function is already registered.
+  bool registerFail(std::string_view name);
+
+  /// Returns the name of the 'fail' function.
+  const std::optional<std::string>& fail() const {
+    return fail_;
+  }
+
   /// Registers function 'name' that has semantics of 'row_number' window
   /// function, i.e. assigns sequential numbers to rows within a partition.
   /// @return true if successfully registered, false if a different
@@ -672,6 +683,7 @@ class FunctionRegistry {
   std::optional<std::string> between_;
   std::optional<std::string> like_;
   std::optional<std::string> random_;
+  std::optional<std::string> fail_;
 
   // Aggregate functions.
   std::optional<std::string> arbitrary_;

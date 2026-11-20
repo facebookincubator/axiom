@@ -503,6 +503,10 @@ void QueryGraphContext::populateFunctionNames() {
     functionNames_.random = this->toName(random.value());
   }
 
+  if (auto fail = registry.fail()) {
+    functionNames_.fail = this->toName(fail.value());
+  }
+
   if (auto rowNumber = registry.rowNumber()) {
     functionNames_.rowNumber = this->toName(rowNumber.value());
   }
