@@ -23,7 +23,9 @@ namespace facebook::axiom::optimizer {
 /// Normalizes raw join-condition conjuncts into the Join IR's split
 /// form. The invariant `Join` callers rely on: any deterministic
 /// `eq(leftExpr, rightExpr)` conjunct whose sides partition cleanly into one
-/// side each lives in `leftKeys` / `rightKeys`, never in `filter`.
+/// side each lives in `leftKeys` / `rightKeys`, never in `filter`. A
+/// null-aware join is the exception: its keys are the IN equality, and its
+/// filter keeps other equalities.
 class JoinCondition {
  public:
   /// Output of `splitEquiKeys`: paired equi-keys plus the residual

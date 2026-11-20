@@ -46,6 +46,7 @@ constexpr std::string_view kErrorV1Name = "error_v1";
 constexpr std::string_view kErrorV2Name = "error_v2";
 constexpr std::string_view kDuckDbName = "duckdb";
 constexpr std::string_view kDisabledV1Name = "disabled_v1";
+constexpr std::string_view kSessionName = "session";
 
 // Returns leading-whitespace-trimmed view of 'sv'.
 std::string_view ltrim(std::string_view sv) {
@@ -92,6 +93,31 @@ std::optional<std::string> directiveValue(
   std::string value{ltrim(rest)};
   rtrim(value);
   return value;
+}
+
+// Splits the value of a '-- session:' line, as in
+// 'optimizer.broadcast_size_limit = 0B', into the property name and value.
+std::pair<std::string, std::string> parseSessionProperty(
+    const std::string& property,
+    int32_t lineNumber) {
+  const auto separator = property.find('=');
+  VELOX_USER_CHECK(
+      separator != std::string::npos,
+      "-- session requires a property assignment, as in "
+      "'-- session: optimizer.broadcast_size_limit = 0B' (line {})",
+      lineNumber);
+  std::string name = property.substr(0, separator);
+  rtrim(name);
+  std::string value{ltrim(std::string_view{property}.substr(separator + 1))};
+  VELOX_USER_CHECK(
+      !name.empty(),
+      "-- session requires a property name (line {})",
+      lineNumber);
+  VELOX_USER_CHECK(
+      !value.empty(),
+      "-- session requires a property value (line {})",
+      lineNumber);
+  return {std::move(name), std::move(value)};
 }
 
 // Splits 'content' on '----' separator lines, trims each statement, and
@@ -307,6 +333,14 @@ std::vector<QueryEntry> parseQueries(
         inDuckDbSql = true;
       } else if (annotation == "columns") {
         current.checkColumnNames = true;
+      } else if (
+          auto property = directiveValue(annotation, kSessionName, ':')) {
+        auto [name, value] = parseSessionProperty(*property, lineNumber);
+        VELOX_USER_CHECK(
+            current.sessionProperties.emplace(name, std::move(value)).second,
+            "duplicate -- session: property {} (line {})",
+            name,
+            lineNumber);
       }
       continue;
     }

@@ -185,7 +185,11 @@ TEST_F(SqlFileTest, directiveValueSpacing) {
 
 TEST_F(SqlFileTest, directiveRequiresValue) {
   for (const auto* annotation :
-       {"-- error:\n", "-- error_v1:\n", "-- error_v2:\n", "-- duckdb:\n"}) {
+       {"-- error:\n",
+        "-- error_v1:\n",
+        "-- error_v2:\n",
+        "-- duckdb:\n",
+        "-- session:\n"}) {
     SCOPED_TRACE(annotation);
     VELOX_ASSERT_THROW(
         parseQueries(annotation + std::string("SELECT 1")), "requires a");
@@ -200,6 +204,37 @@ TEST_F(SqlFileTest, directiveNameInProse) {
   ASSERT_THAT(entries, testing::SizeIs(1));
   EXPECT_EQ(entries[0].expectedError, "");
   EXPECT_EQ(entries[0].sql, "SELECT 1");
+}
+
+TEST_F(SqlFileTest, session) {
+  auto entries = parseQueries(
+      "-- session: optimizer.broadcast_size_limit = 0B\n"
+      "-- session:optimizer.syntactic_join_order=true\n"
+      "SELECT 1\n"
+      "----\n"
+      "SELECT 2");
+  ASSERT_THAT(entries, testing::SizeIs(2));
+  EXPECT_THAT(
+      entries[0].sessionProperties,
+      testing::UnorderedElementsAre(
+          testing::Pair("optimizer.broadcast_size_limit", "0B"),
+          testing::Pair("optimizer.syntactic_join_order", "true")));
+  EXPECT_THAT(entries[1].sessionProperties, testing::IsEmpty());
+
+  for (const auto* annotation :
+       {"-- session: optimizer.broadcast_size_limit\n",
+        "-- session: = 0B\n",
+        "-- session: optimizer.broadcast_size_limit =\n"}) {
+    SCOPED_TRACE(annotation);
+    VELOX_ASSERT_THROW(
+        parseQueries(annotation + std::string("SELECT 1")), "-- session");
+  }
+  VELOX_ASSERT_THROW(
+      parseQueries(
+          "-- session: optimizer.broadcast_size_limit = 0B\n"
+          "-- session: optimizer.broadcast_size_limit = 1MB\n"
+          "SELECT 1"),
+      "duplicate -- session: property optimizer.broadcast_size_limit");
 }
 
 TEST_F(SqlFileTest, disabledV1) {

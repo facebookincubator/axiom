@@ -418,6 +418,9 @@ class SqlTest : public SqlTestBase {
 
   void SetUp() override {
     SqlTestBase::SetUp();
+    for (const auto& [name, value] : entry_.sessionProperties) {
+      sessionConfig_->set(name, value);
+    }
     sessionConfig_->set(
         kOptimizerPrefix,
         OptimizerOptions::kSyntacticJoinOrder,
@@ -562,6 +565,15 @@ void registerVariant(
         });
   };
   for (const auto& entry : file.entries) {
+    VELOX_USER_CHECK(
+        !entry.sessionProperties.contains(
+            fmt::format(
+                "{}.{}",
+                SqlTestBase::kOptimizerPrefix,
+                OptimizerOptions::kSyntacticJoinOrder)),
+        "-- session: cannot set the join order, which the harness varies: {}:{}",
+        path,
+        entry.lineNumber);
     if (!UseV2 && entry.disabledV1Reason.has_value()) {
       continue;
     }

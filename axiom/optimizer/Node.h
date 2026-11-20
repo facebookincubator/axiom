@@ -1414,7 +1414,8 @@ using UnionAllCP = const UnionAll*;
 /// `AND(leftKeys[i] = rightKeys[i] for all i) AND AND(filter)`.
 /// `filter` is a flat vector of predicates joined with AND (the producer is
 /// responsible for flattening and for lifting any equi-pairs into the key
-/// vectors).
+/// vectors, except in a null-aware join: its keys are the IN equality, and
+/// its filter keeps other equalities, which compare under plain `=`).
 ///
 /// Lowering depends on key presence:
 ///   - `leftKeys` non-empty → `HashJoinNode`, with `filter` as the
@@ -1440,7 +1441,8 @@ class Join : public Node {
     ExprVector leftKeys;
     /// Right equi-keys; positional with `leftKeys`.
     ExprVector rightKeys;
-    /// Residual non-equi predicates joined with AND; may be empty.
+    /// Residual predicates joined with AND; may be empty. Non-equi, except in
+    /// a null-aware join.
     ExprVector filter;
     /// NULL-aware semantics for IN / NOT IN (semi / anti only).
     bool nullAware{false};
@@ -1608,6 +1610,43 @@ class Join : public Node {
   /// left rows, and counting joins are excluded because their build counts
   /// must be consumed once across all left partitions.
   static bool canBroadcastBuild(velox::core::JoinType joinType);
+
+  /// Keys to hash partition a join's inputs on.
+  struct HashPartitionKeys {
+    /// Keys of the left input, positionally aligned with 'rightKeys'.
+    ExprVector leftKeys;
+
+    /// Keys of the right input.
+    ExprVector rightKeys;
+
+    /// Whether the existence side of a null-aware join also sends its NULL
+    /// keys and one arbitrary row to every partition.
+    bool replicateNullsAndAny{false};
+  };
+
+  /// Returns keys on which hash partitioning both inputs of a join on
+  /// 'leftKeys' = 'rightKeys' with 'filter' preserves results, or nullopt when
+  /// a null-aware join's filter reads the right side, or is nondeterministic,
+  /// and has no equality between the sides. A null-aware join with a filter
+  /// has its existence side on the right.
+  ///
+  /// - A join that is not null-aware partitions on its keys.
+  /// - A null-aware join whose filter is deterministic and reads no right
+  ///   column partitions on its keys and replicates the existence side's NULL
+  ///   keys and one arbitrary row: such a filter accepts every existence-side
+  ///   row or none, so a NULL or unmatched key only needs to know whether that
+  ///   side is empty or has a NULL key.
+  /// - Otherwise a null-aware join decides a NULL or unmatched key from the
+  ///   existence-side rows the filter accepts for it. It partitions on the
+  ///   filter's equalities between 'leftColumns' and 'rightColumns', which put
+  ///   all those rows in the probe row's partition.
+  static std::optional<HashPartitionKeys> hashPartitionKeys(
+      bool nullAware,
+      const ExprVector& leftKeys,
+      const ExprVector& rightKeys,
+      const ExprVector& filter,
+      const PlanObjectSet& leftColumns,
+      const PlanObjectSet& rightColumns);
 
   /// Returns whether replicating the left input while leaving the right input
   /// partitioned preserves results, the mirror of `canBroadcastBuild`. Output

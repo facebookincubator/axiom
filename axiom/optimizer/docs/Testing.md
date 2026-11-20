@@ -305,6 +305,7 @@ Tests are written as plain `.sql` files. Queries are separated by `----`. Commen
 | `-- duckdb: sql` | Use a different SQL for the DuckDB comparison (when Presto and DuckDB syntax differs). Comment lines that follow, indented by at least one space after `-- `, continue the SQL. |
 | `-- columns` | Additionally verify that column names match between Axiom and DuckDB. |
 | `-- disabled_v1: reason` | Run this query under v2 only, because v1 answers it wrongly or crashes on it. The reason says which. |
+| `-- session: name = value` | Runs the query with session property `name` set to `value`, as `SET SESSION` does. Repeat the line to set several properties. The harness sets `optimizer.syntactic_join_order` itself, so a query cannot. |
 | `-- disabled` | Skip this query entirely. For use during local development only — do not commit disabled queries. |
 
 Annotations can be combined. For example, `-- ordered` and `-- columns` can be used together.
@@ -312,6 +313,8 @@ Annotations can be combined. For example, `-- ordered` and `-- columns` can be u
 Use `error_v1`/`error_v2` when the two optimizers legitimately diverge — typically a v1 limitation that v2 fixes (or vice versa). The optimizer without an error annotation runs and is verified normally, so the same query can assert a v1 error and check the v2 result.
 
 Reach for `disabled_v1` only where v1 cannot be asserted against at all: it returns wrong results, or it crashes. A v1 that fails with a message is still testable — state the message as `error_v1`.
+
+Queries run on 4 workers, but the tables in `.sql` files are small, so a join broadcasts its build side. Use `-- session: optimizer.broadcast_size_limit = 0B` when the result depends on how a join partitions its inputs.
 
 **Example:**
 
