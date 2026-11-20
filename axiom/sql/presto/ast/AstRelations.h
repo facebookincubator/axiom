@@ -60,7 +60,7 @@ class Query : public Statement {
       const QueryBodyPtr& queryBody,
       const std::shared_ptr<OrderBy>& orderBy = nullptr,
       const std::shared_ptr<Offset>& offset = nullptr,
-      std::optional<std::string> limit = std::nullopt)
+      std::optional<int64_t> limit = std::nullopt)
       : Statement(NodeType::kQuery, location),
         with_(with),
         queryBody_(queryBody),
@@ -84,7 +84,7 @@ class Query : public Statement {
     return offset_;
   }
 
-  const std::optional<std::string>& limit() const {
+  const std::optional<int64_t>& limit() const {
     return limit_;
   }
 
@@ -96,7 +96,7 @@ class Query : public Statement {
         Node::deepHash(queryBody_),
         Node::deepHash(orderBy_),
         Node::deepHash(offset_),
-        limit_.has_value() ? std::hash<std::string>{}(*limit_) : 0);
+        limit_.has_value() ? std::hash<int64_t>{}(*limit_) : 0);
   }
 
  protected:
@@ -113,7 +113,7 @@ class Query : public Statement {
   QueryBodyPtr queryBody_;
   std::shared_ptr<OrderBy> orderBy_;
   std::shared_ptr<Offset> offset_;
-  std::optional<std::string> limit_;
+  std::optional<int64_t> limit_;
 };
 
 class QuerySpecification : public QueryBody {
@@ -128,7 +128,7 @@ class QuerySpecification : public QueryBody {
       std::vector<WindowDefinitionPtr> windows = {},
       const std::shared_ptr<OrderBy>& orderBy = nullptr,
       const std::shared_ptr<Offset>& offset = nullptr,
-      std::optional<std::string> limit = std::nullopt)
+      std::optional<int64_t> limit = std::nullopt)
       : QueryBody(NodeType::kQuerySpecification, location),
         select_(select),
         from_(from),
@@ -172,7 +172,7 @@ class QuerySpecification : public QueryBody {
     return offset_;
   }
 
-  const std::optional<std::string>& limit() const {
+  const std::optional<int64_t>& limit() const {
     return limit_;
   }
 
@@ -188,7 +188,7 @@ class QuerySpecification : public QueryBody {
         Node::deepHashAll(windows_),
         Node::deepHash(orderBy_),
         Node::deepHash(offset_),
-        limit_.has_value() ? std::hash<std::string>{}(*limit_) : 0);
+        limit_.has_value() ? std::hash<int64_t>{}(*limit_) : 0);
   }
 
  protected:
@@ -212,7 +212,7 @@ class QuerySpecification : public QueryBody {
   std::vector<WindowDefinitionPtr> windows_;
   std::shared_ptr<OrderBy> orderBy_;
   std::shared_ptr<Offset> offset_;
-  std::optional<std::string> limit_;
+  std::optional<int64_t> limit_;
 };
 
 // SELECT items

@@ -184,7 +184,7 @@ class RecursiveTermValidator : public DefaultTraversalVisitor {
   void rejectOrderLimitOffset(
       const NodeLocation& location,
       const std::shared_ptr<OrderBy>& orderBy,
-      const std::optional<std::string>& limit,
+      const std::optional<int64_t>& limit,
       const std::shared_ptr<Offset>& offset) {
     AXIOM_PRESTO_SYNTAX_CHECK_NULL(
         orderBy,

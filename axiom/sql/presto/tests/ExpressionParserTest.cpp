@@ -574,6 +574,16 @@ TEST_F(ExpressionParserTest, specialDateTimeFunctions) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseExpr("CURRENT_TIMESTAMP(6)"),
       "Precision for date/time functions is not supported yet");
+
+  // The precision is an integer literal, so underscores separate digits.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CURRENT_TIMESTAMP(1_2)"),
+      "Precision for date/time functions is not supported yet");
+  VELOX_ASSERT_THROW(
+      parseStrictExpr("CURRENT_TIMESTAMP(1_2)"),
+      "Underscores in numeric literals require Friendly SQL mode");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseExpr("CURRENT_TIMESTAMP(3000000000)"), "Precision out of range");
 }
 
 TEST_F(ExpressionParserTest, currentUser) {
@@ -1050,8 +1060,7 @@ TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {
 
   // Lateral column aliases are not available when Friendly SQL is disabled.
   VELOX_ASSERT_THROW(
-      makeStrictParser().parse(
-          "SELECT n_regionkey + 1 AS j, j + 2 AS k FROM nation", true),
+      parseStrictSql("SELECT n_regionkey + 1 AS j, j + 2 AS k FROM nation"),
       "Cannot resolve column: j");
 }
 

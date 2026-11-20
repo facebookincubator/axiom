@@ -2507,6 +2507,23 @@ TEST_F(PrestoParserTest, limit) {
     auto matcher = matchScan().sort({"n_name"}).project().output(nationColumns);
     testSelect("SELECT * FROM nation ORDER BY n_name LIMIT ALL", matcher);
   }
+
+  // Underscores separate digits, as in other integer literals.
+  {
+    auto matcher = matchScan().project().limit(0, 1'000).output(nationColumns);
+    testSelect("SELECT * FROM nation LIMIT 1_000", matcher);
+    testSelect("SELECT * FROM nation FETCH FIRST 1_000 ROWS ONLY", matcher);
+  }
+
+  VELOX_ASSERT_THROW(
+      parseStrictSql("SELECT * FROM nation LIMIT 1_000"),
+      "Underscores in numeric literals require Friendly SQL mode");
+  VELOX_ASSERT_THROW(
+      parseStrictSql("SELECT * FROM nation FETCH FIRST 1_000 ROWS ONLY"),
+      "Underscores in numeric literals require Friendly SQL mode");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM nation LIMIT 9223372036854775808"),
+      "Integer literal out of range");
 }
 
 TEST_F(PrestoParserTest, offset) {
@@ -2519,6 +2536,8 @@ TEST_F(PrestoParserTest, offset) {
                        .limit(5, std::numeric_limits<int64_t>::max())
                        .output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 5", matcher);
+    // Underscores separate digits, as in other integer literals.
+    testSelect("SELECT * FROM nation OFFSET 0_5", matcher);
   }
 
   {
@@ -2559,6 +2578,13 @@ TEST_F(PrestoParserTest, offset) {
     auto matcher = matchScan().project().limit(0, 0).output(nationColumns);
     testSelect("SELECT * FROM nation OFFSET 0 LIMIT 0", matcher);
   }
+
+  VELOX_ASSERT_THROW(
+      parseStrictSql("SELECT * FROM nation OFFSET 0_5"),
+      "Underscores in numeric literals require Friendly SQL mode");
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT * FROM nation OFFSET 9223372036854775808"),
+      "Integer literal out of range");
 }
 
 TEST_F(PrestoParserTest, use) {
@@ -2719,11 +2745,11 @@ TEST_F(PrestoParserTest, friendlySqlTrailingCommaSelect) {
   ASSERT_TRUE(statement->isSelect());
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse("SELECT 1, 2, FROM nation"),
+      parseStrictSql("SELECT 1, 2, FROM nation"),
       "Trailing commas in SELECT list require Friendly SQL mode");
 
   // No trailing comma works in both modes.
-  statement = makeStrictParser().parse("SELECT 1, 2 FROM nation");
+  statement = parseStrictSql("SELECT 1, 2 FROM nation");
   ASSERT_TRUE(statement->isSelect());
 }
 
@@ -2733,18 +2759,17 @@ TEST_F(PrestoParserTest, friendlySqlTrailingCommaWith) {
   ASSERT_TRUE(statement->isSelect());
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse(
+      parseStrictSql(
           "WITH a AS (SELECT 1), b AS (SELECT 2), SELECT * FROM a, b"),
       "Trailing commas in WITH clause require Friendly SQL mode");
 
   // No trailing comma works in both modes.
-  statement = makeStrictParser().parse(
+  statement = parseStrictSql(
       "WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM a, b");
   ASSERT_TRUE(statement->isSelect());
 
   // Commas inside subqueries don't count as trailing commas.
-  statement =
-      makeStrictParser().parse("WITH a AS (SELECT 1, 2, 3) SELECT * FROM a");
+  statement = parseStrictSql("WITH a AS (SELECT 1, 2, 3) SELECT * FROM a");
   ASSERT_TRUE(statement->isSelect());
 }
 
@@ -2753,15 +2778,15 @@ TEST_F(PrestoParserTest, friendlySqlTrailingCommaValues) {
   ASSERT_TRUE(statement->isSelect());
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse("VALUES 1, 2, 3,"),
+      parseStrictSql("VALUES 1, 2, 3,"),
       "Trailing commas in VALUES clause require Friendly SQL mode");
 
   // No trailing comma works in both modes.
-  statement = makeStrictParser().parse("VALUES 1, 2, 3");
+  statement = parseStrictSql("VALUES 1, 2, 3");
   ASSERT_TRUE(statement->isSelect());
 
   // Commas inside ROW expressions don't count as trailing commas.
-  statement = makeStrictParser().parse("VALUES ROW(1, 2), ROW(3, 4)");
+  statement = parseStrictSql("VALUES ROW(1, 2), ROW(3, 4)");
   ASSERT_TRUE(statement->isSelect());
 }
 
@@ -2776,7 +2801,7 @@ TEST_F(PrestoParserTest, friendlySqlFromFirst) {
 
   // Rejected when Friendly SQL is disabled.
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
-      makeStrictParser().parse("FROM nation"),
+      parseStrictSql("FROM nation"),
       "FROM-first syntax requires Friendly SQL mode");
 }
 

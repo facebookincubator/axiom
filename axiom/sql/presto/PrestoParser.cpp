@@ -1620,17 +1620,13 @@ class RelationPlanner : public AstVisitor {
     builder_->sort(keys);
   }
 
-  static int64_t parseInt64(const std::optional<std::string>& value) {
-    return std::atol(value.value().c_str());
-  }
-
   void addOffset(const OffsetPtr& offset) {
     if (offset == nullptr) {
       return;
     }
 
     // OFFSET 0 is a no-op. Skip creating a LimitNode.
-    auto numOffsetRows = std::atol(offset->offset().c_str());
+    const int64_t numOffsetRows = offset->offset();
     if (numOffsetRows == 0) {
       return;
     }
@@ -1638,12 +1634,12 @@ class RelationPlanner : public AstVisitor {
     builder_->offset(numOffsetRows);
   }
 
-  void addLimit(const std::optional<std::string>& limit) {
+  void addLimit(const std::optional<int64_t>& limit) {
     if (!limit.has_value()) {
       return;
     }
 
-    const auto count = parseInt64(limit);
+    const int64_t count = *limit;
 
     // A LIMIT of INT64_MAX is effectively no limit, and LimitNode reserves
     // that value as the no-limit sentinel. Skip the node, like LIMIT ALL.

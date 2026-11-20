@@ -33,13 +33,6 @@ bool isDistinct(T* context) {
       context->setQuantifier()->DISTINCT() != nullptr;
 }
 
-std::optional<std::string> getText(antlr4::Token* token) {
-  if (token == nullptr) {
-    return std::nullopt;
-  }
-  return token->getText();
-}
-
 NodeLocation getLocation(antlr4::Token* token) {
   return NodeLocation(token->getLine(), token->getCharPositionInLine());
 }
@@ -282,6 +275,12 @@ int64_t parseIntegerLiteral(
   return result.value();
 }
 
+// Parses an INTEGER_VALUE token, such as a LIMIT or a repetition count.
+int64_t parseCount(antlr4::Token* token, bool friendlySql) {
+  return parseIntegerLiteral(
+      stripDigitSeparators(token->getText(), friendlySql), getLocation(token));
+}
+
 // Out-of-range magnitudes are not errors: they saturate to infinity or to a
 // subnormal, as in Presto.
 double parseDoubleLiteral(std::string_view text, const NodeLocation& location) {
@@ -341,15 +340,16 @@ std::any AstBuilder::visitQueryNoWith(
 
   OffsetPtr offset;
   if (ctx->offset) {
-    offset = std::make_shared<Offset>(getLocation(ctx), ctx->offset->getText());
+    offset = std::make_shared<Offset>(
+        getLocation(ctx), parseCount(ctx->offset, options_.friendlySql));
   }
 
   // LIMIT ALL means "no limit" — ignore it.
-  std::optional<std::string> limit;
-  if ((ctx->limit && ctx->limit->getType() != PrestoSqlParser::ALL)) {
-    limit = getText(ctx->limit);
-  } else {
-    limit = getText(ctx->fetchFirstNRows);
+  std::optional<int64_t> limit;
+  if (ctx->limit && ctx->limit->getType() != PrestoSqlParser::ALL) {
+    limit = parseCount(ctx->limit, options_.friendlySql);
+  } else if (ctx->fetchFirstNRows) {
+    limit = parseCount(ctx->fetchFirstNRows, options_.friendlySql);
   }
 
   auto term = visitTyped<QueryBody>(ctx->queryTerm());
@@ -2159,11 +2159,6 @@ struct EdgePatternParts {
   ElementPatternFiller filler;
 };
 
-int64_t parseCount(antlr4::Token* token, bool friendlySql) {
-  return parseIntegerLiteral(
-      stripDigitSeparators(token->getText(), friendlySql), getLocation(token));
-}
-
 std::optional<int64_t> parseOptionalCount(
     antlr4::Token* token,
     bool friendlySql) {
@@ -3036,7 +3031,14 @@ std::any AstBuilder::visitSpecialDateTimeFunction(
 
   std::optional<int> precision;
   if (ctx->precision != nullptr) {
-    precision = std::stoi(ctx->precision->getText());
+    const int64_t value = parseCount(ctx->precision, options_.friendlySql);
+    AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+        value,
+        std::numeric_limits<int>::max(),
+        getLocation(ctx->precision),
+        ctx->precision->getText(),
+        "Precision out of range");
+    precision = static_cast<int>(value);
   }
 
   return std::static_pointer_cast<Expression>(
