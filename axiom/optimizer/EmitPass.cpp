@@ -1758,17 +1758,13 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
   auto [sortingKeys, sortingOrders] =
       toSortingKeys(topN.orderKeys(), topN.orderTypes(), "TopN key");
   // The TopN keeps offset + count rows; a trailing Limit applies the offset.
-  const int64_t topNCount = topN.offset() + topN.count();
-  VELOX_CHECK_LE(
-      topNCount,
-      std::numeric_limits<int32_t>::max(),
-      "TopN offset + count exceeds the Velox TopNNode count limit");
+  const int64_t topNCount = topN.offsetPlusCount();
   if (topN.isPartial()) {
     return std::make_shared<velox::core::TopNNode>(
         nextId(),
         sortingKeys,
         sortingOrders,
-        static_cast<int32_t>(topNCount),
+        topNCount,
         /*isPartial=*/true,
         std::move(input));
   }
@@ -1777,7 +1773,7 @@ velox::core::PlanNodePtr Emitter::emitTopN(const TopN& topN) {
       nextId(),
       sortingKeys,
       sortingOrders,
-      static_cast<int32_t>(topNCount),
+      topNCount,
       /*isPartial=*/false,
       std::move(input));
   if (topN.offset() > 0) {
