@@ -406,9 +406,7 @@ class Decorrelator : public NodeRewriter<> {
           expr, innerColumns.sources, innerColumns.outputExpressions);
       if (hasMarker && !nullOnPad) {
         // kLeft: NULL out exprs a pad row would otherwise give a value.
-        const Literal* nullLiteral = builder().makeNull(expr->value().type);
-        liftedExprs.push_back(
-            exprFactory_.makeIf(node->includeMarker(), expr, nullLiteral));
+        liftedExprs.push_back(nullUnless(node->includeMarker(), expr));
       } else {
         liftedExprs.push_back(expr);
       }
@@ -892,6 +890,13 @@ class Decorrelator : public NodeRewriter<> {
         call, Frame::wholePartition(), /*ignoreNulls=*/false};
   }
 
+  // Returns 'expression' where 'marker' is true and NULL elsewhere: the value
+  // a kLeft Apply publishes for an outer whose body produced no row.
+  ExprCP nullUnless(ExprCP marker, ExprCP expression) {
+    return exprFactory_.makeIf(
+        marker, expression, builder().makeNull(expression->value().type));
+  }
+
   // Shapes 'child' to the outer Apply's output columns, writing 'marker' where
   // the includeMarker goes and passing every other column through.
   NodeCP projectApplyOutput(
@@ -1269,6 +1274,12 @@ class Decorrelator : public NodeRewriter<> {
     if (!collapse) {
       // Without a mark filter the mark is a value on an A row rather than a
       // reason to keep or drop it, so applyA's marker alone gates inclusion.
+      // applyB writes a mark on applyA's pad row too, and the scalar must read
+      // it as NULL there.
+      visibleColumns = exprFactory_.substitute(
+          visibleColumns,
+          ColumnVector{mark},
+          ExprVector{nullUnless(applyAIncludeMarker, mark)});
       return projectApplyOutput(
           node, chain, applyAIncludeMarker, std::move(visibleColumns));
     }
@@ -1395,10 +1406,7 @@ class Decorrelator : public NodeRewriter<> {
         if (outerColumns.contains(node->sourceColumns()[i])) {
           finalExprs.push_back(visibleColumn);
         } else {
-          finalExprs.push_back(exprFactory_.makeIf(
-              matched,
-              visibleColumn,
-              builder().makeNull(outputColumn->value().type)));
+          finalExprs.push_back(nullUnless(matched, visibleColumn));
         }
       }
     }
@@ -3322,12 +3330,10 @@ class Decorrelator : public NodeRewriter<> {
                 expression, boundarySources, boundaryExpressions);
     };
     valueIsLive = valueIsLive == nullptr ? nullptr : atBoundary(valueIsLive);
-    auto nullUnlessLive = [&](ExprCP expression, TypeCP type) {
+    auto nullUnlessLive = [&](ExprCP expression) {
       expression = atBoundary(expression);
-      return valueIsLive == nullptr
-          ? expression
-          : exprFactory_.makeIf(
-                valueIsLive, expression, builder().makeNull(type));
+      return valueIsLive == nullptr ? expression
+                                    : nullUnless(valueIsLive, expression);
     };
 
     ExprVector finalExpressions;
@@ -3335,13 +3341,10 @@ class Decorrelator : public NodeRewriter<> {
     appendAll(finalExpressions, input->outputColumns());
     for (size_t i = 0; i < numGroupingKeys; ++i) {
       ColumnCP groupingKeyOutput = aggregate->outputColumns()[i];
-      finalExpressions.push_back(
-          nullUnlessLive(groupingKeyOutput, groupingKeyOutput->value().type));
+      finalExpressions.push_back(nullUnlessLive(groupingKeyOutput));
     }
     for (size_t i = 0; i < wraps.size(); ++i) {
-      finalExpressions.push_back(nullUnlessLive(
-          wraps[i].finalExpression,
-          aggregate->outputColumns()[numGroupingKeys + i]->value().type));
+      finalExpressions.push_back(nullUnlessLive(wraps[i].finalExpression));
     }
     if (node->isLeft()) {
       ExprCP includeMarker = atBoundary(includeMarkerValue);

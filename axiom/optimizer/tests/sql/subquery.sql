@@ -306,6 +306,21 @@ SELECT a FROM w WHERE b NOT IN (SELECT d FROM x WHERE x.c = w.a)
 -- session: optimizer.broadcast_size_limit = 0B
 SELECT a, b IN (SELECT d FROM x WHERE x.c > w.a) FROM w
 ----
+-- A scalar subquery over no rows is NULL, also when it selects a correlated
+-- EXISTS, NOT EXISTS, IN or NOT IN. Over one row it is that row's EXISTS, and
+-- one subquery can have one row for some outer rows and none for others.
+-- error_v1: Correlated conjuncts referencing multiple outer tables are not supported
+SELECT
+  a,
+  (SELECT EXISTS(SELECT 1 FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a > 100),
+  (SELECT NOT EXISTS(SELECT 1 FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a > 100),
+  (SELECT 1 IN (SELECT u.a FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a > 100),
+  (SELECT 1 NOT IN (SELECT u.a FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a > 100),
+  (SELECT EXISTS(SELECT 1 FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a = t.a),
+  (SELECT EXISTS(SELECT 1 FROM u WHERE u.a = v.a + t.a) FROM u AS v WHERE v.a = t.a),
+  (SELECT EXISTS(SELECT 1 FROM u WHERE u.a = t.a) FROM u AS v WHERE v.a = t.b / 10)
+FROM t
+----
 -- A scalar subquery over more than one row fails, whether or not a projection
 -- sits over the rows.
 -- error_v1: Expected single row of input. Received 2 rows.

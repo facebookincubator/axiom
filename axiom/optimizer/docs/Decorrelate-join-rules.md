@@ -121,8 +121,9 @@ semantics). Body's Join output becomes that row's value(s). Outer's
     NULL right cols), so applyB's marker must not gate inclusion.
   - Body kLeftSemiProject: `applyB` is itself kLeftSemiProject and has
     no `includeMarker`; it writes the body's mark for every row `applyA`
-    produced. With no filter on that mark, `applyA.includeMarker` alone
-    gates inclusion. A filter on the mark (`WHERE x IN (...)` inside the
+    produced, including `applyA`'s pad row. With no filter on that mark,
+    `applyA.includeMarker` alone gates inclusion, and the outer reads the
+    mark as `IF(applyA.includeMarker, mark, NULL)`. A filter on the mark (`WHERE x IN (...)` inside the
     subquery) selects among body rows, so inclusion becomes
     `COALESCE(applyA.includeMarker AND markFilter, false)` and the chain
     runs the per-outer pad collapse of §"INNER pad-row drop" to keep one
