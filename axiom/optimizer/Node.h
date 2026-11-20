@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include <folly/ConstexprMath.h>
 #include <folly/CppAttributes.h>
 #include <folly/Function.h>
 
@@ -580,10 +581,9 @@ class Limit : public Node {
   }
 
   /// Returns offset + count, saturated at INT64_MAX so a no-limit count
-  /// (INT64_MAX) does not overflow. The '>=' matches the no-limit boundary used
-  /// by RelationOp's isNoLimit.
+  /// (INT64_MAX) does not overflow.
   int64_t offsetPlusCount() const {
-    return count_ >= INT64_MAX - offset_ ? INT64_MAX : offset_ + count_;
+    return folly::constexpr_add_overflow_clamped(offset_, count_);
   }
 
   /// True when offsetPlusCount() is finite, so a partial Limit can keep that
@@ -758,9 +758,7 @@ class TopN : public Node {
   /// Returns offset + count, saturated at INT64_MAX so a no-limit count does
   /// not overflow.
   int64_t offsetPlusCount() const {
-    return count_ >= std::numeric_limits<int64_t>::max() - offset_
-        ? std::numeric_limits<int64_t>::max()
-        : offset_ + count_;
+    return folly::constexpr_add_overflow_clamped(offset_, count_);
   }
 
   std::span<const NodeCP> inputs() const override {

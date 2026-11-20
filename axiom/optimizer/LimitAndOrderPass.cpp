@@ -21,6 +21,8 @@
 #include <optional>
 #include <utility>
 
+#include <folly/ConstexprMath.h>
+
 #include "axiom/optimizer/NodeRewriter.h"
 
 namespace facebook::axiom::optimizer {
@@ -46,13 +48,19 @@ constexpr int64_t kNoCount = std::numeric_limits<int64_t>::max();
 struct LimitBound {
   int64_t offset;
   int64_t count;
+
+  // Returns offset + count, saturated at kNoCount.
+  int64_t offsetPlusCount() const {
+    return folly::constexpr_add_overflow_clamped(offset, count);
+  }
 };
 
 // Composes two bounds: 'inner' is applied first, then 'outer' on its output.
 // inner yields 'inner.count' rows after skipping 'inner.offset'; outer skips
 // 'outer.offset' more of those and takes 'outer.count'.
 LimitBound collapse(const LimitBound& outer, const LimitBound& inner) {
-  const int64_t offset = inner.offset + outer.offset;
+  const int64_t offset =
+      folly::constexpr_add_overflow_clamped(inner.offset, outer.offset);
   int64_t count;
   if (inner.count == kNoCount) {
     // Inner unbounded: outer's bound governs the rows after outer.offset.
@@ -178,8 +186,8 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
   NodeCP rewriteUnionAll(const UnionAll* node, LimitContext& context) override {
     const auto pending = std::exchange(context.pending, std::nullopt);
     std::optional<LimitBound> legBound;
-    if (pending && pending->count != kNoCount) {
-      legBound = LimitBound{0, pending->offset + pending->count};
+    if (pending && pending->offsetPlusCount() != kNoCount) {
+      legBound = LimitBound{0, pending->offsetPlusCount()};
     }
 
     NodeVector newInputs;

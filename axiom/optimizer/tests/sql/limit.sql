@@ -85,6 +85,24 @@ SELECT a, b FROM t LIMIT 0
 -- LIMIT ALL means "no limit" — returns all rows.
 SELECT * FROM t LIMIT ALL
 ----
+-- ORDER BY with a LIMIT above 2147483647 keeps every row.
+-- ordered
+SELECT b FROM t ORDER BY b LIMIT 3000000000
+----
+-- Same, with an OFFSET whose sum with the LIMIT exceeds the largest BIGINT.
+-- ordered
+SELECT b FROM t ORDER BY b OFFSET 12 LIMIT 9223372036854775805
+----
+-- Same, without ORDER BY, over UNION ALL.
+-- count 27
+SELECT b FROM (SELECT b FROM t UNION ALL SELECT b FROM t)
+OFFSET 3 LIMIT 9223372036854775805
+----
+-- Stacked offsets that add up past the largest BIGINT skip every row.
+-- count 0
+-- disabled_v1: v1 overflows adding the offsets
+SELECT b FROM (SELECT b FROM t OFFSET 9223372036854775800) OFFSET 100
+----
 -- LIMIT 0 in CTE with self-join.
 -- count 0
 WITH final AS (SELECT a, SUM(b) AS total FROM t GROUP BY 1 LIMIT 0)
