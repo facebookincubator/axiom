@@ -711,12 +711,21 @@ TEST_F(ExpressionParserTest, switch) {
       parseExpr("case when 1 > 2 then 100 when 3 > 4 then 200 else 300 end")
           ->toString());
 
-  // NULL condition can never be true. Drop the clause.
-  EXPECT_EQ("null", parseExpr("case when null then 1 end")->toString());
-  EXPECT_EQ("2", parseExpr("case when null then 1 else 2 end")->toString());
+  // An UNKNOWN condition, such as NULL, is coerced to boolean, and the CASE
+  // keeps the type of its results.
+  for (const auto& [sql, type] : std::vector<std::pair<std::string, TypePtr>>{
+           {"case when null then 1 end", INTEGER()},
+           {"case when null then 1 else 2 end", INTEGER()},
+           {"case when null then 'x' end", VARCHAR()},
+           {"case when null then 0 when 1 > 2 then 100 end", INTEGER()},
+           {"case when if(true, null) then 1 end", INTEGER()},
+       }) {
+    SCOPED_TRACE(sql);
+    VELOX_EXPECT_EQ_TYPES(parseExpr(sql)->type(), type);
+  }
   EXPECT_EQ(
-      "SWITCH(gt(1, 2), 100)",
-      parseExpr("case when null then 0 when 1 > 2 then 100 end")->toString());
+      "SWITCH(CAST(null AS BOOLEAN), 1)",
+      parseExpr("case when null then 1 end")->toString());
 
   // Simple CASE (CASE x WHEN v THEN result) desugars to SWITCH(eq(x, v), ...).
   EXPECT_EQ(

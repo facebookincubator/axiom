@@ -129,6 +129,12 @@ class ExprResolver {
       const velox::core::ExprPtr& expr,
       const InputNameResolver& inputNameResolver) const;
 
+  /// Returns 'predicate' if it is boolean, and otherwise 'predicate' coerced to
+  /// boolean. A predicate that cannot be coerced to boolean is a user error.
+  /// 'label' names the predicate in error messages.
+  ExprPtr coerceToBoolean(const ExprPtr& predicate, std::string_view label)
+      const;
+
   /// Resolves an aggregate function call. Resolves argument types, looks up
   /// the aggregate function signature, resolves the filter and ordering
   /// expressions, and produces an AggregateExpr.
