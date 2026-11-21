@@ -108,3 +108,19 @@ SELECT s[1] AS x, s[1] AS y FROM (SELECT sequence(1, 5) AS s FROM t)
 -- `-1 * random()` is at most 0, so every row passes and the answer is the plain
 -- self-join count, which makes the query comparable despite `random()`.
 SELECT count(*) FROM t t1 JOIN t t2 ON t1.a = t2.a WHERE t1.a > -1 * random()
+----
+-- A simple CASE evaluates its operand once per row: random(3) is 0, 1 or 2, so
+-- a CASE that lists all three values never returns NULL.
+-- error_v1: Non-deterministic expression reused
+-- count 0
+SELECT c
+FROM (
+  SELECT
+    CASE random(3)
+      WHEN 0 THEN 'a'
+      WHEN 1 THEN 'b'
+      WHEN 2 THEN 'c'
+    END AS c
+  FROM unnest(sequence(1, 1000)) AS u(x)
+)
+WHERE c IS NULL

@@ -484,6 +484,18 @@ ExprPtr tryResolveSpecialForm(
         resolvedInputs.at(1)->type(), SpecialForm::kSwitch, resolvedInputs);
   }
 
+  if (name == velox::expression::kCase) {
+    if (coercer != nullptr) {
+      return resolveSpecialFormWithCoercions(
+          SpecialForm::kCase,
+          velox::expression::kCase,
+          resolvedInputs,
+          *coercer);
+    }
+    return std::make_shared<SpecialFormExpr>(
+        resolvedInputs.at(2)->type(), SpecialForm::kCase, resolvedInputs);
+  }
+
   if (name == "subscript" && resolvedInputs.at(0)->type()->isRow()) {
     return resolveDereference(resolvedInputs);
   }

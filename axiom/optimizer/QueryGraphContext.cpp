@@ -84,6 +84,7 @@ QueryGraphContext::QueryGraphContext(
   addName(SpecialFormCallNames::kCoalesce);
   addName(SpecialFormCallNames::kIf);
   addName(SpecialFormCallNames::kSwitch);
+  addName(SpecialFormCallNames::kCase);
   addName(SpecialFormCallNames::kIn);
   addName(SpecialFormCallNames::kRowConstructor);
 

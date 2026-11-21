@@ -733,14 +733,25 @@ TEST_F(ExpressionParserTest, switch) {
       "SWITCH(CAST(null AS BOOLEAN), 1)",
       parseExpr("case when null then 1 end")->toString());
 
-  // Simple CASE (CASE x WHEN v THEN result) desugars to SWITCH(eq(x, v), ...).
+  // Simple CASE (CASE x WHEN v THEN result) parses to CASE(x, v, result, ...,
+  // [else]).
   EXPECT_EQ(
-      "SWITCH(eq(1, 1), 100, eq(1, 2), 200)",
+      "CASE(1, 1, 100, 2, 200)",
       parseExpr("case 1 when 1 then 100 when 2 then 200 end")->toString());
   EXPECT_EQ(
-      "SWITCH(eq(1, 1), 100, eq(1, 2), 200, 300)",
+      "CASE(1, 1, 100, 2, 200, 300)",
       parseExpr("case 1 when 1 then 100 when 2 then 200 else 300 end")
           ->toString());
+
+  // The operand and the WHEN values are coerced to a common type.
+  EXPECT_EQ(
+      "CASE(CAST(1 AS BIGINT), 3000000000, 100)",
+      parseExpr("case 1 when 3000000000 then 100 end")->toString());
+
+  // So are the results.
+  EXPECT_EQ(
+      "CASE(1, 1, CAST(1 AS DOUBLE), 2.5)",
+      parseExpr("case 1 when 1 then 1 else 2.5 end")->toString());
 }
 
 TEST_F(ExpressionParserTest, in) {

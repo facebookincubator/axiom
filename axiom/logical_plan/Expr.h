@@ -385,7 +385,7 @@ enum class SpecialForm {
   /// evaluates to false).
   ///
   /// Doesn't guarantee the order in which inputs are evaluated.
-  kAnd = 0,
+  kAnd,
 
   /// Logical OR. Requires two or more boolean inputs. Commutative. The result
   /// doesn’t depend on the order of inputs.
@@ -411,7 +411,7 @@ enum class SpecialForm {
   /// evaluates to true).
   ///
   /// Doesn't guarantee the order in which inputs are evaluated.
-  kOr = 1,
+  kOr,
 
   /// Converts value of one type into another. Requires exactly one input. The
   /// input type is the source (from) type. The output type is the target (to)
@@ -422,7 +422,7 @@ enum class SpecialForm {
   ///
   /// The exact semantics including the set of supported conversions are
   /// implementation specific and differ between applications.
-  kCast = 2,
+  kCast,
 
   /// Like CAST, but returns NULL if conversion fails. Requires exactly one
   /// input.
@@ -438,7 +438,7 @@ enum class SpecialForm {
   ///   cast(10 / 0 as double) => Division by zero
   ///   try_cast(10 / 0 as double) => Division by zero
   ///   try(cast(10 / 0 as double)) => NULL
-  kTryCast = 3,
+  kTryCast,
 
   /// Returns the value of the input expression or NULL if input throws.
   /// Requires exactly one input.
@@ -447,17 +447,17 @@ enum class SpecialForm {
   ///
   ///   10 / 0 => Division by zero
   ///   try(10 / 0) => NULL
-  kTry = 4,
+  kTry,
 
   /// Returns the value of the struct field. Requires two inputs: an expression
   /// that returns a struct (ROW type) and a constant name or index of the
   /// field. Index must be a zero-based integer.
-  kDereference = 5,
+  kDereference,
 
   /// Returns the first non-null value or NULL if all inputs are NULL. Requires
   /// two or more arguments. All arguments must be of the same type. Doesn’t
   /// evaluate arguments past the first non-NULL.
-  kCoalesce = 6,
+  kCoalesce,
 
   /// IF is a special case of SWITCH.
   ///
@@ -474,7 +474,7 @@ enum class SpecialForm {
   ///
   /// Evaluates “then" expression only on rows that pass “condition". Evaluates
   /// “else" expression only on rows that do not pass “condition".
-  kIf = 7,
+  kIf,
 
   /// case
   ///   when condition then result
@@ -492,9 +492,29 @@ enum class SpecialForm {
   /// returns the result of evaluating the corresponding then clause. If no
   /// conditions are true, returns the result of evaluating the else clause or
   /// NULL if the else clause is not specified.
-  kSwitch = 8,
+  kSwitch,
 
-  kStar = 9,
+  /// case subject
+  ///   when value then result
+  ///   [when ...]
+  ///   [else result]
+  /// end
+  ///
+  /// Takes three or more inputs: subject, value1, then1, value2, then2,..
+  /// else.
+  ///
+  /// The subject and all WHEN values must have the same type. Types of all the
+  /// then clauses and the else clause must be the same and match the output of
+  /// CASE. Else clause is optional.
+  ///
+  /// Evaluates the subject once per row, then compares it with each WHEN value
+  /// from left to right until one is equal and returns the result of
+  /// evaluating the corresponding then clause. If none is equal, returns the
+  /// result of evaluating the else clause or NULL if the else clause is not
+  /// specified.
+  kCase,
+
+  kStar,
 
   /// Implements the SQL IN operator to check if a single value exists in a
   /// subquery result or in a list of constants.
@@ -513,7 +533,7 @@ enum class SpecialForm {
   /// Example:
   ///   x IN (SELECT y FROM table)
   ///   x IN (1, 2, 3)
-  kIn = 10,
+  kIn,
 
   /// Tests whether a subquery returns any rows.
   /// Corresponds to the SQL EXISTS operator. Takes exactly one input:
@@ -525,7 +545,7 @@ enum class SpecialForm {
   ///
   /// Example:
   ///   EXISTS (SELECT * FROM table WHERE condition)
-  kExists = 11,
+  kExists,
 
   /// NULLIF(value, comparand). Returns NULL if value equals comparand,
   /// otherwise returns value.
@@ -536,7 +556,7 @@ enum class SpecialForm {
   ///
   /// Example:
   ///   NULLIF(x, 0) => NULL if x = 0, else x
-  kNullIf = 12,
+  kNullIf,
 
   /// Represents IN with the list held as one ARRAY constant. The result
   /// matches kIn with the same values as a list, including for NULLs. The
@@ -549,14 +569,14 @@ enum class SpecialForm {
   ///
   /// Example:
   ///   x IN (1, 2, 3) => IN_ARRAY(x, [1, 2, 3])
-  kInArray = 13,
+  kInArray,
 
   /// Builds a ROW with one field per input. The output type is a ROW whose
   /// field types are the input types, in order.
   ///
   /// Example:
   ///   ROW(1, 'a') => ROW_CONSTRUCTOR(1, 'a')
-  kRowConstructor = 14,
+  kRowConstructor,
 };
 
 AXIOM_DECLARE_ENUM_NAME(SpecialForm)

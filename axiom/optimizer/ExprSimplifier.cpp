@@ -24,6 +24,7 @@
 #include "axiom/optimizer/ExprFactory.h"
 #include "axiom/optimizer/FunctionRegistry.h"
 #include "axiom/optimizer/QueryGraph.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -31,6 +32,11 @@
 namespace facebook::axiom::optimizer {
 
 namespace {
+
+// Returns the value of 'expr', which must be a Literal.
+const velox::Variant& literalValue(ExprCP expr) {
+  return expr->as<Literal>()->literal();
+}
 
 // Returns the values of IN arguments '[value, list...]' when the list holds one
 // literal of the value's type per value, the form ExprFactory::makeIn folds.
@@ -48,7 +54,7 @@ std::optional<std::vector<velox::Variant>> literalInValues(
         !args[i]->value().type->equivalent(*args[0]->value().type)) {
       return std::nullopt;
     }
-    values.push_back(args[i]->as<Literal>()->literal());
+    values.push_back(literalValue(args[i]));
   }
   return values;
 }
@@ -145,7 +151,7 @@ std::optional<bool> constantBoolean(ExprCP expr) {
   if (!expr->is(PlanType::kLiteralExpr)) {
     return std::nullopt;
   }
-  const auto& variant = expr->as<Literal>()->literal();
+  const auto& variant = literalValue(expr);
   if (variant.isNull() || variant.kind() != velox::TypeKind::BOOLEAN) {
     return std::nullopt;
   }
@@ -346,8 +352,8 @@ ExprCP tryFoldRandomComparison(Builder& builder, ExprCP expr) {
   if (randomCall->name() != names.random || !randomCall->args().empty()) {
     return expr;
   }
-  const auto result = randomComparisonResult(
-      comparison->name(), args[1]->as<Literal>()->literal(), names);
+  const auto result =
+      randomComparisonResult(comparison->name(), literalValue(args[1]), names);
   return result.has_value() ? builder.makeBoolean(*result) : expr;
 }
 
@@ -362,7 +368,8 @@ ExprCP ExprSimplifier::simplify(ExprCP expr) {
   if (expr->is(PlanType::kCallExpr)) {
     const auto* call = expr->as<Call>();
     if (call->name() == SpecialFormCallNames::kIf ||
-        call->name() == SpecialFormCallNames::kSwitch) {
+        call->name() == SpecialFormCallNames::kSwitch ||
+        call->name() == SpecialFormCallNames::kCase) {
       expr = simplifyConditional(call);
       expr = tryFoldConjunct(tryFoldConstant(expr));
       simplified_.emplace(original, expr);
@@ -412,35 +419,107 @@ ExprCP ExprSimplifier::simplify(ExprCP expr) {
   return expr;
 }
 
+namespace {
+// Returns whether a literal IF or SWITCH condition selects its result, or
+// std::nullopt if 'condition' is not a literal. NULL selects nothing.
+std::optional<bool> tryBooleanLiteral(ExprCP condition) {
+  if (!condition->is(PlanType::kLiteralExpr)) {
+    return std::nullopt;
+  }
+  return constantBoolean(condition).value_or(false);
+}
+
+// Compiles 'expr' and returns its value when the compiler folds it to a
+// constant. Returns nullptr otherwise, and when evaluating constant arguments
+// fails (e.g. division by zero, invalid cast), so the error surfaces at
+// execution.
+velox::VectorPtr tryEvaluateConstant(
+    velox::core::ExpressionEvaluator& evaluator,
+    const velox::core::TypedExprPtr& expr) {
+  try {
+    auto exprSet = evaluator.compile(expr);
+    const auto& first = *exprSet->exprs().front();
+    if (!first.isConstant()) {
+      return nullptr;
+    }
+    return static_cast<const velox::exec::ConstantExpr&>(first).value();
+  } catch (const velox::VeloxException&) {
+    return nullptr;
+  }
+}
+
+// Returns whether CASE's literal 'subject' equals its literal 'when' value, or
+// std::nullopt if either is not a literal or the comparison does not fold.
+// NULL equals nothing.
+std::optional<bool> tryMatchConstants(
+    velox::core::ExpressionEvaluator& evaluator,
+    Name equality,
+    ExprCP subject,
+    ExprCP when) {
+  if (!subject->is(PlanType::kLiteralExpr) ||
+      !when->is(PlanType::kLiteralExpr)) {
+    return std::nullopt;
+  }
+
+  // A Variant does not carry its full type, so compare with the registered
+  // equality function.
+  ExprEmitter emitter{evaluator.pool()};
+  const auto result = tryEvaluateConstant(
+      evaluator,
+      std::make_shared<velox::core::CallTypedExpr>(
+          velox::BOOLEAN(),
+          std::string{equality},
+          emitter.toTypedExpr(subject),
+          emitter.toTypedExpr(when)));
+  if (result == nullptr) {
+    return std::nullopt;
+  }
+  return !result->isNullAt(0) &&
+      result->as<velox::SimpleVector<bool>>()->valueAt(0);
+}
+} // namespace
+
 ExprCP ExprSimplifier::simplifyConditional(const Call* call) {
+  const auto& inputs = call->args();
+  const bool isCase = call->name() == SpecialFormCallNames::kCase;
+
+  // CASE starts with its subject, which every row evaluates.
   ExprVector args;
-  args.reserve(call->args().size());
-  const size_t numConditionalArgs = call->args().size() / 2 * 2;
+  args.reserve(inputs.size());
+  const size_t firstWhen{isCase ? 1UL : 0UL};
+  if (isCase) {
+    args.push_back(simplify(inputs[0]));
+  }
+
+  const size_t numCases{(inputs.size() - firstWhen) / 2};
   ExprCP elseResult{nullptr};
-  for (size_t i = 0; i < numConditionalArgs; i += 2) {
-    ExprCP condition = simplify(call->args()[i]);
-    if (condition->is(PlanType::kLiteralExpr)) {
-      const auto& value = condition->as<Literal>()->literal();
-      VELOX_CHECK_EQ(value.kind(), velox::TypeKind::BOOLEAN);
-      if (value.isNull() || !value.value<bool>()) {
+  for (size_t i = 0; i < numCases; ++i) {
+    const size_t index{firstWhen + 2 * i};
+    ExprCP when = simplify(inputs[index]);
+    const auto selected = isCase
+        ? tryMatchConstants(
+              evaluator_, builder_.functionNames().equality, args[0], when)
+        : tryBooleanLiteral(when);
+    if (selected.has_value()) {
+      if (!selected.value()) {
         continue;
       }
 
-      elseResult = simplify(call->args()[i + 1]);
+      elseResult = simplify(inputs[index + 1]);
       break;
     }
 
-    args.push_back(condition);
-    args.push_back(simplify(call->args()[i + 1]));
+    args.push_back(when);
+    args.push_back(simplify(inputs[index + 1]));
   }
 
   if (elseResult == nullptr) {
-    elseResult = call->args().size() % 2 == 1
-        ? simplify(call->args().back())
+    elseResult = (inputs.size() - firstWhen) % 2 == 1
+        ? simplify(inputs.back())
         : builder_.makeNull(call->value().type);
   }
 
-  if (args.empty()) {
+  if (args.size() == firstWhen) {
     return elseResult;
   }
   args.push_back(elseResult);
@@ -454,7 +533,7 @@ bool ExprSimplifier::isKnownNonNull(
     return nonNullColumns.contains(expr);
   }
   if (expr->is(PlanType::kLiteralExpr)) {
-    return !expr->as<Literal>()->literal().isNull();
+    return !literalValue(expr).isNull();
   }
   if (expr->is(PlanType::kCallExpr) &&
       expr->as<Call>()->name() == SpecialFormCallNames::kCoalesce) {
@@ -599,7 +678,7 @@ bool ExprSimplifier::simplifyFilter(ExprCP predicate, ExprVector& into) {
   for (ExprCP conjunct : flattened) {
     ExprCP simplified = simplify(conjunct);
     if (simplified->is(PlanType::kLiteralExpr)) {
-      const auto& variant = simplified->as<Literal>()->literal();
+      const auto& variant = literalValue(simplified);
       VELOX_CHECK_EQ(
           variant.kind(),
           velox::TypeKind::BOOLEAN,
@@ -701,7 +780,7 @@ ExprCP ExprSimplifier::tryExpandRowEquality(ExprCP expr) {
   }
 
   const auto* rowConstructor = lhs->as<Call>();
-  const auto& literal = rhs->as<Literal>()->literal();
+  const auto& literal = literalValue(rhs);
   if (!rowConstructor->isRowConstructor() || literal.isNull()) {
     return nullptr;
   }
@@ -738,8 +817,7 @@ ExprCP ExprSimplifier::tryFoldConstant(ExprCP expr) {
         call->name(), SpecialFormCallNames::isSpecialForm(call->name()));
     if (!ownFunctions.contains(FunctionSet::kNonDefaultNullBehavior)) {
       for (ExprCP arg : call->args()) {
-        if (arg->is(PlanType::kLiteralExpr) &&
-            arg->as<Literal>()->literal().isNull()) {
+        if (arg->is(PlanType::kLiteralExpr) && literalValue(arg).isNull()) {
           return builder_.makeNull(call->value().type);
         }
       }
@@ -750,32 +828,17 @@ ExprCP ExprSimplifier::tryFoldConstant(ExprCP expr) {
     return expr;
   }
 
-  velox::Variant variant;
-  velox::TypePtr type;
-  try {
-    auto typedExpr = ExprEmitter{evaluator_.pool()}.toTypedExpr(expr);
-    auto exprSet = evaluator_.compile(typedExpr);
-    const auto& first = *exprSet->exprs().front();
-    if (!first.isConstant()) {
-      return expr;
-    }
-    const auto& constantExpr =
-        static_cast<const velox::exec::ConstantExpr&>(first);
-    variant = constantExpr.value()->variantAt(0);
-    type = constantExpr.type();
-  } catch (const velox::VeloxException&) {
-    // Data-dependent evaluation failure on constant args (e.g.
-    // division-by-zero, invalid cast). Leave the call unchanged so the
-    // error surfaces at execution.
+  const auto value = tryEvaluateConstant(
+      evaluator_, ExprEmitter{evaluator_.pool()}.toTypedExpr(expr));
+  if (value == nullptr) {
     return expr;
   }
-
-  return builder_.makeLiteral(std::move(variant), toType(type));
+  return builder_.makeLiteral(value->variantAt(0), toType(value->type()));
 }
 
 velox::Variant ExprSimplifier::evaluate(ExprCP expr) {
   if (expr->is(PlanType::kLiteralExpr)) {
-    return expr->as<Literal>()->literal();
+    return literalValue(expr);
   }
 
   VELOX_CHECK(

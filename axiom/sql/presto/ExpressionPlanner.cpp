@@ -1131,14 +1131,12 @@ lp::ExprApi ExpressionPlanner::toExpr(
     case NodeType::kSimpleCaseExpression: {
       auto* simpleCase = node->as<SimpleCaseExpression>();
 
-      const auto operand = toExpr(simpleCase->operand(), options);
-
       std::vector<lp::ExprApi> inputs;
-      inputs.reserve(1 + simpleCase->whenClauses().size());
+      inputs.reserve(2 + 2 * simpleCase->whenClauses().size());
+      inputs.emplace_back(toExpr(simpleCase->operand(), options));
 
       for (const auto& clause : simpleCase->whenClauses()) {
-        inputs.emplace_back(
-            lp::Call("eq", operand, toExpr(clause->operand(), options)));
+        inputs.emplace_back(toExpr(clause->operand(), options));
         inputs.emplace_back(toExpr(clause->result(), options));
       }
 
@@ -1146,7 +1144,7 @@ lp::ExprApi ExpressionPlanner::toExpr(
         inputs.emplace_back(toExpr(simpleCase->defaultValue(), options));
       }
 
-      return lp::Call("switch", inputs);
+      return lp::Call("case", inputs);
     }
 
     case NodeType::kSearchedCaseExpression: {

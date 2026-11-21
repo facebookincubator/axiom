@@ -97,10 +97,11 @@ ExprCP JoinInputRewriter::rewriteCall(const Call* call) {
     return call;
   }
 
-  // `if`, `switch` and `coalesce` evaluate their first argument for every row
-  // and the rest only for the rows that one selects.
+  // `if`, `switch`, `case` and `coalesce` evaluate their first argument for
+  // every row and the rest only for some rows.
   if (name == SpecialFormCallNames::kIf ||
       name == SpecialFormCallNames::kSwitch ||
+      name == SpecialFormCallNames::kCase ||
       name == SpecialFormCallNames::kCoalesce) {
     ExprVector newArgs = call->args();
     newArgs[0] = rewrite(newArgs[0]);

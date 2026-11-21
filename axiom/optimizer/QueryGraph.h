@@ -510,6 +510,7 @@ struct SpecialFormCallNames {
   static const char* kCoalesce;
   static const char* kIf;
   static const char* kSwitch;
+  static const char* kCase;
 
   static const char* kIn;
 
@@ -535,6 +536,8 @@ struct SpecialFormCallNames {
         return SpecialFormCallNames::kIf;
       case logical_plan::SpecialForm::kSwitch:
         return SpecialFormCallNames::kSwitch;
+      case logical_plan::SpecialForm::kCase:
+        return SpecialFormCallNames::kCase;
       case logical_plan::SpecialForm::kIn:
       case logical_plan::SpecialForm::kInArray:
         return SpecialFormCallNames::kIn;
@@ -576,6 +579,9 @@ struct SpecialFormCallNames {
     }
     if (name == kSwitch) {
       return logical_plan::SpecialForm::kSwitch;
+    }
+    if (name == kCase) {
+      return logical_plan::SpecialForm::kCase;
     }
     if (name == kIn) {
       return logical_plan::SpecialForm::kIn;
