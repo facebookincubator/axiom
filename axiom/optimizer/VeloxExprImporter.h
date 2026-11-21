@@ -43,7 +43,6 @@ class VeloxExprImporter {
   Builder& builder_;
   ExprFactory exprFactory_;
   folly::F14FastMap<std::string_view, ColumnCP> columns_;
-  folly::F14FastMap<std::string_view, Name> specialFormNames_;
 };
 
 } // namespace facebook::axiom::optimizer

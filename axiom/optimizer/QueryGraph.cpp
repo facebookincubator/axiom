@@ -21,6 +21,7 @@
 #include "axiom/optimizer/QueryGraph.h"
 #include "folly/hash/Hash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace lp = facebook::axiom::logical_plan;
 
@@ -50,6 +51,50 @@ const char* SpecialFormCallNames::kNullIf = "__nullif";
 const char* SpecialFormCallNames::kDereference = "__dereference";
 // static
 const char* SpecialFormCallNames::kRowConstructor = "__row_constructor";
+
+namespace {
+const folly::F14FastMap<logical_plan::SpecialForm, const char*>&
+veloxSpecialFormNames() {
+  using logical_plan::SpecialForm;
+  static const folly::F14FastMap<SpecialForm, const char*> kNames = {
+      {SpecialForm::kAnd, velox::expression::kAnd},
+      {SpecialForm::kOr, velox::expression::kOr},
+      {SpecialForm::kCast, velox::expression::kCast},
+      {SpecialForm::kTryCast, velox::expression::kTryCast},
+      {SpecialForm::kTry, velox::expression::kTry},
+      {SpecialForm::kCoalesce, velox::expression::kCoalesce},
+      {SpecialForm::kIf, velox::expression::kIf},
+      {SpecialForm::kSwitch, velox::expression::kSwitch},
+      {SpecialForm::kIn, velox::expression::kIn},
+      {SpecialForm::kNullIf, velox::expression::kNullIf},
+      {SpecialForm::kRowConstructor, velox::expression::kRowConstructor},
+  };
+  return kNames;
+}
+} // namespace
+
+// static
+const char* SpecialFormCallNames::toVeloxName(logical_plan::SpecialForm form) {
+  const auto it = veloxSpecialFormNames().find(form);
+  VELOX_CHECK(
+      it != veloxSpecialFormNames().end(),
+      "No Velox special form for: {}",
+      logical_plan::SpecialFormName::toName(form));
+  return it->second;
+}
+
+// static
+const char* SpecialFormCallNames::tryFromVeloxName(std::string_view veloxName) {
+  static const auto kCallNames = [] {
+    folly::F14FastMap<std::string_view, const char*> callNames;
+    for (const auto& [form, name] : veloxSpecialFormNames()) {
+      callNames.emplace(name, toCallName(form));
+    }
+    return callNames;
+  }();
+  const auto it = kCallNames.find(veloxName);
+  return it == kCallNames.end() ? nullptr : it->second;
+}
 
 // static
 ColumnCP Column::createForSymbol(Name symbol, const Value& value) {

@@ -21,14 +21,12 @@
 #include <fmt/format.h>
 
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
-#include "velox/expression/ExprConstants.h"
 
 namespace facebook::axiom::functions::prestosql {
 
 using optimizer::FunctionMetadata;
 using optimizer::LambdaArg;
 using optimizer::LambdaInfo;
-namespace lp = facebook::axiom::logical_plan;
 
 namespace {
 
@@ -198,25 +196,6 @@ void PrestoFunctions::registerAll(
   registry.registerReversibleFunction(fullName("lte"), fullName("gte"));
   registry.registerReversibleFunction(fullName("plus"));
   registry.registerReversibleFunction(fullName("multiply"));
-
-  // Presto names special forms without a prefix.
-  registry.registerSpecialForm(lp::SpecialForm::kAnd, velox::expression::kAnd);
-  registry.registerSpecialForm(lp::SpecialForm::kOr, velox::expression::kOr);
-  registry.registerSpecialForm(
-      lp::SpecialForm::kCast, velox::expression::kCast);
-  registry.registerSpecialForm(
-      lp::SpecialForm::kTryCast, velox::expression::kTryCast);
-  registry.registerSpecialForm(lp::SpecialForm::kTry, velox::expression::kTry);
-  registry.registerSpecialForm(lp::SpecialForm::kIf, velox::expression::kIf);
-  registry.registerSpecialForm(
-      lp::SpecialForm::kCoalesce, velox::expression::kCoalesce);
-  registry.registerSpecialForm(
-      lp::SpecialForm::kSwitch, velox::expression::kSwitch);
-  registry.registerSpecialForm(lp::SpecialForm::kIn, "in");
-  registry.registerSpecialForm(
-      lp::SpecialForm::kNullIf, velox::expression::kNullIf);
-  registry.registerSpecialForm(
-      lp::SpecialForm::kRowConstructor, velox::expression::kRowConstructor);
 }
 
 // static

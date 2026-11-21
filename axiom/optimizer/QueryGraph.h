@@ -596,6 +596,14 @@ struct SpecialFormCallNames {
   static bool isSpecialForm(const char* name) {
     return tryFromCallName(name).has_value();
   }
+
+  /// Returns the name of the Velox special form that evaluates 'form'. Velox
+  /// names special forms the same way for every SQL dialect.
+  static const char* toVeloxName(logical_plan::SpecialForm form);
+
+  /// Returns the call name of the special form Velox evaluates as
+  /// 'veloxName', or nullptr if 'veloxName' names a function.
+  static const char* tryFromVeloxName(std::string_view veloxName);
 };
 
 /// True if 'expr' is a call to function 'name'.

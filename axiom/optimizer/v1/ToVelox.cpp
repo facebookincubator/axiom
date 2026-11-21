@@ -624,7 +624,7 @@ velox::core::TypedExprPtr ToVelox::toAnd(const ExprVector& exprs) {
 
   return std::make_shared<velox::core::CallTypedExpr>(
       velox::BOOLEAN(),
-      specialForm(lp::SpecialForm::kAnd),
+      SpecialFormCallNames::toVeloxName(lp::SpecialForm::kAnd),
       toTypedExprs(exprs));
 }
 
@@ -913,7 +913,7 @@ velox::core::TypedExprPtr ToVelox::toTypedExprUncached(
         return std::make_shared<velox::core::CallTypedExpr>(
             toTypePtr(expr->value().type),
             std::move(inputs),
-            specialForm(*form));
+            SpecialFormCallNames::toVeloxName(*form));
       }
 
       return std::make_shared<velox::core::CallTypedExpr>(
@@ -1429,7 +1429,7 @@ velox::core::TypedExprPtr toAndWithAliases(
     result = std::make_shared<velox::core::CallTypedExpr>(
         velox::BOOLEAN(),
         std::move(conjuncts),
-        specialForm(lp::SpecialForm::kAnd));
+        SpecialFormCallNames::toVeloxName(lp::SpecialForm::kAnd));
   }
 
   folly::F14FastSet<Name> usedFieldNames;

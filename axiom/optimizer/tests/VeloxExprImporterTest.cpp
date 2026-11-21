@@ -54,8 +54,8 @@ TEST_F(VeloxExprImporterTest, expressions) {
         BIGINT(), Variant(int64_t{1}));
     const auto aGreaterThanOne = std::make_shared<core::CallTypedExpr>(
         BOOLEAN(), "gt", std::vector<core::TypedExprPtr>{a, one});
-    const auto& andName = queryCtx()->functionRegistry().specialForm(
-        logical_plan::SpecialForm::kAnd);
+    const std::string andName{
+        SpecialFormCallNames::toVeloxName(logical_plan::SpecialForm::kAnd)};
 
     const std::vector<std::pair<core::TypedExprPtr, std::string>> cases{
         {a, "a"},
