@@ -246,13 +246,6 @@ bool FunctionRegistry::registerDenseRank(std::string_view name) {
   return true;
 }
 
-bool FunctionRegistry::registerSpecialForm(
-    lp::SpecialForm specialForm,
-    std::string_view name) {
-  VELOX_USER_CHECK(!name.empty());
-  return specialForms_.emplace(specialForm, name).second;
-}
-
 bool FunctionRegistry::registerReversibleFunction(
     std::string_view name,
     std::string_view reverseName) {
@@ -350,10 +343,6 @@ FunctionSet functionBits(Name name, bool specialForm) {
   }
 
   return bits;
-}
-
-const std::string& specialForm(lp::SpecialForm specialForm) {
-  return queryCtx()->functionRegistry().specialForm(specialForm);
 }
 
 } // namespace facebook::axiom::optimizer

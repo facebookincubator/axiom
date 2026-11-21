@@ -340,20 +340,6 @@ class FunctionRegistry {
     return cardinality_;
   }
 
-  const std::string& specialForm(logical_plan::SpecialForm specialForm) const {
-    auto it = specialForms_.find(specialForm);
-    VELOX_USER_CHECK(it != specialForms_.end());
-    return it->second;
-  }
-
-  /// All registered special forms, keyed by SpecialForm with the velox function
-  /// name as value. Lets callers build a reverse (velox name -> special form)
-  /// lookup covering every special form.
-  const folly::F14FastMap<logical_plan::SpecialForm, std::string>&
-  specialForms() const {
-    return specialForms_;
-  }
-
   /// @return a mapping of reversible functions.
   const folly::F14FastMap<std::string, std::string>& reversibleFunctions()
       const {
@@ -601,10 +587,6 @@ class FunctionRegistry {
     return denseRank_;
   }
 
-  bool registerSpecialForm(
-      logical_plan::SpecialForm specialForm,
-      std::string_view name);
-
   /// Registers a function that takes 2 arguments whose order can be changed
   /// without affecting the results, i.e. f(x, y) == f(y, x). For example,
   /// plus, multiple, eq.
@@ -698,7 +680,6 @@ class FunctionRegistry {
   std::optional<std::string> denseRank_;
 
   folly::F14FastMap<std::string, std::string> reversibleFunctions_;
-  folly::F14FastMap<logical_plan::SpecialForm, std::string> specialForms_;
   folly::F14FastMap<std::string, AggregateEmptyResultResolver>
       aggregateEmptyResultResolvers_;
 };
@@ -715,7 +696,5 @@ FunctionSet functionBits(Name name, bool specialForm);
 /// True if 'name' is a remote inference function. Unlike 'functionBits', this
 /// accepts a name that is not a registered function.
 bool isInferenceFunction(Name name);
-
-const std::string& specialForm(logical_plan::SpecialForm specialForm);
 
 } // namespace facebook::axiom::optimizer

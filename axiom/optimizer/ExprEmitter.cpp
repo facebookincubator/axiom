@@ -76,7 +76,7 @@ velox::core::TypedExprPtr tryLowerConstantIn(
   ExprCP list = call->args()[1];
   return std::make_shared<velox::core::CallTypedExpr>(
       velox::BOOLEAN(),
-      specialForm(logical_plan::SpecialForm::kIn),
+      SpecialFormCallNames::toVeloxName(logical_plan::SpecialForm::kIn),
       column,
       std::make_shared<velox::core::ConstantTypedExpr>(
           velox::BaseVector::createConstant(
@@ -124,7 +124,7 @@ velox::core::TypedExprPtr ExprEmitter::callToTypedExpr(
     }
 
     return std::make_shared<velox::core::CallTypedExpr>(
-        resultType, std::move(args), specialForm(*form));
+        resultType, std::move(args), SpecialFormCallNames::toVeloxName(*form));
   }
 
   return std::make_shared<velox::core::CallTypedExpr>(

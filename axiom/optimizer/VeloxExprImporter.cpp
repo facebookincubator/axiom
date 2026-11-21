@@ -18,7 +18,6 @@
 
 #include <folly/ScopeGuard.h>
 
-#include "axiom/optimizer/FunctionRegistry.h"
 #include "velox/core/Expressions.h"
 
 namespace facebook::axiom::optimizer {
@@ -26,13 +25,7 @@ namespace facebook::axiom::optimizer {
 VeloxExprImporter::VeloxExprImporter(
     Builder& builder,
     folly::F14FastMap<std::string_view, ColumnCP> columns)
-    : builder_{builder}, exprFactory_{builder}, columns_{std::move(columns)} {
-  for (const auto& [form, veloxName] :
-       queryCtx()->functionRegistry().specialForms()) {
-    specialFormNames_.emplace(
-        veloxName, SpecialFormCallNames::toCallName(form));
-  }
-}
+    : builder_{builder}, exprFactory_{builder}, columns_{std::move(columns)} {}
 
 ExprCP VeloxExprImporter::importExpr(const velox::core::TypedExprPtr& expr) {
   switch (expr->kind()) {
@@ -92,10 +85,10 @@ ExprCP VeloxExprImporter::importExpr(const velox::core::TypedExprPtr& expr) {
       for (const auto& input : call->inputs()) {
         args.push_back(importExpr(input));
       }
-      const auto specialForm = specialFormNames_.find(call->name());
-      const bool isSpecialForm = specialForm != specialFormNames_.end();
-      const Name name =
-          isSpecialForm ? specialForm->second : toName(call->name());
+      const char* specialForm =
+          SpecialFormCallNames::tryFromVeloxName(call->name());
+      const bool isSpecialForm = specialForm != nullptr;
+      const Name name = isSpecialForm ? specialForm : toName(call->name());
       return exprFactory_.makeCall(
           name, Value(toType(call->type())), std::move(args), isSpecialForm);
     }

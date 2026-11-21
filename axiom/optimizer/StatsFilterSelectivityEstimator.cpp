@@ -67,19 +67,7 @@ class TypedExprPolicy {
 
   explicit TypedExprPolicy(
       const folly::F14FastMap<std::string, TypedColumnStatistics>& columnStats)
-      : columnStats_{columnStats} {
-    // Pushed-down filters carry velox operator names. Comparisons and
-    // is_null/not already match queryCtx()->functionNames() verbatim, but
-    // special forms (and/or/in/...) arrive under their velox names and must be
-    // mapped to the optimizer's canonical SpecialFormCallNames the engine
-    // compares against. Built once from the registry so it covers every special
-    // form, stays dialect-agnostic, and makes name() a single lookup per call.
-    for (const auto& [form, veloxName] :
-         queryCtx()->functionRegistry().specialForms()) {
-      specialFormNames_.emplace(
-          veloxName, SpecialFormCallNames::toCallName(form));
-    }
-  }
+      : columnStats_{columnStats} {}
 
   Value valueOf(const Expr& expr) const {
     TypeCP type = expr->type().get();
@@ -124,9 +112,9 @@ class TypedExprPolicy {
     // Special forms (and/or/in/...) map to the optimizer's canonical sentinels;
     // comparisons and is_null/not already match functionNames() once interned,
     // and the engine compares the returned Name by pointer.
-    auto it = specialFormNames_.find(veloxName);
-    if (it != specialFormNames_.end()) {
-      return it->second;
+    if (const char* specialForm =
+            SpecialFormCallNames::tryFromVeloxName(veloxName)) {
+      return specialForm;
     }
     return toName(veloxName);
   }
@@ -181,9 +169,6 @@ class TypedExprPolicy {
 
  private:
   const folly::F14FastMap<std::string, TypedColumnStatistics>& columnStats_;
-  // velox special-form name -> optimizer sentinel Name, built once at
-  // construction (see the constructor).
-  folly::F14FastMap<std::string, Name> specialFormNames_;
   // Refined per-column Values, written back as conjuncts are estimated.
   mutable folly::F14FastMap<std::string, Value> refined_;
   // Variants materialized from complex (value-vector) constants, keyed by node.
