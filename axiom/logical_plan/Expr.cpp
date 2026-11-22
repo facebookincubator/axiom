@@ -832,6 +832,7 @@ const auto& specialFormNames() {
       {SpecialForm::kNullIf, "NULLIF"},
       {SpecialForm::kInArray, "IN_ARRAY"},
       {SpecialForm::kRowConstructor, "ROW_CONSTRUCTOR"},
+      {SpecialForm::kCase, "CASE"},
   };
   return kNames;
 }
@@ -978,34 +979,44 @@ void validateIfInputs(
   }
 }
 
-void validateSwitchInputs(
+// Validates the WHEN and THEN inputs of SWITCH and CASE, which alternate
+// starting at 'firstWhen', and the optional ELSE input that follows them. Each
+// WHEN input must have type 'whenType'.
+void validateWhenThenInputs(
+    std::string_view form,
     const velox::TypePtr& type,
-    const std::vector<ExprPtr>& inputs) {
-  VELOX_USER_CHECK_GE(inputs.size(), 2, "SWITCH must have at least two inputs");
-
-  const auto numCases = inputs.size() / 2;
+    const std::vector<ExprPtr>& inputs,
+    size_t firstWhen,
+    const velox::TypePtr& whenType) {
+  const size_t numCases{(inputs.size() - firstWhen) / 2};
+  VELOX_USER_CHECK_GE(numCases, 1, "{} must have at least one WHEN", form);
 
   for (size_t i = 0; i < numCases; ++i) {
-    const auto& condition = inputs[2 * i];
-    VELOX_USER_CHECK_EQ(
-        condition->type()->kind(),
-        velox::TypeKind::BOOLEAN,
-        "SWITCH conditions must be boolean");
-
-    const auto& thenClause = inputs[2 * i + 1];
-
+    const auto& when = inputs[firstWhen + 2 * i];
     VELOX_USER_CHECK(
-        type->equivalent(*thenClause->type()),
-        "Then clauses in SWITCH must have the same type as the output of the SWITCH: {} vs. {}",
+        whenType->equivalent(*when->type()),
+        "When clauses in {} must have type {}: {}",
+        form,
+        whenType->toString(),
+        when->type()->toString());
+
+    const auto& then = inputs[firstWhen + 2 * i + 1];
+    VELOX_USER_CHECK(
+        type->equivalent(*then->type()),
+        "Then clauses in {} must have the same type as the output of the {}: {} vs. {}",
+        form,
+        form,
         type->toString(),
-        thenClause->type()->toString());
+        then->type()->toString());
   }
 
-  if (inputs.size() % 2 == 1) {
+  if ((inputs.size() - firstWhen) % 2 == 1) {
     const auto& elseClause = inputs.back();
     VELOX_USER_CHECK(
         type->equivalent(*elseClause->type()),
-        "Else clause in SWITCH must have the same type as the output of the SWITCH: {} vs. {}",
+        "Else clause in {} must have the same type as the output of the {}: {} vs. {}",
+        form,
+        form,
         type->toString(),
         elseClause->type()->toString());
   }
@@ -1113,7 +1124,11 @@ SpecialFormExpr::SpecialFormExpr(
       validateIfInputs(type_, inputs_);
       break;
     case SpecialForm::kSwitch:
-      validateSwitchInputs(type_, inputs_);
+      validateWhenThenInputs("SWITCH", type_, inputs_, 0, velox::BOOLEAN());
+      break;
+    case SpecialForm::kCase:
+      VELOX_USER_CHECK_GE(inputs_.size(), 1, "CASE must have a subject");
+      validateWhenThenInputs("CASE", type_, inputs_, 1, inputs_[0]->type());
       break;
     case SpecialForm::kStar:
       VELOX_USER_CHECK_GE(

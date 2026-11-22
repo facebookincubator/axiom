@@ -44,6 +44,8 @@ const char* SpecialFormCallNames::kIf = "__if";
 // static
 const char* SpecialFormCallNames::kSwitch = "__switch";
 // static
+const char* SpecialFormCallNames::kCase = "__case";
+// static
 const char* SpecialFormCallNames::kIn = "__in";
 // static
 const char* SpecialFormCallNames::kNullIf = "__nullif";
@@ -65,6 +67,7 @@ veloxSpecialFormNames() {
       {SpecialForm::kCoalesce, velox::expression::kCoalesce},
       {SpecialForm::kIf, velox::expression::kIf},
       {SpecialForm::kSwitch, velox::expression::kSwitch},
+      {SpecialForm::kCase, velox::expression::kCase},
       {SpecialForm::kIn, velox::expression::kIn},
       {SpecialForm::kNullIf, velox::expression::kNullIf},
       {SpecialForm::kRowConstructor, velox::expression::kRowConstructor},

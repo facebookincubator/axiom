@@ -376,6 +376,30 @@ TEST_P(PlanTest, specialFormConstantFold) {
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
+
+  // A simple CASE keeps only the results its literal subject and WHEN values
+  // can select. NULL matches no WHEN value. A WHEN value that is not a literal
+  // stays, and a later match becomes the ELSE.
+  std::vector<std::pair<std::string, std::string>> simpleCaseTestCases = {
+      {"CASE 1 WHEN 1 THEN b ELSE c END", "b"},
+      {"CASE 1 WHEN 2 THEN 1 / 0 WHEN 1 THEN b ELSE c END", "b"},
+      {"CASE 1 WHEN 2 THEN b ELSE c END", "c"},
+      {"CASE 1 WHEN 2 THEN b END", "null"},
+      {"CASE CAST(NULL AS BIGINT) WHEN 1 THEN b ELSE c END", "c"},
+      {"CASE 1 WHEN CAST(NULL AS BIGINT) THEN b ELSE c END", "c"},
+      {
+          "CASE 1 WHEN a THEN b WHEN 2 THEN 1 / 0 WHEN 1 THEN c END",
+          "\"case\"(1, a, b, c)",
+      },
+  };
+
+  for (const auto& [expr, expected] : simpleCaseTestCases) {
+    SCOPED_TRACE("Expression: " + expr);
+    auto logicalPlan = parseSelect(
+        fmt::format("SELECT {}, a, b FROM numbers", expr), kTestConnectorId);
+    auto matcher = matchScan("numbers").project({expected, "a", "b"}).build();
+    AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(logicalPlan), matcher);
+  }
 }
 
 TEST_P(PlanTest, substituteFilterConstants) {

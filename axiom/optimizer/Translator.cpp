@@ -3525,10 +3525,12 @@ bool hasInferenceCall(const lp::ExprPtr& expr) {
 // Inputs before it are evaluated like any other expression.
 size_t firstGuardedInput(lp::SpecialForm form) {
   switch (form) {
-    // The condition, and COALESCE's first alternative, always evaluate.
+    // The condition, CASE's subject and COALESCE's first alternative always
+    // evaluate.
     case lp::SpecialForm::kCoalesce:
     case lp::SpecialForm::kIf:
     case lp::SpecialForm::kSwitch:
+    case lp::SpecialForm::kCase:
       return 1;
     case lp::SpecialForm::kTry:
       return 0;
