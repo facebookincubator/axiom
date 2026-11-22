@@ -15,11 +15,16 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "axiom/sql/presto/ParserSession.h"
 #include "axiom/sql/presto/SqlStatement.h"
+#include "axiom/sql/presto/SyntacticTableNames.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace axiom::sql::presto {
+
+class Statement;
 
 /// SQL Parser compatible with PrestoSQL dialect.
 class PrestoParser {
@@ -41,6 +46,18 @@ class PrestoParser {
   }
 
   SqlStatementPtr parse(std::string_view sql, bool enableTracing = false);
+
+  /// Extracts table names from SQL text without planning the query
+  /// or looking a table up. The session supplies only parser options
+  /// and the connector registry used for name canonicalization.
+  ///
+  /// @param sql SQL text containing one statement.
+  /// @return Table names and statement kind, as documented on
+  /// SyntacticTableNames.
+  /// @throws PrestoSqlError if the SQL is syntactically invalid.
+  /// @throws VeloxRuntimeError for a statement form the AST builder
+  /// does not support, such as UPDATE, CREATE VIEW, or ANALYZE.
+  SyntacticTableNames extractSyntacticTableNames(std::string_view sql) const;
 
   /// Parses multiple semicolon-separated SQL statements.
   /// @param sql SQL text containing one or more statements separated by
@@ -66,6 +83,13 @@ class PrestoParser {
 
  private:
   SqlStatementPtr doParse(std::string_view sql, bool enableTracing);
+
+  // Builds the AST for one statement without planning it. Shared
+  // with the syntactic extraction in SyntacticTableNames.cpp.
+  static std::shared_ptr<Statement> buildStatement(
+      std::string_view sql,
+      const ParserOptions& options,
+      bool enableTracing);
 
   const std::string defaultConnectorId_;
   const std::string defaultSchema_;
