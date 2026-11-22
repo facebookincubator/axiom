@@ -212,8 +212,8 @@ TEST_P(FilterPushdownTest, throughJoin) {
     AXIOM_ASSERT_PLAN(plan, matcher);
   }
 
-  // Filter uses columns from only one sides of the join. Expected to be pushed
-  // down below the join.
+  // A filter on a join key of one side is pushed below the join, to both
+  // sides.
   {
     auto ctx = makeContext();
     auto logicalPlan =
@@ -225,13 +225,13 @@ TEST_P(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        plan,
         matchHiveScan("nation", test::lt("n_nationkey", (int64_t)10))
-            .hashJoin(startMatcher("region"), velox::core::JoinType::kInner)
+            .hashJoinInner(
+                matchHiveScan("region", test::lt("r_regionkey", (int64_t)10)))
             .aggregation()
-            .build();
-
-    AXIOM_ASSERT_PLAN(plan, matcher);
+            .build());
   }
 
   {
@@ -245,15 +245,13 @@ TEST_P(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
-        startMatcher("nation")
-            .hashJoin(
-                matchHiveScan("region", test::lt("r_regionkey", (int64_t)10)),
-                velox::core::JoinType::kInner)
+    AXIOM_ASSERT_PLAN(
+        plan,
+        matchHiveScan("nation", test::lt("n_nationkey", (int64_t)10))
+            .hashJoinInner(
+                matchHiveScan("region", test::lt("r_regionkey", (int64_t)10)))
             .aggregation()
-            .build();
-
-    AXIOM_ASSERT_PLAN(plan, matcher);
+            .build());
   }
 
   // Filter on a join key propagates to the other side via the equivalence.
@@ -268,17 +266,13 @@ TEST_P(FilterPushdownTest, throughJoin) {
 
     auto plan = toSingleNodePlan(logicalPlan);
 
-    auto matcher =
+    AXIOM_ASSERT_PLAN(
+        plan,
         matchHiveScan("nation", test::eq("n_regionkey", (int64_t)1))
-            .hashJoin(
-                matchHiveScan("region", test::eq("r_regionkey", (int64_t)1)),
-                velox::core::JoinType::kInner)
+            .hashJoinInner(
+                matchHiveScan("region", test::eq("r_regionkey", (int64_t)1)))
             .aggregation()
-            .build();
-
-    // TODO: Assert the V2 plan after transitive inference propagates the
-    // filter across the join equality.
-    AXIOM_ASSERT_PLAN_V1(plan, matcher);
+            .build());
   }
 }
 

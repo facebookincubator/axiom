@@ -322,6 +322,32 @@ TEST_P(IndexLookupJoinTest, probeFilters) {
   }
 }
 
+// A filter copied across a WHERE equality onto a lookup-only table below
+// another join is applied by that index lookup join when the connector rejects
+// it.
+TEST_P(IndexLookupJoinTest, impliedFilters) {
+  if (!useV2_) {
+    return;
+  }
+
+  const auto sql =
+      "SELECT * FROM u, (SELECT * FROM t JOIN lookup ON t.a = lookup.k1) q "
+      "WHERE u.x = q.v AND u.x = 5";
+  AXIOM_ASSERT_PLAN(
+      toSingleNodePlan(parseSelect(sql)),
+      matchScan("u")
+          .filter("x = 5")
+          .hashJoinInner(
+              matchScan("t").indexLookupJoin(
+                  matchScan("lookup"),
+                  core::JoinType::kInner,
+                  {"a = k1"},
+                  "v = 5"),
+              {.keys = {{"x = v"}}, .filter = ""})
+          .project({"5", "a", "b", "a", "k2", "x"})
+          .build());
+}
+
 TEST_P(IndexLookupJoinTest, downstreamJoin) {
   if (!useV2_) {
     return;
