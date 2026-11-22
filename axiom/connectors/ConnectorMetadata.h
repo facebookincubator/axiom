@@ -1521,6 +1521,17 @@ class ConnectorMetadata {
     return findTable(tableName);
   }
 
+  /// Returns the table for a query that reads or describes it. A connector
+  /// overrides this to reject a table 'session' may not query, such as one its
+  /// metastore marks offline.
+  ///
+  /// @return nullptr if table doesn't exist.
+  virtual TablePtr findTableForRead(
+      [[maybe_unused]] const ConnectorSessionPtr& session,
+      const SchemaTableName& tableName) {
+    return findTable(tableName);
+  }
+
   /// Return a ViewPtr given the view name.
   ///
   /// @return nullptr if view doesn't exist.
