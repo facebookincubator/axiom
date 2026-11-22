@@ -74,14 +74,6 @@ void DisplayNames::captureLastNames(const std::vector<IdentifierPtr>& aliases) {
   }
 }
 
-void DisplayNames::captureLastNames(const std::vector<SelectItemPtr>& items) {
-  lastNames.clear();
-  lastNames.reserve(items.size());
-  for (const auto& item : items) {
-    lastNames.push_back(displayName(*item->as<SingleColumn>()));
-  }
-}
-
 void DisplayNames::accumulate(
     const lp::PlanBuilder& builder,
     const std::optional<std::string>& relationAlias) {
