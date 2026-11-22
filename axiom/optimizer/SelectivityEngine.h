@@ -854,8 +854,10 @@ std::optional<Selectivity> SelectivityEngine<Policy>::columnSelectivity(
   const Value exprValue = policy_.valueOf(expr);
   const float nullFraction = exprValue.nullFraction.value_or(0);
   if (exprValue.type->isBoolean()) {
-    return {
-        {exprValue.trueFraction.value_or(Selectivity::kUnknown), nullFraction}};
+    if (!exprValue.trueFraction.has_value()) {
+      return Selectivity::unknown(nullFraction);
+    }
+    return {{*exprValue.trueFraction, nullFraction}};
   }
   return {{1.0 - nullFraction, nullFraction}};
 }
