@@ -25,6 +25,7 @@
 
 #include "axiom/common/CatalogSchemaTableName.h"
 #include "axiom/logical_plan/PlanBuilder.h"
+#include "axiom/sql/presto/BindingScope.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 
 namespace axiom::sql::presto {
@@ -59,8 +60,9 @@ class CteScope {
   /// referencing query's relations are in scope, and those must not resolve
   /// inside the body.
   struct DefiningScope {
-    /// Columns of the enclosing queries, for a correlated reference.
-    lp::PlanBuilder::Scope columns;
+    /// Names of the enclosing queries' columns, for binding a correlated
+    /// reference.
+    std::shared_ptr<const BindingScope> names;
 
     /// Base tables reachable by a suffix of their qualified name.
     folly::F14FastMap<std::string, facebook::axiom::CatalogSchemaTableName>

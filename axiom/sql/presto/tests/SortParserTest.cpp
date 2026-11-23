@@ -15,8 +15,8 @@
  */
 
 #include "axiom/logical_plan/ExprApi.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
 
 namespace axiom::sql::presto::test {
 
@@ -135,9 +135,9 @@ TEST_F(SortParserTest, groupBy) {
     testSelect("SELECT a AS b, sum(b) FROM t GROUP BY a ORDER BY b", matcher);
   }
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY b"),
-      "Cannot resolve column: b");
+      "Column must be an aggregate expression or appear in GROUP BY clause: b");
 }
 
 TEST_F(SortParserTest, nonSelectedColumn) {
@@ -426,13 +426,13 @@ TEST_F(SortParserTest, distinct) {
       "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
       "ORDER BY -1");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT a + b "
           "FROM (VALUES (1, 2), (3, 4)) AS t(a, b) "
           "GROUP BY 1 "
           "ORDER BY a DESC"),
-      "Cannot resolve column: a not in [expr -> expr]");
+      "Column must be an aggregate expression or appear in GROUP BY clause: a");
 }
 
 // SELECT DISTINCT combined with GROUP BY and ORDER BY. The Sort node must

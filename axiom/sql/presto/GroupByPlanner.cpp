@@ -16,6 +16,7 @@
 
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include <set>
+#include "axiom/sql/presto/ColumnExprs.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/SortProjection.h"
@@ -799,12 +800,27 @@ void GroupByPlanner::rewritePostAggregateExprs(
     ++index;
   }
 
-  // GROUPING() resolution introduces Col(kGroupingSetIdColumn) references.
-  // Add an identity mapping so replaceInputs passes them through.
+  // GROUPING() resolution introduces Col(kGroupingSetIdColumn) references
+  // before the aggregate names the column. Point them at its ID.
   if (groupingSetsIndices_.size() > 1) {
-    auto groupingSetIdCol = lp::Col(kGroupingSetIdColumn).expr();
-    keyInputs.emplace(groupingSetIdCol, groupingSetIdCol);
+    keyInputs.emplace(
+        lp::Col(kGroupingSetIdColumn).expr(),
+        ColumnExprs::column(*builder_, kGroupingSetIdColumn).expr());
   }
+
+  // A column of this block that is neither a grouping key nor inside an
+  // aggregate survives the substitution. A column of an enclosing query is
+  // constant within the block, so it may.
+  auto checkGrouped = [&](const core::FieldAccessExpr& field) {
+    const auto* source = exprPlanner_.boundColumnSource(&field);
+    if (source != nullptr && source->local) {
+      AXIOM_PRESTO_SEMANTIC_FAIL(
+          source->location,
+          source->name,
+          "Column must be an aggregate expression or appear in GROUP BY clause: {}",
+          source->name);
+    }
+  };
 
   // A marker the substitution leaves behind is a subquery the clause
   // evaluates for itself rather than one the aggregate already computed, so
@@ -814,25 +830,16 @@ void GroupByPlanner::rewritePostAggregateExprs(
   PlannedMarkers planned;
   auto substituteAndPlan = [&](const core::ExprPtr& expr) {
     return planMarkers(
-        replaceInputs(expr, keyInputs, aggregateInputs), exprPlanner_, planned);
+        replaceInputs(expr, keyInputs, aggregateInputs, checkGrouped),
+        exprPlanner_,
+        planned);
   };
 
-  // HAVING takes the same two steps as the clauses below, but a column it
-  // cannot resolve is an error rather than a name to leave alone. It is
-  // applied here, before any window function: a window sees only the groups
-  // HAVING keeps.
+  // HAVING is applied here, before any window function: a window sees only
+  // the groups HAVING keeps.
   if (filter_.has_value()) {
-    auto substituted = replaceInputs(
-        filter_.value().expr(),
-        keyInputs,
-        aggregateInputs,
-        [](const core::FieldAccessExpr& expr) {
-          VELOX_USER_FAIL(
-              "HAVING clause cannot reference column: {}", expr.name());
-        });
     filter_ = lp::ExprApi(
-        planMarkers(std::move(substituted), exprPlanner_, planned),
-        filter_->alias());
+        substituteAndPlan(filter_.value().expr()), filter_->alias());
     builder_->filter(filter_.value());
   }
 
@@ -847,9 +854,6 @@ void GroupByPlanner::rewritePostAggregateExprs(
   // partition/order keys. Non-window expressions use replaceInputs which also
   // substitutes nested window references added to keyInputs by
   // projectNestedWindows above.
-
-  // TODO: Verify that SELECT expressions don't depend on anything other
-  // than grouping keys and aggregates.
 
   auto rewriteExpr = [&](lp::ExprApi& item) {
     if (item.expr()->is(core::IExpr::Kind::kWindow)) {
@@ -867,19 +871,9 @@ void GroupByPlanner::rewritePostAggregateExprs(
     rewriteExpr(expr);
   }
 
-  auto validateWindowDefinition = [&](const lp::ExprApi& expr) {
-    auto substituted = replaceInputs(
-        expr.expr(),
-        keyInputs,
-        aggregateInputs,
-        [](const core::FieldAccessExpr& field) {
-          VELOX_USER_FAIL(
-              "WINDOW clause cannot reference column: {}", field.name());
-        });
-    (void)planMarkers(substituted, exprPlanner_, planned);
-  };
+  // A named window that no function uses is still checked.
   for (const auto& expr : windowDefinitionExprs) {
-    validateWindowDefinition(expr);
+    (void)substituteAndPlan(expr.expr());
   }
 }
 
@@ -958,7 +952,8 @@ bool GroupByPlanner::isIdentityProjection() const {
     }
 
     const auto& alias = projections_.at(i).alias();
-    if (alias.has_value() && alias.value() != outputColumns_.at(i).name) {
+    if (alias.has_value() &&
+        alias.value() != outputColumns_.at(i).outputName()) {
       return false;
     }
   }

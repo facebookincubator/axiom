@@ -51,6 +51,11 @@ class NameMappings {
   /// by their other names. The mark lasts until 'reset'.
   void markAmbiguous(const QualifiedName& name);
 
+  /// Returns true if 'name' was marked ambiguous.
+  bool isAmbiguous(const QualifiedName& name) const {
+    return ambiguousNames_.contains(name);
+  }
+
   /// Marks ambiguous each name that 'source' marks ambiguous and this mapping
   /// does not map. A projection that passes columns through keeps its input's
   /// scope: a name that named several input columns names none of them, even

@@ -690,8 +690,11 @@ void PlanBuilder::resolveProjections(
               return name.name == alias.value();
             });
 
+    // By ID, a reference that does not rename keeps the column.
     if (readsLocalInput &&
-        (!alias.has_value() || alias.value() == inputReference->name())) {
+        (context_.columnsById
+             ? !renames
+             : !alias.has_value() || alias.value() == inputReference->name())) {
       // Identity projection without rename.
       const auto& id = inputReference->name();
       if (seenColumnIds.emplace(id).second) {
@@ -702,11 +705,25 @@ void PlanBuilder::resolveProjections(
           for (const auto& name : inputNames) {
             nameTracker.add(name, outputNames.back());
           }
+          // An alias the input has only qualified, because the unqualified
+          // name was ambiguous there, names the column unqualified here.
+          if (context_.columnsById && alias.has_value() &&
+              std::none_of(
+                  inputNames.begin(), inputNames.end(), [&](const auto& name) {
+                    return !name.alias.has_value() && name.name == *alias;
+                  })) {
+            nameTracker.add(alias.value(), outputNames.back());
+          }
         }
         // TODO: An explicit alias on an identity projection does not
-        // override the source's userName, so the pre-alias name may
+        // override a userName the source has, so the pre-alias name may
         // surface in the output schema.
-        mappings.copyUserName(id, *outputMapping_);
+        if (context_.columnsById && alias.has_value() && id != *alias &&
+            outputMapping_->userName(id) == nullptr) {
+          mappings.addUserName(id, *alias);
+        } else {
+          mappings.copyUserName(id, *outputMapping_);
+        }
       } else {
         outputNames.push_back(newName(id));
         // Store user name for the duplicate identity so the OutputNode
@@ -1284,12 +1301,37 @@ PlanBuilder& PlanBuilder::join(
 
 namespace {
 
+// Resolves 'id' against 'rowType', then 'outerScope'. A qualified reference is
+// a struct field access, so it resolves to nothing here.
+ExprPtr resolveColumnId(
+    const std::optional<std::string>& alias,
+    const std::string& id,
+    const velox::RowType& rowType,
+    const PlanBuilder::Scope& outerScope) {
+  if (alias.has_value()) {
+    return nullptr;
+  }
+  if (auto index = rowType.getChildIdxIfExists(id)) {
+    return makeInputRef(rowType.childAt(*index), id);
+  }
+  if (outerScope != nullptr) {
+    if (auto expr = outerScope(alias, id)) {
+      return expr;
+    }
+  }
+  VELOX_USER_FAIL("Cannot resolve column: {}", id);
+}
+
 ExprPtr resolveJoinInputName(
     const std::optional<std::string>& alias,
     const std::string& name,
     const NameMappings& mapping,
     const velox::RowTypePtr& inputRowType,
-    const PlanBuilder::Scope& outerScope) {
+    const PlanBuilder::Scope& outerScope,
+    bool columnsById) {
+  if (columnsById) {
+    return resolveColumnId(alias, name, *inputRowType, outerScope);
+  }
   if (alias.has_value()) {
     if (auto id = mapping.lookup(alias.value(), name)) {
       return makeInputRef(inputRowType->findChild(id.value()), id.value());
@@ -1341,7 +1383,12 @@ PlanBuilder& PlanBuilder::join(
             condition->expr(),
             [&](const auto& alias, const auto& name) {
               return resolveJoinInputName(
-                  alias, name, *outputMapping_, inputRowType, outerScope_);
+                  alias,
+                  name,
+                  *outputMapping_,
+                  inputRowType,
+                  outerScope_,
+                  context_.columnsById);
             }),
         "Join condition");
   }
@@ -1382,7 +1429,12 @@ PlanBuilder& PlanBuilder::lateralJoin(
             condition->expr(),
             [&](const auto& alias, const auto& name) {
               return resolveJoinInputName(
-                  alias, name, *outputMapping_, inputRowType, outerScope_);
+                  alias,
+                  name,
+                  *outputMapping_,
+                  inputRowType,
+                  outerScope_,
+                  context_.columnsById);
             }),
         "Join condition");
   }
@@ -1413,9 +1465,18 @@ PlanBuilder& PlanBuilder::vectorSearch(
   VELOX_USER_CHECK_NOT_NULL(node_, "Vector search node cannot be a leaf node");
   VELOX_USER_CHECK_NOT_NULL(build.node_);
 
-  auto resolve = [](const NameMappings& mapping,
-                    const std::string& name,
-                    std::string_view side) {
+  auto resolve = [&](const NameMappings& mapping,
+                     const velox::RowType& inputType,
+                     const std::string& name,
+                     std::string_view side) {
+    if (context_.columnsById) {
+      VELOX_USER_CHECK(
+          inputType.containsChild(name),
+          "Cannot resolve column in vector search {} input: {}",
+          side,
+          name);
+      return name;
+    }
     auto resolved = mapping.lookup(name);
     VELOX_USER_CHECK(
         resolved.has_value(),
@@ -1437,14 +1498,22 @@ PlanBuilder& PlanBuilder::vectorSearch(
             condition->expr(),
             [&](const auto& alias, const auto& name) {
               return resolveJoinInputName(
-                  alias, name, *mapping, inputRowType, outerScope_);
+                  alias,
+                  name,
+                  *mapping,
+                  inputRowType,
+                  outerScope_,
+                  context_.columnsById);
             }),
         "Vector search condition");
   }
-  auto probeEmbedding =
-      resolve(*outputMapping_, search.probeEmbedding, "probe");
-  auto buildEmbedding =
-      resolve(*build.outputMapping_, search.buildEmbedding, "build");
+  auto probeEmbedding = resolve(
+      *outputMapping_, *node_->outputType(), search.probeEmbedding, "probe");
+  auto buildEmbedding = resolve(
+      *build.outputMapping_,
+      *build.node_->outputType(),
+      search.buildEmbedding,
+      "build");
   std::optional<std::string> scoreName;
   if (search.scoreName.has_value()) {
     scoreName = newName(search.scoreName.value());
@@ -2068,15 +2137,26 @@ PlanBuilder& PlanBuilder::sample(
   return *this;
 }
 
-bool PlanBuilder::hasColumn(const std::string& name) const {
-  return outputMapping_ != nullptr && outputMapping_->lookup(name).has_value();
+PlanBuilder PlanBuilder::byColumnName() const {
+  return withColumnsById(false);
 }
 
-bool PlanBuilder::hasQualifiedColumn(
-    const std::string& qualifier,
-    const std::string& name) const {
-  return outputMapping_ != nullptr &&
-      outputMapping_->lookup(qualifier, name).has_value();
+PlanBuilder PlanBuilder::byColumnId() const {
+  return withColumnsById(true);
+}
+
+PlanBuilder PlanBuilder::withColumnsById(bool columnsById) const {
+  VELOX_CHECK_NE(
+      context_.columnsById,
+      columnsById,
+      "Builder already resolves columns by {}",
+      columnsById ? "ID" : "name");
+  auto context = context_;
+  context.columnsById = columnsById;
+  PlanBuilder copy{context, allowAmbiguousOutputNames_, outerScope_};
+  copy.node_ = node_;
+  copy.outputMapping_ = outputMapping_;
+  return copy;
 }
 
 ExprPtr PlanBuilder::resolveInputName(
@@ -2085,6 +2165,10 @@ ExprPtr PlanBuilder::resolveInputName(
   if (outputMapping_ == nullptr) {
     VELOX_CHECK_NOT_NULL(outerScope_);
     return outerScope_(alias, name);
+  }
+
+  if (context_.columnsById) {
+    return resolveColumnId(alias, name, *node_->outputType(), outerScope_);
   }
 
   if (alias.has_value()) {
@@ -2249,6 +2333,18 @@ std::vector<PlanBuilder::OutputColumnName> PlanBuilder::findOrAssignOutputNames(
 
 PlanBuilder::OutputColumnName PlanBuilder::findOrAssignOutputNameAt(
     size_t index) const {
+  auto column = findOrAssignResolutionNameAt(index);
+  if (!context_.columnsById) {
+    return column;
+  }
+  // By ID, the reference names the column by its ID and carries the
+  // user-visible name.
+  return OutputColumnName{
+      std::nullopt, node_->outputType()->nameOf(index), column.outputName()};
+}
+
+PlanBuilder::OutputColumnName PlanBuilder::findOrAssignResolutionNameAt(
+    size_t index) const {
   const auto size = numOutput();
   VELOX_CHECK_LT(index, size, "{}", node_->outputType()->toString());
 
@@ -2354,7 +2450,7 @@ LogicalPlanNodePtr PlanBuilder::buildOutputNode(
     } else if (auto userName = outputMapping_->userName(id)) {
       name = *userName;
     } else {
-      name = findOrAssignOutputNameAt(i).name;
+      name = findOrAssignOutputNameAt(i).outputName();
     }
     entries.emplace_back(
         OutputNode::Entry{static_cast<int32_t>(i), std::move(name)});

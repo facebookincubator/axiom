@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <limits>
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/ExprMatcher.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1075,17 +1076,17 @@ TEST_F(ExpressionParserTest, lateralColumnAlias) {
 
 TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {
   // Forward reference: j is used before it's defined.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT j + 2 AS k, n_regionkey + 1 AS j FROM nation"),
       "Cannot resolve column: j");
 
   // Self-reference: j is not yet in the alias map when the expression is
   // evaluated, so it resolves as a (non-existent) column reference.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT j + 1 AS j FROM nation"), "Cannot resolve column: j");
 
   // Lateral column aliases are not available when Friendly SQL is disabled.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseStrictSql("SELECT n_regionkey + 1 AS j, j + 2 AS k FROM nation"),
       "Cannot resolve column: j");
 }
@@ -1116,6 +1117,49 @@ TEST_F(ExpressionParserTest, lateralColumnAliasNotVisibleInSubquery) {
                 << subquery->toString();
           })
           .output());
+}
+
+// A column of an enclosing query outranks a lateral column alias, as a column
+// of the subquery's own FROM does.
+TEST_F(ExpressionParserTest, lateralAliasPriority) {
+  auto plan = parseSelect(
+      "SELECT (SELECT y FROM "
+      "  (SELECT r_regionkey * 10 AS n_regionkey, n_regionkey AS y "
+      "   FROM region)) "
+      "FROM nation");
+
+  // Finds the derived relation's projection: the one producing 2 columns.
+  std::function<const lp::ProjectNode*(const lp::LogicalPlanNode&)> find =
+      [&](const lp::LogicalPlanNode& node) -> const lp::ProjectNode* {
+    if (node.is(lp::NodeKind::kProject) &&
+        node.as<lp::ProjectNode>()->expressions().size() == 2) {
+      return node.as<lp::ProjectNode>();
+    }
+    for (const auto& input : node.inputs()) {
+      if (auto* found = find(*input)) {
+        return found;
+      }
+    }
+    if (node.is(lp::NodeKind::kProject)) {
+      for (const auto& expr : node.as<lp::ProjectNode>()->expressions()) {
+        if (expr->kind() == lp::ExprKind::kSubquery) {
+          if (auto* found = find(*expr->as<lp::SubqueryExpr>()->subquery())) {
+            return found;
+          }
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  // 'y' reads the enclosing query's column: a column the projection's input
+  // does not have.
+  const auto* project = find(*plan);
+  ASSERT_NE(project, nullptr);
+  const auto& y = project->expressionAt(1);
+  ASSERT_TRUE(y->isInputReference()) << y->toString();
+  EXPECT_FALSE(project->onlyInput()->outputType()->containsChild(
+      y->as<lp::InputReferenceExpr>()->name()));
 }
 
 TEST_F(ExpressionParserTest, row) {
@@ -1325,11 +1369,11 @@ TEST_F(ExpressionParserTest, unusedNamedWindow) {
           "WINDOW unused AS (ORDER BY sum(n_nationkey))"),
       "Cannot resolve column: n_nationkey");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect(
           "SELECT max(n_name) FROM nation GROUP BY n_regionkey "
           "WINDOW unused AS (PARTITION BY n_nationkey)"),
-      "WINDOW clause cannot reference column: n_nationkey");
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_nationkey");
 
   AXIOM_EXPECT_PRESTO_SYNTAX_ERROR(
       parseSelect(
@@ -1356,6 +1400,15 @@ TEST_F(ExpressionParserTest, lambda) {
   // Mixed-case lambda parameter names.
   ASSERT_NO_THROW(
       parseExpr("reduce(array[1,2,3], 0, (x, fooBar) -> x + fooBar, s -> s)"));
+}
+
+// A lambda parameter named like a column shadows the bare name, while a
+// qualified reference in the body still reads the column.
+TEST_F(ExpressionParserTest, lambdaShadowing) {
+  testNationExpr(
+      "transform(array[1], n_regionkey -> n_regionkey + nation.n_regionkey)",
+      "transform(array_constructor(1), "
+      "n_regionkey_1 -> plus(CAST(n_regionkey_1 AS BIGINT), n_regionkey))");
 }
 
 // A lambda parameter named like an outer table alias shadows the alias

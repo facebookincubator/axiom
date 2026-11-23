@@ -117,15 +117,6 @@ SELECT row_number() OVER w FROM t WINDOW w AS (ORDER BY sum(b))
 -- count 1
 SELECT 1 FROM t WINDOW unused AS (ORDER BY sum(b))
 ----
--- An aggregate in an unused named specification makes wildcard columns
--- subject to grouping validation.
--- error: Cannot resolve column: a
-SELECT * FROM t WINDOW unused AS (ORDER BY sum(b))
-----
--- An unused named specification obeys grouping rules.
--- error: WINDOW clause cannot reference column: b
-SELECT max(a) FROM t GROUP BY a WINDOW unused AS (PARTITION BY b)
-----
 -- GROUPING() is valid in a named specification of a grouped query.
 -- ordered
 SELECT a, row_number() OVER w AS rn

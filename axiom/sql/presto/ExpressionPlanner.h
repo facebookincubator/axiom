@@ -86,9 +86,8 @@ class ExpressionPlanner {
     /// Built logical plan for the subquery.
     lp::LogicalPlanNodePtr plan;
 
-    /// True if planning resolved at least one column reference against the
-    /// outer scope (the subquery is correlated).
-    bool touchedOuterScope{false};
+    /// True if the subquery reads a column of an enclosing query.
+    bool correlated{false};
   };
 
   /// Callback to plan a subquery. Takes the Query AST node, returns the built
@@ -105,17 +104,27 @@ class ExpressionPlanner {
   using SortingKeyResolver = std::function<
       lp::ExprApi(const ExpressionPtr& expr, ExprOptions options)>;
 
-  /// Returns true if the table qualifier should be dropped from a column
-  /// reference (e.g. t.col -> col).
-  using ShouldDropQualifier = std::function<
-      bool(const std::string& qualifier, const std::string& name)>;
+  /// A column reference bound to a column ID.
+  struct BoundColumn {
+    /// ID of the column in the logical plan.
+    std::string id;
 
-  /// Checks if a dotted name prefix resolves to a column or table alias in the
-  /// current scope. Returns true if 'first' is a column name OR if 'first' is
-  /// a table alias qualifying 'second' as a column. Used for column-first enum
-  /// literal resolution. Can be nullptr when no column scope is available.
-  using ColumnResolver =
-      std::function<bool(const std::string& first, const std::string& second)>;
+    /// True if the column belongs to the query block the expression is
+    /// translated in; false if it belongs to an enclosing one.
+    bool local{false};
+  };
+
+  /// Binds a column reference to a column ID. 'qualifier' is the relation
+  /// alias, if any. Returns nullopt if no column in scope has the name; fails
+  /// at 'location' if the name is ambiguous.
+  using ColumnBinder = std::function<std::optional<BoundColumn>(
+      const std::optional<std::string>& qualifier,
+      const std::string& name,
+      const NodeLocation& location)>;
+
+  /// Describes the columns in the innermost scope, for the error raised by a
+  /// reference that binds to no column.
+  using ScopeDescriber = std::function<std::string()>;
 
   /// Returns the qualifier a column reference should use when 'parts' names a
   /// relation in scope by a suffix of its qualified name (`schema.table` or
@@ -132,14 +141,14 @@ class ExpressionPlanner {
       SubqueryPlanner subqueryPlanner,
       SortingKeyResolver sortingKeyResolver,
       const ParserOptions& options,
-      ShouldDropQualifier shouldDropQualifier = nullptr,
-      ColumnResolver columnResolver = nullptr,
+      ColumnBinder columnBinder = nullptr,
+      ScopeDescriber scopeDescriber = nullptr,
       RelationQualifierResolver relationQualifierResolver = nullptr)
       : session_{std::move(session)},
         subqueryPlanner_(std::move(subqueryPlanner)),
         sortingKeyResolver_(std::move(sortingKeyResolver)),
-        shouldDropQualifier_(std::move(shouldDropQualifier)),
-        columnResolver_(std::move(columnResolver)),
+        columnBinder_(std::move(columnBinder)),
+        scopeDescriber_(std::move(scopeDescriber)),
         relationQualifierResolver_(std::move(relationQualifierResolver)),
         options_{options} {
     VELOX_CHECK_NOT_NULL(session_);
@@ -171,10 +180,10 @@ class ExpressionPlanner {
     const folly::F14FastMap<std::string, facebook::velox::core::ExprPtr>* exprs{
         nullptr};
 
-    /// Names that stay column references even when they name an alias.
-    /// Lateral column aliases pass it; ORDER BY, where an output alias
-    /// outranks a column of the same name, leaves it null.
-    const folly::F14FastSet<std::string>* columnNames{nullptr};
+    /// True if a column in scope, local or of an enclosing query, outranks an
+    /// alias of the same name, as for lateral column aliases. False for ORDER
+    /// BY, where an output alias outranks a column.
+    bool columnsFirst{false};
 
     /// Alias names several output columns carry with different values. An
     /// Identifier naming one fails rather than picking a column.
@@ -205,6 +214,53 @@ class ExpressionPlanner {
   /// Callers substituting several occurrences in one position memoize.
   std::optional<lp::ExprApi> planIfMarker(
       const facebook::velox::core::ExprPtr& expr);
+
+  /// Where a column reference 'toExpr' bound, for errors raised after
+  /// translation.
+  struct BoundColumnSource {
+    /// The name the query wrote, with its qualifier if it had one.
+    std::string name;
+
+    /// Location of the reference in the query text.
+    NodeLocation location;
+
+    /// See BoundColumn::local.
+    bool local{false};
+  };
+
+  /// Returns where 'expr' was bound if it is a column reference 'toExpr'
+  /// bound, or nullptr.
+  const BoundColumnSource* boundColumnSource(
+      const facebook::velox::core::IExpr* expr) const;
+
+  /// Returns where a reference to the enclosing query's column 'id' was last
+  /// bound, or nullptr.
+  const BoundColumnSource* outerColumnSource(const std::string& id) const;
+
+  /// Returns the IDs of the enclosing queries' columns 'toExpr' bound, in
+  /// binding order.
+  const std::vector<std::string>& outerBinds() const {
+    return outerBinds_;
+  }
+
+  /// Leaves column references unbound while it lives, for names that are not
+  /// columns, such as GRAPH_TABLE pattern variables.
+  class [[nodiscard]] UnboundNames {
+   public:
+    explicit UnboundNames(ExpressionPlanner& planner)
+        : planner_{planner}, saved_{std::exchange(planner.bindNames_, false)} {}
+
+    ~UnboundNames() {
+      planner_.bindNames_ = saved_;
+    }
+
+    UnboundNames(const UnboundNames&) = delete;
+    UnboundNames& operator=(const UnboundNames&) = delete;
+
+   private:
+    ExpressionPlanner& planner_;
+    const bool saved_;
+  };
 
   /// Bounds the lifetime of the markers a query block hands out. Markers are
   /// shared within one of these and never across, so a block shares none with
@@ -287,6 +343,30 @@ class ExpressionPlanner {
   };
 
  private:
+  // True if 'toExpr' binds column references: a binder is set and no
+  // UnboundNames guard lives.
+  bool bindsNames() const {
+    return bindNames_ && columnBinder_ != nullptr;
+  }
+
+  // Returns the expression of the output alias 'name', or nullopt, also when
+  // no aliases are in effect.
+  std::optional<lp::ExprApi> outputAlias(
+      const std::string& name,
+      const NodeLocation& location) const;
+
+  // Binds 'qualifier.name', or 'name', to a column. Returns the column
+  // reference, named 'name', or nullopt if none binds or binding is off.
+  std::optional<lp::ExprApi> bindColumn(
+      const std::optional<std::string>& qualifier,
+      const std::string& name,
+      const NodeLocation& location);
+
+  // Returns an unbound reference to 'name' when binding is off; otherwise
+  // throws that no column has the name.
+  lp::ExprApi unboundColumn(std::string_view name, const NodeLocation& location)
+      const;
+
   // Start and end of one MarkerScope.
   void pushMarkerScope();
   void popMarkerScope();
@@ -387,8 +467,24 @@ class ExpressionPlanner {
 
   SubqueryPlanner subqueryPlanner_;
   SortingKeyResolver sortingKeyResolver_;
-  ShouldDropQualifier shouldDropQualifier_;
-  ColumnResolver columnResolver_;
+  ColumnBinder columnBinder_;
+  ScopeDescriber scopeDescriber_;
+
+  // False while an UnboundNames guard lives.
+  bool bindNames_{true};
+
+  // Column references 'toExpr' bound, keyed by the reference. Holds the
+  // reference so that its address is not reused.
+  folly::F14FastMap<
+      const facebook::velox::core::IExpr*,
+      std::pair<facebook::velox::core::ExprPtr, BoundColumnSource>>
+      boundColumns_;
+
+  // Where references to enclosing queries' columns were bound, by column ID.
+  folly::F14FastMap<std::string, BoundColumnSource> outerColumns_;
+
+  // See outerBinds().
+  std::vector<std::string> outerBinds_;
   RelationQualifierResolver relationQualifierResolver_;
 
   ParserOptions options_;
@@ -431,9 +527,7 @@ class ExpressionPlanner {
   // Lambda parameters currently in scope. Entries are appended on entering a
   // lambda body and dropped on exit, so the vector grows from outermost
   // (front) to innermost (back); lookups search back-to-front to match SQL
-  // lexical scoping. Used to prevent 'shouldDropQualifier_' from stripping
-  // the qualifier of 'x.field' when 'x' names a lambda parameter rather than
-  // an outer table alias.
+  // lexical scoping. A parameter shadows a column of the same name.
   std::vector<std::string> lambdaParamScope_;
 
   // Current toExpr recursion depth, bounded by options_.maxExpressionDepth.

@@ -31,9 +31,11 @@ namespace lp = facebook::axiom::logical_plan;
 ///   planner.planGraphTable(*graphTable, graph, builder);
 class GraphTablePlanner {
  public:
-  /// Returns a PlanBuilder that produces the rows of an element table.
-  using TablePlanner =
-      std::function<lp::PlanBuilder(const GraphElementTable& table)>;
+  /// Returns a PlanBuilder that produces the rows of an element table, and
+  /// calls 'translate' while expressions bind to the table's columns.
+  using TablePlanner = std::function<lp::PlanBuilder(
+      const GraphElementTable& table,
+      const std::function<void()>& translate)>;
 
   explicit GraphTablePlanner(ExpressionPlanner& exprPlanner)
       : exprPlanner_{exprPlanner} {}

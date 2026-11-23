@@ -85,15 +85,15 @@ lp::PlanBuilder namedRows(
   return lp::PlanBuilder(query).project(projections);
 }
 
-// Returns whether a row of namedRows() is valid for 'index':
+// Returns whether a row of 'rows', a namedRows(), is valid for 'index':
 //   key IS NOT NULL
 //   AND cardinality(embedding) = <dimension>
 //   AND none_match(embedding, x -> x IS NULL OR NOT is_finite(x))
 //   AND l2_norm(embedding) > 0
-lp::ExprApi isValid(const VectorIndex& index) {
-  const auto embedding = lp::Col(kEmbedding);
+lp::ExprApi isValid(const VectorIndex& index, const lp::PlanBuilder& rows) {
+  const auto embedding = ColumnExprs::column(rows, kEmbedding);
   const auto element = lp::Col("x");
-  return lp::Col(kKey).isNotNull() &&
+  return ColumnExprs::column(rows, kKey).isNotNull() &&
       lp::Call("cardinality", embedding) ==
       lp::Lit(index.properties.dimension) &&
       lp::Call(
@@ -106,11 +106,13 @@ lp::ExprApi isValid(const VectorIndex& index) {
       lp::Call("l2_norm", embedding) > lp::Lit(0.0);
 }
 
-// Returns whether a row has no NULL partition value.
-lp::ExprApi hasPartition(const std::vector<std::string>& partitions) {
+// Returns whether a row of 'plan' has no NULL partition value.
+lp::ExprApi hasPartition(
+    const lp::PlanBuilder& plan,
+    const std::vector<std::string>& partitions) {
   std::optional<lp::ExprApi> notNull;
   for (const auto& partition : partitions) {
-    const auto condition = lp::Col(partition).isNotNull();
+    const auto condition = ColumnExprs::column(plan, partition).isNotNull();
     notNull = notNull.has_value() ? *notNull && condition : condition;
   }
   return *notNull;
@@ -123,7 +125,7 @@ lp::PlanBuilder validRows(
     const std::vector<std::string>& partitions,
     const lp::PlanBuilder& rows) {
   return lp::PlanBuilder(rows).filter(
-      isValid(index) && hasPartition(partitions));
+      isValid(index, rows) && hasPartition(rows, partitions));
 }
 
 // Returns the number of rows of each partition of 'query', valid or not, in
@@ -135,12 +137,14 @@ lp::PlanBuilder partitionSizes(
     const std::vector<std::string>& partitions,
     std::string_view prefix,
     const lp::PlanBuilder& query) {
-  return namedRows(partitions, query)
-      .aggregate(
-          ColumnExprs::of(partitions), {lp::MetadataRowCount().as("num_rows")})
-      .project(
-          ColumnExprs::concat(
-              ColumnExprs::renamed(partitions, prefix), lp::Col("num_rows")));
+  auto sizes = namedRows(partitions, query);
+  sizes.aggregate(
+      ColumnExprs::of(sizes, partitions),
+      {lp::MetadataRowCount().as("num_rows")});
+  return sizes.project(
+      ColumnExprs::concat(
+          ColumnExprs::renamed(sizes, partitions, prefix),
+          ColumnExprs::column(sizes, "num_rows")));
 }
 
 // Returns the partitions of 'query' with no NULL value, with their columns
@@ -150,16 +154,19 @@ lp::PlanBuilder partitionSizes(
 lp::PlanBuilder selectedPartitions(
     const std::vector<std::string>& partitions,
     const lp::PlanBuilder& query) {
-  return namedRows(partitions, query)
-      .filter(hasPartition(partitions))
-      .aggregate(ColumnExprs::of(partitions), {});
+  auto selected = namedRows(partitions, query);
+  selected.filter(hasPartition(selected, partitions));
+  return selected.aggregate(ColumnExprs::of(selected, partitions), {});
 }
 
-// Returns the hash of the key that samples the rows, uniform over BIGINT.
-lp::ExprApi sampleHash() {
+// Returns the hash of the key of 'rows' that samples the rows, uniform over
+// BIGINT.
+lp::ExprApi sampleHash(const lp::PlanBuilder& rows) {
   return lp::Call(
       "from_big_endian_64",
-      lp::Call("xxhash64", lp::Call("to_big_endian_64", lp::Col(kKey))));
+      lp::Call(
+          "xxhash64",
+          lp::Call("to_big_endian_64", ColumnExprs::column(rows, kKey))));
 }
 
 // Returns a stratified sample of 'rows': the valid rows among about 'numRows'
@@ -173,32 +180,39 @@ lp::PlanBuilder sample(
     const lp::PlanBuilder& sizes,
     const lp::PlanBuilder& rows,
     int64_t numRows) {
+  lp::PlanBuilder plan(rows);
+  plan.join(
+      sizes,
+      *ColumnExprs::equal(rows, sizes, partitions, "n_"),
+      lp::JoinType::kInner);
+  plan.with({sampleHash(rows).as("sample_hash")});
+
   // The hashes are uniform over [-2^63, 2^63). The cutoff passes a share of
   // numRows / num_rows of them.
   const auto cutoff = lp::Lit(static_cast<double>(numRows) * 0x1p64) /
-          lp::Cast(DOUBLE(), lp::Col("num_rows")) +
+          lp::Cast(DOUBLE(), ColumnExprs::column(plan, "num_rows")) +
       lp::Lit(-0x1p63);
-  return lp::PlanBuilder(rows)
-      .join(sizes, *ColumnExprs::equal(partitions, "n_"), lp::JoinType::kInner)
-      .with({sampleHash().as("sample_hash")})
-      .filter(lp::Cast(DOUBLE(), lp::Col("sample_hash")) < cutoff)
-      .project(
-          ColumnExprs::concat(
-              ColumnExprs::of(partitions),
-              {lp::Col(kKey),
-               lp::Col(kEmbedding),
-               lp::Col("sample_hash"),
-               lp::Col("num_rows")}));
+  plan.filter(
+      lp::Cast(DOUBLE(), ColumnExprs::column(plan, "sample_hash")) < cutoff);
+  return plan.project(
+      ColumnExprs::concat(
+          ColumnExprs::of(plan, partitions),
+          {ColumnExprs::column(plan, kKey),
+           ColumnExprs::column(plan, kEmbedding),
+           ColumnExprs::column(plan, "sample_hash"),
+           ColumnExprs::column(plan, "num_rows")}));
 }
 
 // Returns the centroids 'trainer' plans for each partition of 'sample', with
-// their columns named 'partitions', cluster_id and centroid.
+// their columns named 'partitions', cluster_id and centroid. The trainer
+// composes plans by name: it gets the sample by name, and its plan comes back
+// by ID.
 lp::PlanBuilder planCentroids(
     const VectorIndexCodecTrainer& trainer,
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
     const VectorIndexSample& sample) {
-  auto centroids = trainer.plan(sample);
+  auto centroids = trainer.plan(sample).byColumnId();
 
   const auto types = centroids.outputTypes();
   VELOX_CHECK_EQ(
@@ -239,36 +253,38 @@ lp::PlanBuilder trainCodecs(
   const auto metric =
       std::string(VectorIndexMetricName::toName(index.properties.metric));
   if (trainer == nullptr) {
-    return makeSample(kSamplesPerCluster * index.properties.numClusters)
-        .aggregate(
-            ColumnExprs::of(partitions),
-            {lp::Call(
-                 "vector_index_train",
-                 lp::Col(kEmbedding),
-                 lp::Col(kKey),
-                 lp::Lit(index.properties.numClusters),
-                 lp::Lit(metric),
-                 lp::Lit(Variant::map({}), MAP(VARCHAR(), VARCHAR())))
-                 .as("codec")});
+    auto rows = makeSample(kSamplesPerCluster * index.properties.numClusters);
+    return rows.aggregate(
+        ColumnExprs::of(rows, partitions),
+        {lp::Call(
+             "vector_index_train",
+             ColumnExprs::column(rows, kEmbedding),
+             ColumnExprs::column(rows, kKey),
+             lp::Lit(index.properties.numClusters),
+             lp::Lit(metric),
+             lp::Lit(Variant::map({}), MAP(VARCHAR(), VARCHAR())))
+             .as("codec")});
   }
 
-  return planCentroids(
-             *trainer,
-             index,
-             partitions,
-             {.properties = index.properties,
-              .partitionColumns = index.partitionColumns,
-              .makeSample = makeSample})
-      .aggregate(
-          ColumnExprs::of(partitions),
-          {lp::Call(
-               "vector_index_pack",
-               lp::Col("cluster_id"),
-               lp::Col("centroid"),
-               lp::Lit(metric),
-               lp::Lit(index.properties.numClusters),
-               lp::Lit(index.properties.dimension))
-               .as("codec")});
+  auto centroids = planCentroids(
+      *trainer,
+      index,
+      partitions,
+      {.properties = index.properties,
+       .partitionColumns = index.partitionColumns,
+       .makeSample = [&](int64_t numRows) {
+         return makeSample(numRows).byColumnName();
+       }});
+  return centroids.aggregate(
+      ColumnExprs::of(centroids, partitions),
+      {lp::Call(
+           "vector_index_pack",
+           ColumnExprs::column(centroids, "cluster_id"),
+           ColumnExprs::column(centroids, "centroid"),
+           lp::Lit(metric),
+           lp::Lit(index.properties.numClusters),
+           lp::Lit(index.properties.dimension))
+           .as("codec")});
 }
 
 // Returns the plan that trains a codec for each sampled partition and writes
@@ -282,14 +298,18 @@ lp::LogicalPlanNodePtr planTrain(
     const std::function<lp::PlanBuilder(int64_t)>& makeSample,
     const lp::PlanBuilder& selected,
     const VectorIndexCodecTrainer* trainer) {
-  auto codecs =
-      trainCodecs(index, partitions, makeSample, trainer)
-          .project(
-              ColumnExprs::concat(
-                  ColumnExprs::renamed(partitions, "t_"), lp::Col("codec")));
+  auto codecs = trainCodecs(index, partitions, makeSample, trainer);
+  codecs.project(
+      ColumnExprs::concat(
+          ColumnExprs::renamed(codecs, partitions, "t_"),
+          ColumnExprs::column(codecs, "codec")));
 
-  return lp::PlanBuilder(selected)
-      .join(codecs, *ColumnExprs::equal(partitions, "t_"), lp::JoinType::kLeft)
+  lp::PlanBuilder plan(selected);
+  plan.join(
+      codecs,
+      *ColumnExprs::equal(selected, codecs, partitions, "t_"),
+      lp::JoinType::kLeft);
+  return plan
       .tableWrite(
           connectorId,
           index.codecTable.schema,
@@ -298,7 +318,8 @@ lp::LogicalPlanNodePtr planTrain(
           VectorIndex::codecTableType(index.partitionColumns)->names(),
           ColumnExprs::concat(
               ColumnExprs::concat(
-                  {lp::Col("codec")}, ColumnExprs::of(partitions)),
+                  {ColumnExprs::column(plan, "codec")},
+                  ColumnExprs::of(plan, partitions)),
               codecId))
       .build();
 }
@@ -315,24 +336,17 @@ lp::LogicalPlanNodePtr planBuild(
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
     const lp::PlanBuilder& rows,
-    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition) {
-  const std::string codecIdColumn{VectorIndex::kCodecId};
-
-  // The rows of the storage table 'name' in the refreshed partitions.
-  const auto scanPartitions =
-      [&](const facebook::axiom::SchemaTableName& name) {
-        return addCondition(
-            rows.newPlan().tableScan(connectorId, name.schema, name.table));
-      };
-
-  // The partition columns of a storage table, each named 'prefix' + the
-  // partition's name in 'rows'.
-  const auto partitionsAs = [&](std::string_view prefix) {
+    const std::function<lp::PlanBuilder(
+        const facebook::axiom::SchemaTableName&)>& scanStorage) {
+  // The partition columns of 'scan', a storage table, each named 'prefix' +
+  // the partition's name in 'rows'.
+  const auto partitionsAs = [&](const lp::PlanBuilder& scan,
+                                std::string_view prefix) {
     std::vector<lp::ExprApi> columns;
     columns.reserve(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
       columns.push_back(
-          lp::Col(partitionColumns[i])
+          ColumnExprs::column(scan, partitionColumns[i])
               .as(fmt::format("{}{}", prefix, partitions[i])));
     }
     return columns;
@@ -340,24 +354,14 @@ lp::LogicalPlanNodePtr planBuild(
 
   // The centroids of this refresh's codecs.
   auto centroids =
-      scanPartitions(VectorIndex::centroidsTableName(table, index.name))
-          .filter(lp::Col(codecIdColumn) == codecId)
-          .project(
-              ColumnExprs::concat(
-                  partitionsAs("c_"),
-                  {lp::Col(VectorIndex::kClusterId),
-                   lp::Col(VectorIndex::kCentroid)}));
-
-  // The build reads the query again, so it can see a partition the train did
-  // not, e.g. one a concurrent write added to the query's input. Such a row
-  // has no codec and fails the refresh.
-  const auto clusterId = failIf(
-      lp::Col("cluster_id").isNull(),
-      ColumnExprs::message("No codec for partition: ", partitions),
-      BIGINT(),
-      lp::Col("cluster_id"));
-
-  const auto partitionKeys = ColumnExprs::of(partitions);
+      scanStorage(VectorIndex::centroidsTableName(table, index.name));
+  centroids.filter(
+      ColumnExprs::column(centroids, VectorIndex::kCodecId) == codecId);
+  centroids.project(
+      ColumnExprs::concat(
+          partitionsAs(centroids, "c_"),
+          {ColumnExprs::column(centroids, VectorIndex::kClusterId),
+           ColumnExprs::column(centroids, VectorIndex::kCentroid)}));
 
   std::map<Variant, Variant> options;
   for (const auto& [key, value] : index.properties.indexOptions) {
@@ -367,80 +371,93 @@ lp::LogicalPlanNodePtr planBuild(
   const auto columnNames =
       VectorIndex::indexTableType(index.partitionColumns)->names();
 
+  // Each row's nearest centroid of its partition's codec.
+  lp::PlanBuilder localIndexes(rows);
+  localIndexes.vectorSearch(
+      centroids,
+      ColumnExprs::equal(rows, centroids, partitions, "c_"),
+      lp::JoinType::kLeft,
+      {
+          .probeEmbedding = ColumnExprs::id(rows, kEmbedding),
+          .buildEmbedding = ColumnExprs::id(centroids, VectorIndex::kCentroid),
+          .k = 1,
+      });
+
+  // The build reads the query again, so it can see a partition the train did
+  // not, e.g. one a concurrent write added to the query's input. Such a row
+  // has no codec and fails the refresh.
+  const auto clusterId = ColumnExprs::column(localIndexes, "cluster_id");
+  localIndexes.project(
+      ColumnExprs::concat(
+          ColumnExprs::of(localIndexes, partitions),
+          {
+              failIf(
+                  clusterId.isNull(),
+                  ColumnExprs::message(
+                      localIndexes, "No codec for partition: ", partitions),
+                  BIGINT(),
+                  clusterId)
+                  .as("cluster_id"),
+              ColumnExprs::column(localIndexes, kKey),
+              ColumnExprs::column(localIndexes, kEmbedding),
+          }));
+
+  // row_number() OVER (PARTITION BY <partition columns>, cluster_id)
+  //     AS cluster_row
+  localIndexes.with(
+      {lp::Call("row_number")
+           .over(
+               lp::WindowSpec().partitionBy(
+                   ColumnExprs::concat(
+                       ColumnExprs::of(localIndexes, partitions),
+                       ColumnExprs::column(localIndexes, "cluster_id"))))
+           .as("cluster_row")});
+
   // The most rows a local index holds.
   constexpr int64_t kRowsPerLocalIndex{50'000};
-  auto localIndexes =
-      lp::PlanBuilder(rows)
-          // Each row's nearest centroid of its partition's codec.
-          .vectorSearch(
-              centroids,
-              ColumnExprs::equal(partitions, "c_"),
-              lp::JoinType::kLeft,
-              {
-                  .probeEmbedding = std::string(kEmbedding),
-                  .buildEmbedding = std::string(VectorIndex::kCentroid),
-                  .k = 1,
-              })
-          .project(
-              ColumnExprs::concat(
-                  partitionKeys,
-                  {
-                      clusterId.as("cluster_id"),
-                      lp::Col(kKey),
-                      lp::Col(kEmbedding),
-                  }))
-          // row_number() OVER (PARTITION BY <partition columns>, cluster_id)
-          //     AS cluster_row
-          .with({lp::Call("row_number")
-                     .over(
-                         lp::WindowSpec().partitionBy(
-                             ColumnExprs::concat(
-                                 partitionKeys, lp::Col("cluster_id"))))
-                     .as("cluster_row")})
-          .with({((lp::Col("cluster_row") - lp::Lit(int64_t{1})) /
-                  lp::Lit(kRowsPerLocalIndex))
-                     .as("group_id")})
-          .aggregate(
-              ColumnExprs::concat(
-                  partitionKeys, {lp::Col("cluster_id"), lp::Col("group_id")}),
-              {
-                  lp::Call(
-                      "vector_index_build",
-                      lp::Col(kEmbedding),
-                      lp::Col(kKey),
-                      lp::Lit(
-                          VectorIndexKindName::toName(
-                              index.properties.indexKind)),
-                      lp::Lit(
-                          VectorIndexMetricName::toName(
-                              index.properties.metric)),
-                      lp::Lit(Variant::map(options), MAP(VARCHAR(), VARCHAR())))
-                      .as("local_index"),
-              })
-          .project(
-              ColumnExprs::concat(
-                  partitionKeys,
-                  {
-                      lp::Col("cluster_id"),
-                      lp::Col("group_id"),
-                      lp::Col("local_index"),
-                  }));
+  localIndexes.with({((ColumnExprs::column(localIndexes, "cluster_row") -
+                       lp::Lit(int64_t{1})) /
+                      lp::Lit(kRowsPerLocalIndex))
+                         .as("group_id")});
+  localIndexes.aggregate(
+      ColumnExprs::concat(
+          ColumnExprs::of(localIndexes, partitions),
+          {ColumnExprs::column(localIndexes, "cluster_id"),
+           ColumnExprs::column(localIndexes, "group_id")}),
+      {
+          lp::Call(
+              "vector_index_build",
+              ColumnExprs::column(localIndexes, kEmbedding),
+              ColumnExprs::column(localIndexes, kKey),
+              lp::Lit(VectorIndexKindName::toName(index.properties.indexKind)),
+              lp::Lit(VectorIndexMetricName::toName(index.properties.metric)),
+              lp::Lit(Variant::map(options), MAP(VARCHAR(), VARCHAR())))
+              .as("local_index"),
+      });
+  localIndexes.project(
+      ColumnExprs::concat(
+          ColumnExprs::of(localIndexes, partitions),
+          {
+              ColumnExprs::column(localIndexes, "cluster_id"),
+              ColumnExprs::column(localIndexes, "group_id"),
+              ColumnExprs::column(localIndexes, "local_index"),
+          }));
 
   // The partitions with no valid rows: those the train plan wrote a NULL codec
   // for.
-  auto emptyPartitions =
-      scanPartitions(index.codecTable)
-          .filter(
-              lp::Col(codecIdColumn) == codecId &&
-              lp::Col(VectorIndex::kCodec).isNull())
-          .project(
-              ColumnExprs::concat(
-                  partitionsAs(""),
-                  {lp::NullLit(BIGINT()).as("cluster_id"),
-                   lp::NullLit(BIGINT()).as("group_id"),
-                   lp::NullLit(VECTOR_INDEX()).as("local_index")}));
+  auto emptyPartitions = scanStorage(index.codecTable);
+  emptyPartitions.filter(
+      ColumnExprs::column(emptyPartitions, VectorIndex::kCodecId) == codecId &&
+      ColumnExprs::column(emptyPartitions, VectorIndex::kCodec).isNull());
+  emptyPartitions.project(
+      ColumnExprs::concat(
+          partitionsAs(emptyPartitions, ""),
+          {lp::NullLit(BIGINT()).as("cluster_id"),
+           lp::NullLit(BIGINT()).as("group_id"),
+           lp::NullLit(VECTOR_INDEX()).as("local_index")}));
 
-  return localIndexes.unionAll(emptyPartitions)
+  localIndexes.unionAll(emptyPartitions);
+  return localIndexes
       .tableWrite(
           connectorId,
           index.indexTable.schema,
@@ -450,11 +467,11 @@ lp::LogicalPlanNodePtr planBuild(
           ColumnExprs::concat(
               {
                   codecId,
-                  lp::Col("cluster_id"),
-                  lp::Col("group_id"),
-                  lp::Col("local_index"),
+                  ColumnExprs::column(localIndexes, "cluster_id"),
+                  ColumnExprs::column(localIndexes, "group_id"),
+                  ColumnExprs::column(localIndexes, "local_index"),
               },
-              partitionKeys))
+              ColumnExprs::of(localIndexes, partitions)))
       .build();
 }
 
@@ -466,7 +483,8 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const VectorIndex& index,
     const std::string& connectorId,
     const std::function<lp::PlanBuilder()>& makeQuery,
-    const std::function<lp::PlanBuilder(lp::PlanBuilder)>& addCondition,
+    const std::function<
+        lp::PlanBuilder(const facebook::axiom::SchemaTableName&)>& scanStorage,
     const VectorIndexCodecTrainer* trainer) {
   const auto& partitionColumns = index.partitionColumns->names();
   VELOX_CHECK(!partitionColumns.empty());
@@ -499,7 +517,7 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
           partitions,
           codecId,
           makeRows(),
-          addCondition),
+          scanStorage),
   };
 }
 

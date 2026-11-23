@@ -32,7 +32,7 @@ class VectorIndexCodecTrainer;
 /// Example:
 ///
 ///   auto plans = VectorIndexRefresh::plan(
-///       table, index, connectorId, makeQuery, addCondition,
+///       table, index, connectorId, makeQuery, scanStorage,
 ///       session->vectorIndexCodecTrainer().get());
 ///   // Inside the index write, run plans.trainPlan, then plans.buildPlan,
 ///   // each with the write's codec id as the value of ?1.
@@ -46,9 +46,12 @@ class VectorIndexRefresh {
   /// columns. The plans read the query several times, and a logical plan is a
   /// tree, so each call of 'makeQuery' must plan it again, with new names.
   ///
-  /// 'addCondition' adds the query's condition on the partition columns to a
-  /// scan of a storage table of the index, which has the same partition
-  /// columns, so the plans read only the refreshed partitions of the index.
+  /// 'scanStorage' returns a scan of a storage table of the index with the
+  /// query's condition on the partition columns, which the storage table
+  /// shares, so the plans read only the refreshed partitions of the index.
+  ///
+  /// The builders 'makeQuery' and 'scanStorage' return resolve columns by ID
+  /// (see PlanBuilder::Context::columnsById), as do the plans.
   ///
   /// The index holds only valid rows. A row is skipped when its key is NULL, or
   /// its embedding is NULL, of another length than the index's dimension, has
@@ -67,8 +70,7 @@ class VectorIndexRefresh {
       const std::function<facebook::axiom::logical_plan::PlanBuilder()>&
           makeQuery,
       const std::function<facebook::axiom::logical_plan::PlanBuilder(
-          facebook::axiom::logical_plan::PlanBuilder storageScan)>&
-          addCondition,
+          const facebook::axiom::SchemaTableName& storageTable)>& scanStorage,
       const VectorIndexCodecTrainer* trainer);
 };
 

@@ -325,9 +325,9 @@ TEST_F(PrestoParserTest, vectorSearch) {
               ROW({"id", "id", "score"}, {ARRAY(REAL()), BIGINT(), BIGINT()})));
 
   // A score named like a column of the queries makes the bare name ambiguous.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(qualifiedSearch("score", ", score => DESCRIPTOR(score)")),
-      "Cannot resolve column: score");
+      "Column is ambiguous: score");
 
   const auto search = [&](std::string_view arguments) {
     return parseSql(
@@ -512,7 +512,7 @@ TEST_F(PrestoParserTest, lateralJoin) {
           .output());
 
   // Without LATERAL, the right side cannot read the left side's columns.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_nationkey, d FROM nation "
           "CROSS JOIN (SELECT n_nationkey + 1 AS d) AS x"),
@@ -572,18 +572,18 @@ TEST_F(PrestoParserTest, schemaQualifiedColumnAccess) {
   testSelect("SELECT default.nation.n_name FROM default.nation", matcher);
 
   // A qualifier that names no relation in scope resolves nothing.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT bogus.nation.n_name FROM nation"),
       "Cannot resolve column");
 
   // An alias replaces the relation's name, so the schema no longer qualifies
   // it.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT default.nation.n_name FROM nation AS n"),
       "Cannot resolve column");
 
   // A CTE name is query-local, so no schema qualifies it.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("WITH c AS (SELECT 1 AS a) SELECT default.c.a FROM c"),
       "Cannot resolve column");
 
@@ -709,7 +709,7 @@ TEST_F(PrestoParserTest, selectStarDuplicateColumns) {
           .project()
           .output({"x", "x", "extra"}));
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT x FROM (SELECT *, 3 AS extra FROM (SELECT 1 AS x) "
           "JOIN (SELECT 2 AS x) ON TRUE)"),
@@ -946,7 +946,7 @@ TEST_F(PrestoParserTest, withBodyResolvesInDefiningScope) {
 
   // Neither a relation nor a column of the body's own FROM answers 'u', even
   // though the referencing query reads a table by that name.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "WITH c AS (SELECT u.b AS b FROM nation) "
           "SELECT u.b FROM u LEFT JOIN c ON u.k = 1"),
@@ -955,11 +955,18 @@ TEST_F(PrestoParserTest, withBodyResolvesInDefiningScope) {
   // A schema-qualified name reaches the tables in scope, which are the body's
   // own. 'default.u' names the referencing query's table, so it resolves
   // nothing here even though the body has a column 'u'.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "WITH c AS (SELECT default.u.k AS k FROM s) "
           "SELECT u.b FROM u LEFT JOIN c ON u.k = c.k"),
       "Cannot resolve column");
+
+  // The query that reads a CTE resolves its other names in its own scope: a
+  // subquery reading 'c' still correlates to the enclosing query.
+  testSelect(
+      "WITH c AS (SELECT k FROM u) "
+      "SELECT (SELECT max(c.k) FROM c WHERE c.k = s.u.k) FROM s",
+      matchScan("s").project().output());
 }
 
 TEST_F(PrestoParserTest, withShadowingBaseTable) {
@@ -1089,9 +1096,16 @@ TEST_F(PrestoParserTest, join) {
         "t3", ROW({"x", "y", "z"}, {INTEGER(), INTEGER(), VARCHAR()}));
 
     // Unqualified reference to a column on both sides is ambiguous.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql("SELECT * FROM t1 JOIN t2 ON id = id"),
-        "Cannot resolve column");
+        "Column is ambiguous: id");
+
+    // Also when an enclosing query has a column of that name.
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseSql(
+            "SELECT (SELECT id FROM t1 JOIN t2 ON t1.id = t2.id) "
+            "FROM t1 AS o"),
+        "Column is ambiguous: id");
 
     // Qualified references are not ambiguous.
     auto matcher = matchScan()
@@ -1101,7 +1115,7 @@ TEST_F(PrestoParserTest, join) {
     testSelect("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", matcher);
 
     // Non-existent column in ON clause.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql("SELECT * FROM t1 JOIN t2 ON t1.id = no_such_column"),
         "Cannot resolve column");
 
@@ -1109,7 +1123,7 @@ TEST_F(PrestoParserTest, join) {
     // that exists on both sides of the join is ambiguous. This exercises the
     // joinScope lambda (resolveJoinColumn) rather than the NameMappings::merge
     // path used for simple ON conditions.
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT * FROM t1 JOIN t2 "
             "ON t1.id = (SELECT max(x) FROM t3 WHERE t3.y = id)"),
@@ -1274,9 +1288,9 @@ TEST_F(PrestoParserTest, joinUsing) {
 
   // A column name both sides have, other than a USING column, stays
   // ambiguous, also when only one side has an alias.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT a FROM (SELECT id, a FROM t1) JOIN t1 AS s USING (id)"),
-      "Cannot resolve column: a");
+      "Column is ambiguous: a");
 }
 
 // A scalar subquery (subquery used as an expression) must return
@@ -1452,7 +1466,7 @@ TEST_F(PrestoParserTest, intersect) {
 }
 
 TEST_F(PrestoParserTest, unionAllUnresolvedColumn) {
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT n_name FROM nation UNION ALL SELECT n_name FROM region"),
       "Cannot resolve column");
 }
@@ -1992,7 +2006,7 @@ TEST_F(PrestoParserTest, duplicateAliases) {
   }
 
   // Referencing a duplicate column shoud fail.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT x FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))"),
       "Cannot resolve column: x");
@@ -2010,11 +2024,11 @@ TEST_F(PrestoParserTest, duplicateAliases) {
   }
 
   // Referencing the ambiguous shared column fails.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT u FROM UNNEST(ARRAY[1], ARRAY[2]) AS t(a, u) "
           "CROSS JOIN UNNEST(ARRAY[3], ARRAY[4]) AS t(b, u)"),
-      "Cannot resolve column: u");
+      "Column is ambiguous: u");
 }
 
 // A derived table exposes only column names. The relation aliases used inside
@@ -2028,7 +2042,7 @@ TEST_F(PrestoParserTest, derivedTableHidesInnerAlias) {
       "CROSS JOIN UNNEST(b) AS t(b)",
       matcher);
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT t.a FROM (SELECT a FROM (VALUES 1) AS t(a))"),
       "Cannot resolve column: t");
 
@@ -2042,12 +2056,12 @@ TEST_F(PrestoParserTest, derivedTableHidesInnerAlias) {
           .join(matchValues().project().build())
           .output({"a", "a"}));
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT a FROM (SELECT * FROM (VALUES 1) AS t1(a), (VALUES 2) AS t2(a))"),
-      "Cannot resolve column: a");
+      "Column is ambiguous: a");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT t.a FROM (VALUES 1) AS x(z), "
           "LATERAL (SELECT a FROM (VALUES 2) AS t(a))"),

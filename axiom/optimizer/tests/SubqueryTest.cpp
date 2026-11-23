@@ -567,7 +567,6 @@ TEST_P(SubqueryTest, repeatedUncorrelatedScalarInUnion) {
                       {}, {"max(inner_region_name) as inner_max"}),
               {.keys = {{"inner_name = inner_max"}},
                .filter = "inner_name >= inner_comment"})
-          .project({"inner_name as union_name"})
           .localPartition(matchHiveScan("region")
                               .aliases({"union_region_name"})
                               .project({"union_region_name as union_name"}))
