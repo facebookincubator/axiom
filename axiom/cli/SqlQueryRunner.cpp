@@ -327,7 +327,10 @@ void SqlQueryRunner::initialize(
 
   folly::call_once(kInitialized, []() {
     velox::functions::prestosql::registerAllScalarFunctions();
-    velox::aggregate::prestosql::registerAllAggregateFunctions();
+    velox::aggregate::prestosql::registerAllAggregateFunctions(
+        /*prefix=*/"",
+        /*withCompanionFunctions=*/true,
+        /*onlyPrestoSignatures=*/true);
     velox::window::prestosql::registerAllWindowFunctions();
     velox::functions::axiom::registerFunctions("axiom_");
 
