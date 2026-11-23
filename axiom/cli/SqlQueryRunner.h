@@ -191,7 +191,7 @@ using QueryStartCallback = std::function<void(const QueryStartInfo&)>;
 /// Invoked when a query completes, whether it succeeded or failed.
 using QueryCompletionCallback = std::function<void(const QueryCompletionInfo&)>;
 
-/// Executes SQL queries.
+/// Executes Presto SQL queries.
 class SqlQueryRunner {
  public:
   /// Prefix for optimizer session properties (e.g., "optimizer.sample_joins").
