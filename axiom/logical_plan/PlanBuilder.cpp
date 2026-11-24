@@ -481,9 +481,9 @@ std::optional<std::string> pickName(
   return names.front().name;
 }
 
-// Tracks duplicate names and adds mappings accordingly.
-// When allowDuplicates is true, names that appear multiple times are skipped
-// to avoid ambiguous lookups.
+// Tracks duplicate names and adds mappings accordingly. When allowDuplicates is
+// true, a name that appears more than once names several columns: it is marked
+// ambiguous and gets no mapping.
 class NameTracker {
  public:
   NameTracker(bool allowDuplicates, NameMappings& mappings)
@@ -501,10 +501,10 @@ class NameTracker {
     }
   }
 
-  // Tracks a single name for duplicate detection without adding mappings.
+  // Tracks a single name for duplicate detection.
   void track(const std::string& name) {
     if (allowDuplicates_ && !name.empty() && !seen_.insert(name).second) {
-      duplicates_.insert(name);
+      mappings_.markAmbiguous({.alias = std::nullopt, .name = name});
     }
   }
 
@@ -564,7 +564,7 @@ class NameTracker {
  private:
   // Returns true if 'name' is a duplicate and should be skipped.
   bool isDuplicate(const std::string& name) const {
-    return allowDuplicates_ && duplicates_.contains(name);
+    return mappings_.isAmbiguous({.alias = std::nullopt, .name = name});
   }
 
   // Adds a qualified 'name', which must carry an alias. A base name repeated
@@ -602,7 +602,6 @@ class NameTracker {
   bool allowDuplicates_;
   NameMappings& mappings_;
   std::unordered_set<std::string> seen_;
-  std::unordered_set<std::string> duplicates_;
 };
 
 } // namespace
