@@ -767,9 +767,7 @@ TEST_P(JoinTest, constantFullOuterJoinKeys) {
         matchScan("t")
             .filter("a = 1")
             .project({"b"})
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1").project({"y"}),
-                core::JoinType::kFull)
+            .nestedLoopJoinFull(matchScan("u").filter("x = 1").project({"y"}))
             .build());
   }
 
@@ -836,9 +834,8 @@ TEST_P(JoinTest, constantSemiFilterJoinKeys) {
         toSingleNodePlan(query),
         matchScan("t")
             .filter("a = 1")
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1").projectNone(),
-                core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(
+                matchScan("u").filter("x = 1").projectNone())
             .aliases({"b", "mark"})
             .filter("mark")
             .project({"b"})
@@ -855,9 +852,7 @@ TEST_P(JoinTest, constantSemiFilterJoinKeys) {
         matchScan("t")
             .filter("a = 1")
             .project({"b"})
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1"),
-                core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(matchScan("u").filter("x = 1"))
             .aliases({"b", "mark"})
             .filter("mark")
             .project({"b"})
@@ -874,9 +869,8 @@ TEST_P(JoinTest, constantSemiFilterJoinKeys) {
         matchScan("t")
             .filter("a = 1")
             .project({"b"})
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1").projectNone(),
-                core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(
+                matchScan("u").filter("x = 1").projectNone())
             .aliases({"b", "mark"})
             .filter("mark")
             .project({"b"})
@@ -919,9 +913,8 @@ TEST_P(JoinTest, constantSemiProjectJoinKeys) {
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(query),
       matchScan("t")
-          .nestedLoopJoin(
-              matchScan("u").filter("x = 1").projectNone(),
-              core::JoinType::kLeftSemiProject)
+          .nestedLoopJoinLeftSemiProject(
+              matchScan("u").filter("x = 1").projectNone())
           .aliases({"b", "a", "has_rows"})
           .project({"b", "if(has_rows, a = 1, false)"})
           .build());
@@ -952,7 +945,7 @@ TEST_P(JoinTest, constantSemiProjectJoinKeys) {
     AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(nullProbeKey),
         matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(matchScan("u"))
             .aliases({"b", "has_rows"})
             .project({"b", "if(has_rows, null, false)"})
             .build());
@@ -991,10 +984,8 @@ TEST_P(JoinTest, constantAntiJoinKeys) {
         matchScan("t")
             .project({"b", "a = 1 OR a IS NULL"})
             .aliases({"b", "condition"})
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1").projectNone(),
-                core::JoinType::kLeftSemiProject,
-                "condition")
+            .nestedLoopJoinLeftSemiProject(
+                matchScan("u").filter("x = 1").projectNone(), "condition")
             .aliases({"b", "mark"})
             .filter("not(mark)")
             .project({"b"})
@@ -1010,9 +1001,8 @@ TEST_P(JoinTest, constantAntiJoinKeys) {
         matchScan("t")
             .filter("a = 1")
             .project({"b"})
-            .nestedLoopJoin(
-                matchScan("u").filter("x = 1 OR x IS NULL"),
-                core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(
+                matchScan("u").filter("x = 1 OR x IS NULL"))
             .aliases({"b", "mark"})
             .filter("not(mark)")
             .project({"b"})
@@ -1034,7 +1024,7 @@ TEST_P(JoinTest, constantAntiJoinKeys) {
     AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(nullProbeKey),
         matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kLeftSemiProject)
+            .nestedLoopJoinLeftSemiProject(matchScan("u"))
             .aliases({"b", "mark"})
             .filter("not(mark)")
             .project({"b"})
@@ -1813,8 +1803,7 @@ TEST_P(JoinTest, crossJoin) {
     // separate Filter node.
     auto matcher =
         matchScan("t")
-            .nestedLoopJoin(
-                matchScan("u"), core::JoinType::kInner, useV2_ ? "a > x" : "")
+            .nestedLoopJoinInner(matchScan("u"), useV2_ ? "a > x" : "")
             .filterIf(!useV2_, "a > x")
             .build();
 
@@ -1916,9 +1905,7 @@ TEST_P(JoinTest, leftCrossJoin) {
         "SELECT * FROM t LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1");
 
     auto matcher =
-        matchScan("t")
-            .nestedLoopJoin(matchScan("u").aggregation(), core::JoinType::kLeft)
-            .build();
+        matchScan("t").nestedLoopJoinLeft(matchScan("u").aggregation()).build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1930,11 +1917,10 @@ TEST_P(JoinTest, leftCrossJoin) {
     auto logicalPlan = parseSelect(
         "SELECT * FROM (SELECT count(*) FROM t) LEFT JOIN (SELECT count(*) FROM u) ON 1 = 1");
 
-    auto matcher =
-        matchScan("t")
-            .aggregation()
-            .nestedLoopJoin(matchScan("u").aggregation(), core::JoinType::kLeft)
-            .build();
+    auto matcher = matchScan("t")
+                       .aggregation()
+                       .nestedLoopJoinLeft(matchScan("u").aggregation())
+                       .build();
 
     auto plan = toSingleNodePlan(logicalPlan);
     AXIOM_ASSERT_PLAN(plan, matcher);
@@ -1947,7 +1933,7 @@ TEST_P(JoinTest, leftCrossJoin) {
         "SELECT a FROM t LEFT JOIN u ON 1 = 1 WHERE coalesce(x, 1) > 0");
 
     auto matcher = matchScan("t")
-                       .nestedLoopJoin(matchScan("u"), core::JoinType::kLeft)
+                       .nestedLoopJoinLeft(matchScan("u"))
                        .filter()
                        .project()
                        .build();
@@ -1970,9 +1956,8 @@ TEST_P(JoinTest, leftCrossJoin) {
     // V2 is better: it preserves the requested output directly and eliminates
     // an identity Project above the join.
     auto matcher = matchScan("t")
-                       .nestedLoopJoin(
+                       .nestedLoopJoinLeft(
                            matchScan("u").project({"x", "y + 1 as z"}),
-                           core::JoinType::kLeft,
                            "coalesce(a, x) > 0")
                        .projectIf(!useV2_, {"a", "b", "x", "z"})
                        .build();
@@ -2398,7 +2383,7 @@ TEST_P(JoinTest, gatheredProbe) {
 
   const auto matchProbe = [](core::PlanMatcherBuilder build) {
     return matchValues()
-        .nestedLoopJoin(std::move(build), core::JoinType::kLeftSemiProject)
+        .nestedLoopJoinLeftSemiProject(std::move(build))
         .aliases({"m"})
         .filter("NOT m")
         .projectNone()
@@ -3611,14 +3596,13 @@ TEST_P(JoinTest, impliedFilterNonPropagation) {
     auto query = "SELECT count(*) FROM t JOIN u ON t.a + rand() = u.x";
     SCOPED_TRACE(query);
 
-    auto matcher = matchScan("t")
-                       .project({"a::double as ta"})
-                       .nestedLoopJoin(
-                           matchScan("u").project({"x::double as ux"}),
-                           core::JoinType::kInner,
-                           "ta + rand() = ux")
-                       .singleAggregation({}, {"count(*)"})
-                       .build();
+    auto matcher =
+        matchScan("t")
+            .project({"a::double as ta"})
+            .nestedLoopJoinInner(
+                matchScan("u").project({"x::double as ux"}), "ta + rand() = ux")
+            .singleAggregation({}, {"count(*)"})
+            .build();
 
     AXIOM_ASSERT_PLAN_V2(toSingleNodePlan(query), matcher);
   }
@@ -4011,10 +3995,8 @@ TEST_P(JoinTest, leftJoinNoEqualitiesMultipleTables) {
                          core::JoinType::kLeftSemiProject,
                          {.nullAware = false})
                      .project()
-                     .nestedLoopJoin(
-                         matchScan("supplier"),
-                         core::JoinType::kLeft,
-                         "n_nationkey < s_nationkey")
+                     .nestedLoopJoinLeft(
+                         matchScan("supplier"), "n_nationkey < s_nationkey")
                      .build();
 
   auto plan = toSingleNodePlan(query);

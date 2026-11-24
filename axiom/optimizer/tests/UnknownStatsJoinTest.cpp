@@ -262,7 +262,7 @@ TEST_P(UnknownStatsJoinTest, broadcastThetaJoin) {
   AXIOM_ASSERT_PLAN_V2(
       toSingleNodePlan(writtenRightJoinPlan),
       matchScan("t")
-          .nestedLoopJoin(matchScan("u"), core::JoinType::kRight, "t_k < u_k")
+          .nestedLoopJoinRight(matchScan("u"), "t_k < u_k")
           .project({"u_k + t_k as sum"})
           .singleAggregation({}, {"count(sum)"})
           .build());
@@ -292,15 +292,14 @@ TEST_P(UnknownStatsJoinTest, broadcastThetaJoin) {
     AXIOM_ASSERT_PLAN_V2(
         toSingleNodePlan(swappedRightJoinPlan),
         matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kLeft, "u_k < t_k")
+            .nestedLoopJoinLeft(matchScan("u"), "u_k < t_k")
             .project({"t_k + u_k as sum"})
             .singleAggregation({}, {"count(sum)"})
             .build());
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
         planVelox(swappedRightJoinPlan).plan,
         matchScan("t")
-            .nestedLoopJoin(
-                matchScan("u").broadcast(), core::JoinType::kLeft, "u_k < t_k")
+            .nestedLoopJoinLeft(matchScan("u").broadcast(), "u_k < t_k")
             .project({"t_k + u_k as sum"})
             .distributedAggregation({}, {"count(sum)"})
             .build());

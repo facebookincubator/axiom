@@ -358,9 +358,8 @@ TEST_P(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
 
   auto matcher = matchValues(ROW({"a", "c"}, INTEGER()))
                      .filter("neq(a, 0) AND eq(c, 5)")
-                     .nestedLoopJoin(
+                     .nestedLoopJoinInner(
                          matchValues().singleAggregation(),
-                         velox::core::JoinType::kInner,
                          useV2_ ? "gt(divide(max, a), 1)" : "")
                      .filterIf(!useV2_)
                      .project()
