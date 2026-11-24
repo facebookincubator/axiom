@@ -861,11 +861,9 @@ TEST_P(PlanTest, values) {
       auto referencePlan =
           makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
               .hashJoin(
-                  {"x2"},
-                  {"y2"},
+                  "x2 = y2",
                   makePhysicalPlan(leafType2, "n_regionkey > 1", "y")
                       .planNode(),
-                  "",
                   {"x1", "x2", "y3"})
               .planNode();
 
@@ -898,18 +896,14 @@ TEST_P(PlanTest, values) {
       auto referencePlan =
           makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
               .hashJoin(
-                  {"x2"},
-                  {"y2"},
+                  "x2 = y2",
                   makePhysicalPlan(leafType2, "n_regionkey < 3", "y")
                       .hashJoin(
-                          {"y2"},
-                          {"z2"},
+                          "y2 = z2",
                           makePhysicalPlan(leafType3, "n_regionkey > 1", "z")
                               .planNode(),
-                          "",
                           {"y1", "y2", "z3"})
                       .planNode(),
-                  "",
                   {"x1", "x2", "y1", "z3"})
               .planNode();
 
@@ -955,26 +949,20 @@ TEST_P(PlanTest, values) {
       auto referencePlan =
           makePhysicalPlan(leafType1, "n_regionkey < 3", "x")
               .hashJoin(
-                  {"x2"},
-                  {"y2"},
+                  "x2 = y2",
                   makePhysicalPlan(leafType2, "n_regionkey < 3", "y")
                       .hashJoin(
-                          {"y2"},
-                          {"z2"},
+                          "y2 = z2",
                           makePhysicalPlan(leafType3, "n_regionkey < 3", "z")
                               .hashJoin(
-                                  {"z2"},
-                                  {"w2"},
+                                  "z2 = w2",
                                   makePhysicalPlan(
                                       leafType4, "n_regionkey > 1", "w")
                                       .planNode(),
-                                  "",
                                   {"z1", "z2", "w3"})
                               .planNode(),
-                          "",
                           {"y1", "y2", "z1", "w3"})
                       .planNode(),
-                  "",
                   {"x1", "x2", "y1", "z1", "w3"})
               .planNode();
 

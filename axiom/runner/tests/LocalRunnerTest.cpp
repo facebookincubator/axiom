@@ -129,8 +129,7 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
         .project({std::string{project}})
         .shufflePartitioned({"c0"}, 3, false)
         .hashJoin(
-            {"c0"},
-            {"b0"},
+            "c0 = b0",
             broadcastBuild
                 ? test::DistributedPlanBuilder(rootBuilder)
                       .tableScan("u", rowType_)
@@ -140,7 +139,6 @@ class LocalRunnerTest : public test::LocalRunnerTestBase {
                       .tableScan("u", rowType_)
                       .project({"c0 as b0"})
                       .shufflePartitionedResult({"b0"}, width, false),
-            "",
             {"c0", "b0"})
         .shufflePartitioned({}, 1, false)
         .localPartition({})
@@ -890,7 +888,7 @@ TEST_F(LocalRunnerTest, lastStageWithMultipleInputs) {
                    .project({"c0 as b0"})
                    .shuffleBroadcastResult();
   rootBuilder.addNode([&](const auto&, auto) { return probe; })
-      .hashJoin({"c0"}, {"b0"}, build, "", {"c0", "b0"});
+      .hashJoin("c0 = b0", build, {"c0", "b0"});
 
   auto plan = rootBuilder.build();
 
