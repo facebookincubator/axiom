@@ -1042,11 +1042,12 @@ TEST_F(SqlQueryRunnerTest, tableSampleSystem) {
   EXPECT_EQ(sample(20), 176);
   EXPECT_EQ(sample(50), 493);
 
-  // SYSTEM sampling has no single split source to sample over a join.
+  // SYSTEM sampling over a join fails.
   VELOX_ASSERT_THROW(
       run("SELECT count(*) FROM (SELECT a.x FROM sampled a, sampled b) "
           "TABLESAMPLE SYSTEM (50)"),
-      "TABLESAMPLE SYSTEM is only supported directly over a table");
+      "TABLESAMPLE SYSTEM input must be a table, optionally filtered or "
+      "projected");
 }
 
 TEST_F(SqlQueryRunnerTest, generateQueryIdDefault) {
