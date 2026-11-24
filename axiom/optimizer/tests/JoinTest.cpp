@@ -1731,22 +1731,20 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
   testConnector_
       ->addTable(
           "build",
-          ROW({"b_key", "b_narrow", "b_wide"},
-              {BIGINT(), VARCHAR(), VARCHAR()}))
+          ROW({"b_key", "b_narrow", "b_medium", "b_wide"},
+              {BIGINT(), VARCHAR(), VARCHAR(), VARCHAR()}))
       ->setStats(
           1'000,
           {{"b_key", {.numDistinct = 1'000}},
+           {"b_medium", {.avgSizeInBytes = 500}},
            {"b_wide", {.avgSizeInBytes = 200'000}}});
-
-  OptimizerOptions options;
 
   auto planJoin = [&](std::string_view buildColumn) {
     auto query = fmt::format(
         "SELECT p_key, {} FROM probe JOIN build ON p_key = b_key", buildColumn);
     return planVelox(
                parseSelect(query),
-               {.maxRemotePartitions = 4, .maxLocalPartitions = 1},
-               options)
+               {.maxRemotePartitions = 4, .maxLocalPartitions = 1})
         .plan;
   };
 
@@ -1773,13 +1771,45 @@ TEST_P(JoinTest, broadcastSizeLimitGatesBroadcast) {
   // Lowering the limit below the build size makes it ineligible for broadcast,
   // so both sides are hash-partitioned on the join key.
   {
-    options.broadcastSizeLimit = 1024;
+    optimizerOptions_.broadcastSizeLimit = 1024;
     auto matcher = matchScan("probe")
                        .shuffle({"p_key"})
                        .hashJoinInner(matchScan("build").shuffle({"b_key"}))
                        .gather()
                        .build();
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planJoin("b_narrow"), matcher);
+  }
+
+  // Under the written join order, an inner join of unpartitioned inputs
+  // broadcasts its build whenever the build fits the limit. The 1000-row build
+  // of `b_medium` (~500KB) is hash-partitioned under 64KB and broadcast under
+  // 1MB.
+  optimizerOptions_.syntacticJoinOrder = true;
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(
+          "SELECT p_key, b_medium FROM probe JOIN build ON p_key = b_key"),
+      matchScan("probe")
+          .hashJoinInner(matchScan("build"), {.keys = {{"p_key = b_key"}}})
+          .build());
+  {
+    SCOPED_TRACE("written order, build over the limit");
+    optimizerOptions_.broadcastSizeLimit = 64 << 10;
+    auto matcher = matchScan("probe")
+                       .shuffle({"p_key"})
+                       .hashJoinInner(matchScan("build").shuffle({"b_key"}))
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planJoin("b_medium"), matcher);
+  }
+
+  {
+    SCOPED_TRACE("written order, build within the limit");
+    optimizerOptions_.broadcastSizeLimit = 1 << 20;
+    auto matcher = matchScan("probe")
+                       .hashJoinInner(matchScan("build").broadcast())
+                       .gather()
+                       .build();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(planJoin("b_medium"), matcher);
   }
 }
 
