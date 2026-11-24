@@ -904,6 +904,22 @@ Translated Translator::translateScan(
   return {simplified.node, std::move(scope)};
 }
 
+namespace {
+
+// True if 'expr' is `lp::SpecialFormExpr(kIn, [value, SubqueryExpr])` —
+// i.e., the IN-subquery form that lifts to Apply, distinguished from
+// `IN (literal_list)` which lowers as an ordinary in-list expression.
+bool isInSubqueryForm(const lp::Expr& expr) {
+  if (!expr.isSpecialForm()) {
+    return false;
+  }
+  const auto& specialForm = *expr.as<lp::SpecialFormExpr>();
+  return specialForm.form() == lp::SpecialForm::kIn &&
+      specialForm.inputs().size() == 2 && specialForm.inputAt(1)->isSubquery();
+}
+
+} // namespace
+
 Translated Translator::translateFilter(
     const lp::FilterNode& filter,
     const LpNameSet& required) {
@@ -949,13 +965,14 @@ Translated Translator::translateFilter(
       [&](const std::vector<const lp::Expr*>& conjuncts,
           const Scope& scope,
           LiftTarget* liftTarget) -> std::optional<ExprVector> {
-    ExprVector result;
-    result.reserve(conjuncts.size());
+    ExprVector translated;
+    translated.reserve(conjuncts.size());
     for (const auto* conjunct : conjuncts) {
-      ExprCP translated = translateExpr(*conjunct, scope, liftTarget);
-      if (simplifier_.simplifyFilter(translated, result)) {
-        return std::nullopt;
-      }
+      translated.push_back(translateConjunct(*conjunct, scope, liftTarget));
+    }
+    ExprVector result;
+    if (simplifier_.simplifyFilter(translated, result)) {
+      return std::nullopt;
     }
     return result;
   };
@@ -994,13 +1011,41 @@ Translated Translator::maybeWrapInFilter(
     const lp::Expr& predicateExpr,
     Scope scope,
     bool propagateConstants) {
-  ExprCP predicate{nullptr};
+  ExprVector predicates;
   input = withLiftTarget(input, [&](LiftTarget& target) {
-    predicate = translateExpr(predicateExpr, scope, &target);
+    predicates = translatePredicate(predicateExpr, scope, &target);
   });
 
   return simplifyFilter(
-      input, {predicate}, std::move(scope), propagateConstants);
+      input, std::move(predicates), std::move(scope), propagateConstants);
+}
+
+ExprVector Translator::translatePredicate(
+    const lp::Expr& predicate,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  std::vector<const lp::Expr*> conjuncts;
+  flattenAndConjuncts(predicate, conjuncts);
+  ExprVector translated;
+  translated.reserve(conjuncts.size());
+  for (const auto* conjunct : conjuncts) {
+    translated.push_back(translateConjunct(*conjunct, scope, liftTarget));
+  }
+  return translated;
+}
+
+ExprCP Translator::translateConjunct(
+    const lp::Expr& conjunct,
+    const Scope& scope,
+    LiftTarget* liftTarget) {
+  if (isInSubqueryForm(conjunct)) {
+    return translateInSubquery(
+        *conjunct.as<lp::SpecialFormExpr>(),
+        scope,
+        liftTarget,
+        /*asExists=*/true);
+  }
+  return translateExpr(conjunct, scope, liftTarget);
 }
 
 Translated Translator::simplifyFilter(
@@ -2804,10 +2849,9 @@ Translated Translator::translateJoin(
     NodeCP otherSide = liftOntoRight ? left.node : right.node;
 
     NodeCP beforeLift = liftTarget;
-    ExprCP condition{nullptr};
+    ExprVector conjuncts;
     liftTarget = withLiftTarget(liftTarget, [&](LiftTarget& target) {
-      condition =
-          translateExpr(*join.condition(), merged, /*liftTarget=*/&target);
+      conjuncts = translatePredicate(*join.condition(), merged, &target);
     });
     // A subquery correlated to the input it was not lifted onto references a
     // column that input cannot provide.
@@ -2816,7 +2860,6 @@ Translated Translator::translateJoin(
         "Subquery in an outer join's ON clause referencing both inputs is "
         "not supported");
 
-    auto conjuncts = ExprFactory::flattenAnd(condition);
     if (isInner) {
       propagateFilterConstants(conjuncts, merged);
     }
@@ -3384,6 +3427,7 @@ ExprCP Translator::translateExpr(
           subquery,
           velox::core::JoinType::kLeft,
           /*inLhs=*/nullptr,
+          /*asExists=*/false,
           scope,
           liftTarget);
       if (liftTarget != nullptr) {
@@ -3497,22 +3541,6 @@ ExprCP Translator::liftInferenceCall(const Call* call, LiftTarget* liftTarget) {
 
 namespace {
 
-// True if 'expr' is `lp::SpecialFormExpr(kIn, [value, SubqueryExpr])` —
-// i.e., the IN-subquery form that lifts to Apply, distinguished from
-// `IN (literal_list)` which lowers as an ordinary in-list expression.
-bool isInSubqueryForm(const lp::Expr& expr) {
-  if (!expr.isSpecialForm()) {
-    return false;
-  }
-  const auto& sf = *expr.as<lp::SpecialFormExpr>();
-  return sf.form() == lp::SpecialForm::kIn && sf.inputs().size() == 2 &&
-      sf.inputAt(1)->isSubquery();
-}
-
-} // namespace
-
-namespace {
-
 // True if 'expr' calls a remote inference function anywhere.
 bool hasInferenceCall(const lp::ExprPtr& expr) {
   if (expr->isCall() &&
@@ -3569,14 +3597,7 @@ ExprCP Translator::translateSpecialForm(
   // their presence. Plain `IN (literals...)` flows through the
   // generic path below.
   if (isInSubqueryForm(expr)) {
-    ExprCP lhs = translateExpr(*expr.inputAt(0), scope, liftTarget);
-    const auto& subquery = *expr.inputAt(1)->as<lp::SubqueryExpr>();
-    return liftSubquery(
-        subquery,
-        velox::core::JoinType::kLeftSemiProject,
-        /*inLhs=*/lhs,
-        scope,
-        liftTarget);
+    return translateInSubquery(expr, scope, liftTarget, /*asExists=*/false);
   }
 
   // NOT EXISTS / NOT IN come through as `lp::Call("not", [kExists|kIn])`,
@@ -3662,6 +3683,7 @@ ExprCP Translator::translateExists(
       subquery,
       velox::core::JoinType::kLeftSemiProject,
       /*inLhs=*/nullptr,
+      /*asExists=*/false,
       scope,
       liftTarget);
 }
@@ -3820,10 +3842,26 @@ ExprCP Translator::translateLambda(
   return make<Lambda>(std::move(args), toType(expr.type()), body);
 }
 
+ExprCP Translator::translateInSubquery(
+    const lp::SpecialFormExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget,
+    bool asExists) {
+  ExprCP lhs = translateExpr(*expr.inputAt(0), scope, liftTarget);
+  return liftSubquery(
+      *expr.inputAt(1)->as<lp::SubqueryExpr>(),
+      velox::core::JoinType::kLeftSemiProject,
+      lhs,
+      asExists,
+      scope,
+      liftTarget);
+}
+
 ExprCP Translator::liftSubquery(
     const lp::SubqueryExpr& subqueryExpr,
     velox::core::JoinType kind,
     ExprCP inLhs,
+    bool asExists,
     const Scope& outerScope,
     LiftTarget* liftTarget) {
   VELOX_USER_CHECK_NOT_NULL(
@@ -3960,6 +3998,13 @@ ExprCP Translator::liftSubquery(
       ontoPendingLifts ? liftTarget->pendingLifts : liftTarget->node;
   checkApplyInput(applyInput, inLhs);
 
+  // The IN left side is evaluated once per outer row. A left side with
+  // rand() or another nondeterministic call is computed into a column of the
+  // Apply's input.
+  if (inLhs != nullptr && inLhs->containsNonDeterministic()) {
+    inLhs = materializeColumn(&applyInput, inLhs, "__in_lhs");
+  }
+
   // Apply.outputColumns per kind:
   //   kLeft            : input.outputColumns
   //                      ++ unique(body.outputColumns) ++ includeMarker
@@ -3992,13 +4037,20 @@ ExprCP Translator::liftSubquery(
     sourceColumns.push_back(includeMarker);
   }
 
+  ExprVector filter;
+  if (asExists) {
+    filter.push_back(exprFactory_.makeEq(inLhs, inBodyKey));
+    inLhs = nullptr;
+    inBodyKey = nullptr;
+  }
+
   auto simplified = nodeSimplifier_.make(
       Apply::Key{
           applyInput,
           body,
           std::move(correlationColumns),
           kind,
-          /*filter=*/ExprVector{},
+          std::move(filter),
           enforceSingleRow,
           markColumn,
           inLhs,

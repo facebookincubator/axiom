@@ -66,7 +66,7 @@ class NodeSimplifier::JoinSimplifier {
   // True if 'node' produces one row without columns.
   static bool isSingleRowNoColumns(NodeCP node) {
     return node->outputColumns().empty() &&
-        Values::isSingleRowNoColumns(cardinalitySource(node));
+        node->relationalProperties().singleRow;
   }
 
   // The result with no rows, in the join's original layout.
@@ -427,10 +427,9 @@ bool NodeSimplifier::JoinSimplifier::simplifyFilter() {
   inputSubstitutions_ = left_.substitutions;
   inputSubstitutions_.merge(right_.substitutions);
   ExprVector filters;
-  for (ExprCP filter : inputSubstitutions_.apply(key_.filter, exprs_)) {
-    if (simplifier_.simplifyFilter(filter, filters)) {
-      return false;
-    }
+  if (simplifier_.simplifyFilter(
+          inputSubstitutions_.apply(key_.filter, exprs_), filters)) {
+    return false;
   }
   key_.filter = std::move(filters);
   return true;
@@ -518,7 +517,7 @@ bool NodeSimplifier::JoinSimplifier::simplifyLiteralKey(
     }
     ExprVector remaining;
     if (simplifier_.simplifyFilter(
-            keyPredicate(leftKey, rightKey), remaining)) {
+            {keyPredicate(leftKey, rightKey)}, remaining)) {
       return false;
     }
     VELOX_CHECK(remaining.empty());
@@ -710,10 +709,9 @@ bool NodeSimplifier::JoinSimplifier::substituteOutputs() {
       substitutionRightKeys,
       outputSubstitutions_);
   ExprVector simplifiedFilters;
-  for (ExprCP filter : outputSubstitutions_.apply(key_.filter, exprs_)) {
-    if (simplifier_.simplifyFilter(filter, simplifiedFilters)) {
-      return false;
-    }
+  if (simplifier_.simplifyFilter(
+          outputSubstitutions_.apply(key_.filter, exprs_), simplifiedFilters)) {
+    return false;
   }
   key_.filter = std::move(simplifiedFilters);
   return true;

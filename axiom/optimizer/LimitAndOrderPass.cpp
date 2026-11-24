@@ -327,9 +327,10 @@ class LimitAndOrderRewriter : public NodeRewriter<LimitContext> {
 
  private:
   // Wraps 'node' in a Limit carrying the bound, or returns it unchanged when
-  // there is no bound.
+  // there is no bound or the bound keeps every row.
   NodeCP materialize(const std::optional<LimitBound>& pending, NodeCP node) {
-    if (!pending) {
+    if (!pending ||
+        Limit::keepsAllRows(node, pending->offset, pending->count)) {
       return node;
     }
     return builder().make<Limit>({node, pending->offset, pending->count});

@@ -671,8 +671,15 @@ ExprCP ExprSimplifier::tryFoldConjunct(ExprCP expr) {
   return ExprFactory(builder_).rebuildCall(call, std::move(remaining));
 }
 
-bool ExprSimplifier::simplifyFilter(ExprCP predicate, ExprVector& into) {
-  ExprVector flattened = ExprFactory::flattenAnd(predicate);
+bool ExprSimplifier::simplifyFilter(
+    const ExprVector& predicates,
+    ExprVector& into) {
+  ExprVector flattened;
+  for (ExprCP predicate : predicates) {
+    for (ExprCP conjunct : ExprFactory::flattenAnd(predicate)) {
+      flattened.push_back(conjunct);
+    }
+  }
   ExprVector candidates;
   candidates.reserve(flattened.size());
   for (ExprCP conjunct : flattened) {

@@ -1610,18 +1610,21 @@ class Decorrelator : public NodeRewriter<> {
       ExprCP qualifies,
       ExprCP comparison) {
     const Literal* falseLiteral = builder().makeBoolean(false);
-    ColumnCP matchRow = Column::createBoolean("__in_match");
-    ColumnCP unknownRow = Column::createBoolean("__in_unknown");
+    // A row that does not qualify compares FALSE. The comparison is computed
+    // once, and only for qualifying rows.
+    ColumnCP comparisonRow = Column::createBoolean("__in_comparison");
     NodeCP compared = appendColumns(
         rows,
+        ColumnVector{comparisonRow},
+        ExprVector{exprFactory_.makeIf(qualifies, comparison, falseLiteral)});
+    ColumnCP matchRow = Column::createBoolean("__in_match");
+    ColumnCP unknownRow = Column::createBoolean("__in_unknown");
+    compared = appendColumns(
+        compared,
         ColumnVector{matchRow, unknownRow},
         ExprVector{
-            exprFactory_.makeCoalesce(
-                exprFactory_.makeAnd(qualifies, comparison), falseLiteral),
-            exprFactory_.makeCoalesce(
-                exprFactory_.makeAnd(
-                    qualifies, exprFactory_.makeIsNull(comparison)),
-                falseLiteral)});
+            exprFactory_.makeCoalesce(comparisonRow, falseLiteral),
+            exprFactory_.makeIsNull(comparisonRow)});
 
     ColumnCP anyMatch = Column::createBoolean("__any_match");
     ColumnCP anyUnknown = Column::createBoolean("__any_unknown");
@@ -4112,21 +4115,14 @@ class Decorrelator : public NodeRewriter<> {
   terminusSemi(ApplyCP apply, NodeCP input, NodeCP body, ExprVector filter) {
     ExprVector leftKeys;
     ExprVector rightKeys;
-    bool bodyKeyHasOuter = false;
     if (apply->inLhs() != nullptr) {
-      // Equi-keys must each resolve on a single join side. When the
-      // body key references outer columns, demote the IN equality
-      // into the join filter; `nullAware=true` preserves null-aware
-      // semi-project semantics.
-      bodyKeyHasOuter =
-          apply->inBodyKey()->columns().containsAny(input->outputColumns());
-      if (bodyKeyHasOuter) {
-        filter.push_back(
-            exprFactory_.makeEq(apply->inLhs(), apply->inBodyKey()));
-      } else {
-        leftKeys.push_back(apply->inLhs());
-        rightKeys.push_back(apply->inBodyKey());
+      // Equi-keys must each resolve on a single join side. A body key that
+      // reads outer columns cannot be one.
+      if (apply->inBodyKey()->columns().containsAny(input->outputColumns())) {
+        return inMarkWithOuterKey(apply, input, body, std::move(filter));
       }
+      leftKeys.push_back(apply->inLhs());
+      rightKeys.push_back(apply->inBodyKey());
     }
     JoinCondition::Split split = JoinCondition::splitEquiKeys(
         filter,
@@ -4142,7 +4138,7 @@ class Decorrelator : public NodeRewriter<> {
     bool repeatsInEquality = false;
     if (apply->nullAware()) {
       for (size_t i = 0; i < split.leftKeys.size(); ++i) {
-        if (!bodyKeyHasOuter && split.leftKeys[i] == apply->inLhs() &&
+        if (split.leftKeys[i] == apply->inLhs() &&
             split.rightKeys[i] == apply->inBodyKey()) {
           repeatsInEquality = true;
           continue;
@@ -4165,6 +4161,50 @@ class Decorrelator : public NodeRewriter<> {
         /*nullAsValue=*/false,
         apply->outputColumns(),
     });
+  }
+
+  // Builds the three-valued mark of an IN whose body key reads outer columns.
+  //
+  // A deterministic key that reads no body column has one value per outer row,
+  // so the mark is the comparison when the body has a row the filter accepts,
+  // else FALSE. Otherwise each outer row is LEFT joined to the body rows the
+  // filter accepts, and the comparisons are reduced to one mark per outer row.
+  NodeCP inMarkWithOuterKey(
+      ApplyCP apply,
+      NodeCP input,
+      NodeCP body,
+      ExprVector filter) {
+    ExprCP comparison = exprFactory_.makeEq(apply->inLhs(), apply->inBodyKey());
+
+    if (!apply->inBodyKey()->columns().containsAny(body->outputColumns()) &&
+        !apply->inBodyKey()->containsNonDeterministic()) {
+      ColumnCP bodyHasRow = makeMarkColumn("_in_body_has_row");
+      NodeCP semi = rewrite(makeSemiLeg(
+          input,
+          body,
+          std::move(filter),
+          bodyHasRow,
+          /*inLhs=*/nullptr,
+          /*inBodyKey=*/nullptr));
+      return projectApplyMark(
+          apply,
+          semi,
+          exprFactory_.makeIf(
+              bodyHasRow, comparison, builder().makeBoolean(false)));
+    }
+
+    SemiJoinChainHead chain =
+        makeSemiJoinChainHead(input, body, std::move(filter));
+    ApplyCP leftApply = chain.leftApply->as<Apply>();
+    ExprVector leftOutputs;
+    appendAll(leftOutputs, leftApply->outputColumns());
+    return collapseToInMark(
+        apply,
+        rewrite(chain.leftApply),
+        chain.outerRowId,
+        chain.leftIncludeMarker,
+        exprFactory_.substitute(
+            comparison, leftApply->sourceColumns(), leftOutputs));
   }
 
   // Creates a fresh BIGINT column intended to hold a per-row distinct

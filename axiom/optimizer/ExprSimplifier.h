@@ -71,8 +71,9 @@ class ExprSimplifier {
   /// columns.
   velox::Variant evaluate(ExprCP expr);
 
-  /// Splits a filter `predicate` into conjuncts (AND-flattened),
-  /// simplifies each, and applies filter semantics: a literal `true`
+  /// Splits the conjunction of `predicates` into conjuncts (AND-flattened),
+  /// simplifies each, intersects the value domains of conjuncts that test
+  /// the same column, and applies filter semantics: a literal `true`
   /// conjunct is dropped; a literal `false` or `NULL` conjunct
   /// short-circuits (filter passes only on `TRUE`, so `NULL` is
   /// equivalent to `FALSE`).
@@ -81,9 +82,9 @@ class ExprSimplifier {
   /// row; on true return `into` is unmodified. Returns false
   /// otherwise and appends the surviving (flattened, simplified,
   /// non-trivial) conjuncts to `into`. An empty `into` after a false
-  /// return means `predicate` is statically `true` and the filter can
+  /// return means `predicates` are statically `true` and the filter can
   /// be removed.
-  bool simplifyFilter(ExprCP predicate, ExprVector& into);
+  bool simplifyFilter(const ExprVector& predicates, ExprVector& into);
 
  private:
   // Simplifies IF, SWITCH and CASE in evaluation order, skipping result

@@ -300,6 +300,70 @@ FROM w
 -- disabled_v1: v1 keeps the rows whose result is NULL
 SELECT a FROM w WHERE b NOT IN (SELECT d FROM x WHERE x.c = w.a)
 ----
+-- An IN whose subquery key reads an outer column is NULL for a NULL left side
+-- when the subquery has a row, and FALSE over an empty subquery.
+-- disabled_v1: v1 returns FALSE where the result is NULL
+SELECT
+  a,
+  nullif(a, 1) IN (SELECT u.a + t.a FROM u),
+  nullif(a, 1) NOT IN (SELECT u.a + t.a FROM u),
+  nullif(a, 1) IN (SELECT u.a + t.a FROM u WHERE u.a > 100)
+FROM t
+----
+-- The same with a correlation next to the key.
+-- disabled_v1: v1 returns FALSE where the result is NULL
+SELECT a, nullif(a, 1) IN (SELECT u.a + t.a FROM u WHERE u.a > t.a)
+FROM t
+----
+-- A NULL subquery key makes an unmatched IN NULL.
+-- disabled_v1: v1 returns FALSE where the result is NULL
+SELECT a, a IN (SELECT w.b + t.a FROM w)
+FROM t
+----
+-- A key that reads only outer columns.
+-- disabled_v1: v1 returns FALSE where the result is NULL
+SELECT
+  a,
+  nullif(a, 1) IN (SELECT t.b FROM u),
+  nullif(a, 1) IN (SELECT t.b FROM u WHERE u.a > 100),
+  nullif(a, 1) IN (SELECT t.b),
+  nullif(a, 1) IN (SELECT t.b WHERE t.b > 10)
+FROM t
+----
+-- In WHERE, IN keeps the rows it matches and NOT IN drops the rows whose
+-- result is NULL.
+SELECT a FROM t WHERE a + 1 IN (SELECT u.a + t.a FROM u WHERE u.a < 3)
+----
+-- disabled_v1: v1 keeps the rows whose result is NULL
+SELECT a FROM t WHERE nullif(a, 1) NOT IN (SELECT u.a + t.a FROM u)
+----
+-- The IN left side is evaluated once per outer row: a random BOOLEAN is always
+-- in a subquery that holds both TRUE and FALSE.
+-- duckdb: SELECT count(*) FROM t
+-- disabled_v1: v1 does not support a left side of IN that reads no table
+SELECT count(*) FROM t WHERE (rand() < 0.5) IN (SELECT b FROM (VALUES true, false) AS u(b))
+----
+-- duckdb: SELECT count(*) FROM t
+-- disabled_v1: v1 does not support a left side of IN that reads no table
+SELECT count_if(m)
+FROM (
+  SELECT (rand() < 0.5) IN (
+    SELECT b FROM (VALUES true, false) AS u(b) WHERE b OR t.a > 0
+  ) AS m
+  FROM t
+)
+----
+-- In a join condition, IN matches the rows its subquery has a matching key
+-- for, including a key that reads an outer column.
+SELECT t.a, v.a
+FROM t
+JOIN v ON v.a = t.a * 2 AND t.a + 1 IN (SELECT u.a + t.a FROM u WHERE u.a < 3)
+----
+-- disabled_v1: v1 does not support a subquery in a LEFT join condition
+SELECT t.a, v.a
+FROM t
+LEFT JOIN v ON v.a = t.a * 2 AND nullif(v.a, 2) IN (SELECT u.a + v.a - 1 FROM u)
+----
 -- With joins partitioned across workers, a correlated IN without an equality
 -- correlation is NULL for a NULL left side when a subquery row passes the
 -- correlation.
