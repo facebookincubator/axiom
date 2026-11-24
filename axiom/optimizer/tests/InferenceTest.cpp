@@ -103,6 +103,28 @@ TEST_F(InferenceTest, joinKey) {
           .build());
 }
 
+// A call on the preserved side of a LEFT join does not read the copy computed
+// on the null-supplying side: that copy is NULL on rows with no match.
+TEST_F(InferenceTest, leftJoinKey) {
+  testConnector_->addTable("t", ROW("t_k", VARCHAR()));
+  testConnector_->addTable("u", ROW("u_k", VARCHAR()));
+
+  const auto query =
+      "SELECT test_inference(t_k) AS a, v.e "
+      "FROM t "
+      "LEFT JOIN (SELECT u_k, test_inference(u_k) AS e FROM u) v ON t_k = v.u_k";
+  SCOPED_TRACE(query);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(query),
+      matchScan("u")
+          .inference("test_inference(u_k) as e")
+          .hashJoinRight(matchScan("t"), {.keys = {{"u_k = t_k"}}})
+          .inference("test_inference(t_k) as a")
+          .project({"a", "e"})
+          .build());
+}
+
 // A call over an input with no rows plans to a Values with no rows that holds
 // the columns read above it.
 TEST_F(InferenceTest, emptyInput) {
