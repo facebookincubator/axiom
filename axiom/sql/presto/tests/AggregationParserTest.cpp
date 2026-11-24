@@ -294,10 +294,10 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
   // GROUP BY ordinal out of range.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 GROUP BY 1, 2"),
-      "GROUP BY position is not in select list: 2");
+      "GROUP BY position is not in the select list: 2");
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 GROUP BY 0"),
-      "GROUP BY position is not in select list: 0");
+      "GROUP BY position is not in the select list: 0");
 
   // Aggregate alias may shadow a GROUP BY key name.
   testSelect(
@@ -356,12 +356,12 @@ TEST_F(AggregationParserTest, groupByOrdinalWithSelectStar) {
   // GROUP BY ordinal out of range for expanded SELECT *.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT * FROM nation GROUP BY 1, 2, 3, 4, 5"),
-      "GROUP BY position is not in select list: 5");
+      "GROUP BY position is not in the select list: 5");
 
   // GROUP BY ordinal out of range for SELECT COLUMNS(...).
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT COLUMNS('n_.*key') FROM nation GROUP BY 1, 2, 3"),
-      "GROUP BY position is not in select list: 3");
+      "GROUP BY position is not in the select list: 3");
 
   // SELECT * EXCLUDE with ordinals. EXCLUDE removes n_name, leaving 3 columns:
   // n_nationkey(1), n_regionkey(2), n_comment(3).
@@ -385,6 +385,54 @@ TEST_F(AggregationParserTest, groupByOrdinalWithSelectStar) {
           .output());
 }
 
+// A GROUP BY position names its SELECT item: the grouping key and every reader
+// of the item read one value.
+TEST_F(AggregationParserTest, groupByLateralAlias) {
+  auto withNation = [](std::vector<std::string> columns) {
+    std::vector<std::string> all{
+        "n_nationkey", "n_name", "n_regionkey", "n_comment", "\"$row_id\""};
+    all.insert(all.end(), columns.begin(), columns.end());
+    return all;
+  };
+
+  // Both grouping keys read r, so r is computed below the aggregation.
+  testSelect(
+      "SELECT random() AS r, r + 1 AS s FROM nation GROUP BY 1, 2",
+      matchScan()
+          .project(withNation({"rand() as r"}))
+          .aggregate({"r", "r + 1::double as s"}, {})
+          .output({"r", "s"}));
+
+  // The grouping key and the aggregate's FILTER read j.
+  testSelect(
+      "SELECT n_regionkey + 1 AS j, count(*) FILTER (WHERE j > 2) AS c "
+      "FROM nation GROUP BY 1",
+      matchScan()
+          .project(withNation({"n_regionkey + 1::bigint as j"}))
+          .aggregate({"j"}, {"count(*) FILTER (WHERE j > 2::bigint) as c"})
+          .output({"j", "c"}));
+
+  // j is read only by the grouping key k, so j itself is not grouped.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT n_regionkey + 1 AS j, j * 2 AS k FROM nation GROUP BY 2"),
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_regionkey");
+
+  // A grouping key cannot read an aggregate, directly or through an alias.
+  for (const auto* sql :
+       {"SELECT sum(n_regionkey) AS s FROM nation GROUP BY 1",
+        "SELECT sum(n_regionkey) AS s, s + 1 AS t FROM nation GROUP BY 2"}) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseSql(sql),
+        "GROUP BY clause cannot contain aggregations or window functions");
+  }
+
+  // An aggregate cannot read another aggregate through an alias.
+  VELOX_ASSERT_THROW(
+      parseSql("SELECT sum(n_regionkey) AS s, max(s) FROM nation"),
+      "Cannot nest an aggregate or a window function inside aggregation: max");
+}
 TEST_F(AggregationParserTest, groupingSets) {
   lp::AggregateNodePtr agg;
   auto matcher =
@@ -475,6 +523,30 @@ TEST_F(AggregationParserTest, groupingFunction) {
               {fmt::format("sum(sum) OVER (ORDER BY {})", grouping({0, 1}))},
               kIntegerLiterals)
           .output());
+
+  // GROUPING() in ORDER BY can name a grouping key by its output alias, for a
+  // key written as an expression or as a position.
+  {
+    // 'key' matches the grouping key; 'r' matches the SELECT item reading it.
+    auto matcher = [&](const std::string& key, const std::string& r) {
+      return matchScan()
+          .aggregate({key}, {"count(1)"}, {{0}, {}})
+          .project(
+              {r, "count", fmt::format("{} as key", grouping({0, 1}))},
+              kIntegerLiterals)
+          .sort({"key"})
+          .project({"r", "count"})
+          .output({"r", "count"});
+    };
+    testSelect(
+        "SELECT n_regionkey AS r, count(1) FROM nation "
+        "GROUP BY GROUPING SETS ((n_regionkey), ()) ORDER BY GROUPING(r)",
+        matcher("n_regionkey", "n_regionkey as r"));
+    testSelect(
+        "SELECT n_regionkey AS r, count(1) FROM nation "
+        "GROUP BY GROUPING SETS ((1), ()) ORDER BY GROUPING(r)",
+        matcher("n_regionkey as r", "r"));
+  }
 
   // GROUPING() with two columns, three grouping sets.
   testSelect(
@@ -1205,6 +1277,11 @@ TEST_F(AggregationParserTest, nonGroupedColumn) {
        "Cannot resolve column: n_name"},
       {"SELECT n_regionkey AS n_name, (SELECT n_name) FROM nation GROUP BY 1",
        "Cannot resolve column: n_name"},
+      // Inside a lambda body.
+      {"SELECT sum(n_regionkey) AS n_name, "
+       "transform(array[1], x -> concat(n_name, 'x')) FROM nation",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
   };
   for (const auto& [sql, error] : cases) {
     SCOPED_TRACE(sql);
@@ -1216,13 +1293,6 @@ TEST_F(AggregationParserTest, nonGroupedColumn) {
       parseSql("SELECT count(*), count FROM (VALUES (1, 2)) AS t(a, count)"),
       "Column must be an aggregate expression or appear in GROUP BY clause: "
       "count");
-
-  // Inside a lambda body.
-  VELOX_ASSERT_THROW(
-      parseSql(
-          "SELECT sum(n_regionkey) AS n_name, "
-          "transform(array[1], x -> concat(n_name, 'x')) FROM nation"),
-      "Cannot resolve column");
 }
 
 // An aggregate in HAVING forms a global aggregation on its own.

@@ -26,8 +26,7 @@ namespace {
 namespace core = facebook::velox::core;
 
 // Indexes the SELECT-list projections by expression for matching ORDER BY
-// sort keys. A sort key naming an output alias had it substituted during
-// translation, so it arrives as that item's expression and matches here.
+// sort keys.
 struct ProjectionIndex {
   core::ExprMap<size_t> byExpr;
   folly::F14FastSet<std::string> aliases;

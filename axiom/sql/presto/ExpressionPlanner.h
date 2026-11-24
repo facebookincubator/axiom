@@ -31,6 +31,8 @@
 
 namespace axiom::sql::presto {
 
+class SelectProjection;
+
 namespace lp = facebook::axiom::logical_plan;
 
 /// Canonicalizes a name to lowercase.
@@ -167,6 +169,16 @@ class ExpressionPlanner {
           facebook::velox::core::ExprPtr>& windowExprs,
       std::vector<const facebook::velox::core::IExpr*>& traversalOrder);
 
+  /// Returns 'expr' with 'rewrite' applied to each of its inputs, including
+  /// those IExpr keeps outside inputs(): a lambda's body, an aggregate's
+  /// FILTER and ORDER BY, and a window function's PARTITION BY keys, ORDER BY
+  /// keys and frame bounds. Returns 'expr' itself when 'rewrite' changes no
+  /// input.
+  static facebook::velox::core::ExprPtr rewriteInputs(
+      const facebook::velox::core::ExprPtr& expr,
+      const std::function<facebook::velox::core::ExprPtr(
+          const facebook::velox::core::ExprPtr&)>& rewrite);
+
   /// Translates an AST expression into an ExprApi. Aggregate options
   /// (DISTINCT, FILTER, ORDER BY) are embedded in the returned ExprApi via
   /// AggregateCallExpr. Window functions are embedded via WindowCallExpr.
@@ -176,7 +188,8 @@ class ExpressionPlanner {
   /// The output aliases in effect for one clause's translation. Held as one
   /// value so saving and restoring cannot miss a field.
   struct OutputAliases {
-    /// Alias name to the expression the SELECT item projects.
+    /// Alias name to the reference to the SELECT item that carries it. See
+    /// SelectProjection.
     const folly::F14FastMap<std::string, facebook::velox::core::ExprPtr>* exprs{
         nullptr};
 
@@ -191,7 +204,7 @@ class ExpressionPlanner {
   };
 
   /// Sets the aliases an Identifier resolves against. An Identifier naming one
-  /// resolves to the alias's expression rather than to a column. A qualified
+  /// resolves to the alias's reference rather than to a column. A qualified
   /// reference is a dereference, never an Identifier, so it always names a
   /// column of an input relation.
   void setOutputAliases(const OutputAliases& aliases) {
@@ -320,13 +333,17 @@ class ExpressionPlanner {
   };
 
   /// Installs the SELECT output aliases for the duration of the scope, so an
-  /// ORDER BY key naming one resolves to that item's expression rather than to
-  /// a column of an input relation. See 'setOutputAliases'.
+  /// ORDER BY key naming one resolves to a reference to that item rather than
+  /// to a column of an input relation. See 'setOutputAliases'.
   class [[nodiscard]] OutputAliasScope {
    public:
+    /// Installs no aliases, for a clause outside the SELECT aliases' scope.
+    explicit OutputAliasScope(ExpressionPlanner& planner);
+
     OutputAliasScope(
         ExpressionPlanner& planner,
-        const std::vector<lp::ExprApi>& projections);
+        const std::vector<lp::ExprApi>& projections,
+        SelectProjection& selectProjection);
 
     ~OutputAliasScope() {
       planner_.setOutputAliases(saved_);

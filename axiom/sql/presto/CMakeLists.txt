@@ -42,6 +42,7 @@ add_library(
   GroupByPlanner.cpp
   IntervalParser.cpp
   RecursiveCteValidator.cpp
+  SelectProjection.cpp
   SortProjection.cpp
   BindingScope.cpp
   PrestoParser.cpp

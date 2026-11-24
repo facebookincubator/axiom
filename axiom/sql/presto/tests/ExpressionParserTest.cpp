@@ -1031,47 +1031,66 @@ TEST_F(ExpressionParserTest, methodCallNoFriendlySql) {
       "Method-call syntax requires Friendly SQL mode");
 }
 
+// A later SELECT item that names a lateral column alias reads the aliased
+// item's column. A computed item is projected below the items that read it,
+// so it is evaluated once.
 TEST_F(ExpressionParserTest, lateralColumnAlias) {
-  // Parses 'SELECT <selectList> FROM nation' and verifies each project
-  // expression matches the expected toString() output.
-  auto testExprs = [&](std::string_view selectList,
-                       const std::vector<std::string>& expectedExprs) {
-    SCOPED_TRACE(selectList);
-    testSelect(
-        fmt::format("SELECT {} FROM nation", selectList),
-        matchScan()
-            .project([&](const lp::LogicalPlanNodePtr& node) {
-              auto& project = *node->as<lp::ProjectNode>();
-              ASSERT_EQ(expectedExprs.size(), project.expressions().size());
-              for (size_t i = 0; i < expectedExprs.size(); ++i) {
-                EXPECT_EQ(expectedExprs[i], project.expressionAt(i)->toString())
-                    << "at index " << i;
-              }
-            })
-            .output());
+  // The nation columns followed by 'columns'.
+  auto withNation = [](std::vector<std::string> columns) {
+    std::vector<std::string> all{
+        "n_nationkey", "n_name", "n_regionkey", "n_comment", "\"$row_id\""};
+    all.insert(all.end(), columns.begin(), columns.end());
+    return all;
   };
 
-  // Basic reuse: j is expanded to (n_regionkey + 1).
-  testExprs(
-      "n_regionkey + 1 AS j, j + 2 AS k",
-      {
-          "plus(n_regionkey, CAST(1 AS BIGINT))",
-          "plus(plus(n_regionkey, CAST(1 AS BIGINT)), CAST(2 AS BIGINT))",
-      });
+  testSelect(
+      "SELECT n_regionkey + 1 AS j, j + 2 AS k FROM nation",
+      matchScan()
+          .project(withNation({"n_regionkey + 1::bigint as j"}))
+          .project({"j", "j + 2::bigint as k"})
+          .output({"j", "k"}));
 
-  // Triple chaining: each alias references the previous.
-  testExprs(
-      "n_regionkey AS x, x + 1 AS y, y * 2 AS z",
-      {
-          "n_regionkey",
-          "plus(n_regionkey, CAST(1 AS BIGINT))",
-          "multiply(plus(n_regionkey, CAST(1 AS BIGINT)), CAST(2 AS BIGINT))",
-      });
+  // Each alias references the previous one. A column needs no projection of
+  // its own.
+  testSelect(
+      "SELECT n_regionkey AS x, x + 1 AS y, y * 2 AS z FROM nation",
+      matchScan()
+          .project(withNation({"n_regionkey + 1::bigint as y"}))
+          .project({"n_regionkey as x", "y", "y * 2::bigint as z"})
+          .output({"x", "y", "z"}));
 
-  // Alias with function call and method-call chaining.
-  testExprs(
-      "upper(n_name) AS u, u.substr(1, 3) AS s",
-      {"upper(n_name)", "substr(upper(n_name), 1, 3)"});
+  testSelect(
+      "SELECT upper(n_name) AS u, u.substr(1, 3) AS s FROM nation",
+      matchScan()
+          .project(withNation({"upper(n_name) as u"}))
+          .project({"u", "substr(u, 1, 3) as s"})
+          .output({"u", "s"}));
+
+  testSelect(
+      "SELECT random() AS r, r + 1 AS s FROM nation",
+      matchScan()
+          .project(withNation({"rand() as r"}))
+          .project({"r", "r + 1::double as s"})
+          .output({"r", "s"}));
+
+  // A lambda body reads the aliased item's column too.
+  testSelect(
+      "SELECT random() AS r, transform(array[1.0], x -> x + r) AS t "
+      "FROM nation",
+      matchScan()
+          .project(withNation({"rand() as r"}))
+          .project({"r", "transform(array_constructor(1.0), x -> x + r) as t"})
+          .output({"r", "t"}));
+
+  // The window function and k read j's column; j is computed once.
+  testSelect(
+      "SELECT n_regionkey + 1 AS j, j + row_number() OVER (ORDER BY j) AS k "
+      "FROM nation",
+      matchScan()
+          .project(withNation({"n_regionkey + 1::bigint as j"}))
+          .project(withNation({"j", "row_number() OVER (ORDER BY j) as rn"}))
+          .project({"j", "j + rn as k"})
+          .output({"j", "k"}));
 }
 
 TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {

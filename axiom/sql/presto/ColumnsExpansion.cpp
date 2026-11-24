@@ -16,6 +16,8 @@
 
 #include "axiom/sql/presto/ColumnsExpansion.h"
 
+#include "axiom/sql/presto/ExpressionPlanner.h"
+
 #include <re2/re2.h>
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "velox/common/base/Exceptions.h"
@@ -35,18 +37,10 @@ core::ExprPtr replaceInputs(
   if (it != replacements.end()) {
     return it->second;
   }
-
-  std::vector<core::ExprPtr> newInputs;
-  bool changed = false;
-  for (const auto& input : expr->inputs()) {
-    auto newInput = replaceInputs(input, replacements);
-    if (newInput.get() != input.get()) {
-      changed = true;
-    }
-    newInputs.push_back(std::move(newInput));
-  }
-
-  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+  return ExpressionPlanner::rewriteInputs(
+      expr, [&](const core::ExprPtr& input) {
+        return replaceInputs(input, replacements);
+      });
 }
 
 // Resolved expressions carry canonical, lower-case function names.
