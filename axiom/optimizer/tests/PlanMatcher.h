@@ -700,6 +700,44 @@ class PlanMatcherBuilder {
       JoinType joinType = JoinType::kInner,
       std::optional<std::string> joinCondition = std::nullopt);
 
+  /// Typed shortcuts for `nestedLoopJoin` with a fixed `JoinType`.
+  PlanMatcherBuilder& nestedLoopJoinInner(
+      PlanMatcherBuilder rightMatcher,
+      std::optional<std::string> joinCondition = std::nullopt) {
+    return nestedLoopJoin(
+        std::move(rightMatcher), JoinType::kInner, std::move(joinCondition));
+  }
+
+  PlanMatcherBuilder& nestedLoopJoinLeft(
+      PlanMatcherBuilder rightMatcher,
+      std::optional<std::string> joinCondition = std::nullopt) {
+    return nestedLoopJoin(
+        std::move(rightMatcher), JoinType::kLeft, std::move(joinCondition));
+  }
+
+  PlanMatcherBuilder& nestedLoopJoinRight(
+      PlanMatcherBuilder rightMatcher,
+      std::optional<std::string> joinCondition = std::nullopt) {
+    return nestedLoopJoin(
+        std::move(rightMatcher), JoinType::kRight, std::move(joinCondition));
+  }
+
+  PlanMatcherBuilder& nestedLoopJoinFull(
+      PlanMatcherBuilder rightMatcher,
+      std::optional<std::string> joinCondition = std::nullopt) {
+    return nestedLoopJoin(
+        std::move(rightMatcher), JoinType::kFull, std::move(joinCondition));
+  }
+
+  PlanMatcherBuilder& nestedLoopJoinLeftSemiProject(
+      PlanMatcherBuilder rightMatcher,
+      std::optional<std::string> joinCondition = std::nullopt) {
+    return nestedLoopJoin(
+        std::move(rightMatcher),
+        JoinType::kLeftSemiProject,
+        std::move(joinCondition));
+  }
+
   /// Matches any LocalPartition node.
   PlanMatcherBuilder& localPartition();
 

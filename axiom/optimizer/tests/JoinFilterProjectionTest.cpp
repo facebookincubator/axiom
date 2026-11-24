@@ -45,9 +45,8 @@ class JoinFilterProjectionTest : public test::QueryTestBase {
 TEST_F(JoinFilterProjectionTest, basic) {
   auto matcher = matchScan("t")
                      .project({"a", "length(b) as pt"})
-                     .nestedLoopJoin(
+                     .nestedLoopJoinInner(
                          matchScan("u").project({"x", "length(y) as pu"}),
-                         core::JoinType::kInner,
                          "\"and\"(pt < pu, pt + pu > 10, a < x)")
                      .build();
 
@@ -63,13 +62,12 @@ TEST_F(JoinFilterProjectionTest, basic) {
 // the call's other arguments move, and the outer columns the body reads have to
 // reach the join -- here 'x', which the join does not output.
 TEST_F(JoinFilterProjectionTest, lambdaReadingBothSides) {
-  auto matcher = matchScan("t")
-                     .project({"a", "sequence(1, a + 10) as arr"})
-                     .nestedLoopJoin(
-                         matchScan("u"),
-                         core::JoinType::kInner,
-                         "cardinality(filter(arr, z -> x < z)) > 0")
-                     .build();
+  auto matcher =
+      matchScan("t")
+          .project({"a", "sequence(1, a + 10) as arr"})
+          .nestedLoopJoinInner(
+              matchScan("u"), "cardinality(filter(arr, z -> x < z)) > 0")
+          .build();
 
   AXIOM_ASSERT_PLAN(
       plan(
@@ -87,7 +85,7 @@ TEST_F(JoinFilterProjectionTest, lambdaReadingOneSide) {
           .project(
               {"a",
                "cardinality(filter(sequence(1, a + 10), z -> a < z)) as c"})
-          .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "x < c")
+          .nestedLoopJoinInner(matchScan("u"), "x < c")
           .build();
 
   AXIOM_ASSERT_PLAN(
@@ -106,9 +104,8 @@ TEST_F(JoinFilterProjectionTest, nonDeterministic) {
   auto matcher =
       matchScan("t")
           .project({"a", "cast(length(b) as DOUBLE) as pt"})
-          .nestedLoopJoin(
+          .nestedLoopJoinInner(
               matchScan("u").project({"x", "cast(length(y) as DOUBLE) as pu"}),
-              core::JoinType::kInner,
               "pt + rand() < pu")
           .build();
 
@@ -138,19 +135,16 @@ TEST_F(JoinFilterProjectionTest, oneSidedExpressionComputedBeforeShuffle) {
   AXIOM_ASSERT_PLAN(
       toSingleNodePlan(logicalPlan),
       matchScan("big")
-          .nestedLoopJoin(
-              matchScan("wide").project({"length(name) as p"}),
-              core::JoinType::kInner,
-              "threshold < p")
+          .nestedLoopJoinInner(
+              matchScan("wide").project({"length(name) as p"}), "threshold < p")
           .singleAggregation({}, {"count(*)"})
           .build());
 
   AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
       planVelox(logicalPlan).plan,
       matchScan("big")
-          .nestedLoopJoin(
+          .nestedLoopJoinInner(
               matchScan("wide").project({"length(name) as p"}).shuffle(),
-              core::JoinType::kInner,
               "threshold < p")
           .distributedAggregation({}, {"count(*)"})
           .build());

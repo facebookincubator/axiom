@@ -1217,10 +1217,8 @@ TEST_P(AggregationTest, colocatedConsumers) {
         matchScan("t")
             .singleAggregation({"a"}, {"max(b) as v"})
             .assignUniqueId("row_id")
-            .nestedLoopJoin(
-                matchScan("u").project({"c", "d", "true as marker"}),
-                core::JoinType::kLeft,
-                "v > d")
+            .nestedLoopJoinLeft(
+                matchScan("u").project({"c", "d", "true as marker"}), "v > d")
             .singleAggregation(
                 {"row_id", "c"},
                 {"count() filter (where marker) as n",
@@ -1233,11 +1231,10 @@ TEST_P(AggregationTest, colocatedConsumers) {
         planVelox(logicalPlan).plan,
         matchKeyed()
             .assignUniqueId("row_id")
-            .nestedLoopJoin(
+            .nestedLoopJoinLeft(
                 matchScan("u")
                     .project({"c", "d", "true as marker"})
                     .broadcast(),
-                core::JoinType::kLeft,
                 "v > d")
             .partialAggregation(
                 {"row_id", "c"},

@@ -135,10 +135,9 @@ TEST_P(SubqueryTest, inListWithMixedSubqueries) {
     const std::string inPredicate = "\"in\"(n_regionkey, max_key, 2)";
     auto plan = toSingleNodePlan(query);
     auto matcher = matchHiveScan("nation")
-                       .nestedLoopJoin(
+                       .nestedLoopJoinInner(
                            matchHiveScan("region").singleAggregation(
                                {}, {"max(r_regionkey) as max_key"}),
-                           core::JoinType::kInner,
                            useV2_ ? inPredicate : "")
                        .filterIf(!useV2_, inPredicate)
                        .projectIf(!useV2_)
@@ -161,7 +160,7 @@ TEST_P(SubqueryTest, inListWithMixedSubqueries) {
     AXIOM_ASSERT_PLAN_V2(
         plan,
         matchHiveScan("nation")
-            .nestedLoopJoin(
+            .nestedLoopJoinInner(
                 matchHiveScan("region")
                     .singleAggregation({}, {"max(r_regionkey) as max_key"})
                     .nestedLoopJoin(
@@ -169,7 +168,6 @@ TEST_P(SubqueryTest, inListWithMixedSubqueries) {
                             .aliases({"region_key"})
                             .singleAggregation(
                                 {}, {"min(region_key) as min_key"})),
-                core::JoinType::kInner,
                 "\"in\"(n_regionkey, max_key, min_key)")
             .build());
   }
@@ -256,9 +254,7 @@ TEST_P(SubqueryTest, correlatedExists) {
         "EXISTS (SELECT 1 FROM region WHERE r_regionkey > n_regionkey)";
 
     auto matcher = matchHiveScan("nation")
-                       .nestedLoopJoin(
-                           matchHiveScan("region"),
-                           velox::core::JoinType::kLeftSemiProject)
+                       .nestedLoopJoinLeftSemiProject(matchHiveScan("region"))
                        .filter()
                        .project()
                        .build();
@@ -317,9 +313,8 @@ TEST_P(SubqueryTest, uncorrelatedProject) {
     // Uncorrelated subquery is cross-joined.
     auto matcher =
         matchHiveScan("region")
-            .nestedLoopJoin(
-                matchHiveScan("nation").singleAggregation({}, {"count(*)"}),
-                velox::core::JoinType::kInner)
+            .nestedLoopJoinInner(
+                matchHiveScan("nation").singleAggregation({}, {"count(*)"}))
             .project()
             .build();
 
@@ -340,9 +335,8 @@ TEST_P(SubqueryTest, uncorrelatedProject) {
     auto matcher =
         matchHiveScan("region")
             .singleAggregation({}, {"array_agg(r_name)"})
-            .nestedLoopJoin(
-                matchHiveScan("nation").singleAggregation({}, {"count(*)"}),
-                velox::core::JoinType::kInner)
+            .nestedLoopJoinInner(
+                matchHiveScan("nation").singleAggregation({}, {"count(*)"}))
             .project()
             .build();
 
@@ -364,9 +358,8 @@ TEST_P(SubqueryTest, uncorrelatedProject) {
     auto matcher =
         matchHiveScan("nation")
             .singleAggregation({"n_regionkey"}, {"array_agg(n_name)"})
-            .nestedLoopJoin(
-                matchHiveScan("region").singleAggregation({}, {"count(*)"}),
-                velox::core::JoinType::kInner)
+            .nestedLoopJoinInner(
+                matchHiveScan("region").singleAggregation({}, {"count(*)"}))
             .project()
             .build();
 
@@ -891,10 +884,7 @@ TEST_P(SubqueryTest, correlatedScalarGroupedWithHaving) {
         matchScan("u")
             .project()
             .aliases({std::nullopt, std::nullopt, std::nullopt, "marker"})
-            .nestedLoopJoin(
-                matchScan("t").assignUniqueId("rn"),
-                core::JoinType::kRight,
-                "b < y")
+            .nestedLoopJoinRight(matchScan("t").assignUniqueId("rn"), "b < y")
             .singleAggregation(
                 {"rn", "z"},
                 {"max(x) filter (where marker) as m",
@@ -1013,10 +1003,7 @@ TEST_P(SubqueryTest, correlatedScalarGroupedWithHaving) {
         matchScan("u")
             .project()
             .aliases({std::nullopt, std::nullopt, "marker"})
-            .nestedLoopJoin(
-                matchScan("t").assignUniqueId("rn"),
-                core::JoinType::kRight,
-                "b > y")
+            .nestedLoopJoinRight(matchScan("t").assignUniqueId("rn"), "b > y")
             .singleAggregation(
                 {"rn", "z"},
                 {"count() filter (where marker) as cnt",
@@ -1205,7 +1192,7 @@ TEST_P(SubqueryTest, correlatedInOnSibling) {
       "WHERE t.a IN (SELECT v.b FROM v WHERE v.k = u.k)";
 
   auto matcher = matchScan("t")
-                     .nestedLoopJoin(matchScan("u"), core::JoinType::kInner)
+                     .nestedLoopJoinInner(matchScan("u"))
                      .hashJoinLeftSemiFilter(matchScan("v"))
                      .build();
   auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
@@ -1518,9 +1505,7 @@ TEST_P(SubqueryTest, correlatedNotExists) {
     // NOT EXISTS with non-equality correlation uses nested loop join with
     // LEFT SEMI PROJECT, then filters and negates the result.
     auto matcher = matchHiveScan("nation")
-                       .nestedLoopJoin(
-                           matchHiveScan("region"),
-                           velox::core::JoinType::kLeftSemiProject)
+                       .nestedLoopJoinLeftSemiProject(matchHiveScan("region"))
                        .filter()
                        .project()
                        .build();
@@ -1683,9 +1668,8 @@ TEST_P(SubqueryTest, enforceSingleRow) {
 
   {
     auto matcher = matchHiveScan("region")
-                       .nestedLoopJoin(
+                       .nestedLoopJoinInner(
                            matchHiveScan("nation").enforceSingleRow(),
-                           core::JoinType::kInner,
                            "r_regionkey > n_regionkey")
                        .build();
 
@@ -1697,13 +1681,12 @@ TEST_P(SubqueryTest, enforceSingleRow) {
 
   {
     auto matcher = matchHiveScan("region")
-                       .nestedLoopJoin(
+                       .nestedLoopJoinInner(
                            matchHiveScan("nation")
                                .gather()
                                .localPartition()
                                .enforceSingleRow()
                                .broadcast(),
-                           core::JoinType::kInner,
                            "r_regionkey > n_regionkey")
                        .gather()
                        .build();
@@ -1796,10 +1779,9 @@ TEST_P(SubqueryTest, nonEquiCorrelatedScalar) {
     {
       auto matcher = matchHiveScan("region")
                          .assignUniqueId("unique_id")
-                         .nestedLoopJoin(
+                         .nestedLoopJoinLeft(
                              matchHiveScan("nation").project(
                                  {"n_regionkey", "true as marker"}),
-                             velox::core::JoinType::kLeft,
                              "r_regionkey > n_regionkey")
                          .streamingAggregation(
                              {"unique_id"},
@@ -1820,11 +1802,10 @@ TEST_P(SubqueryTest, nonEquiCorrelatedScalar) {
     {
       auto matcher = matchHiveScan("region")
                          .assignUniqueId("unique_id")
-                         .nestedLoopJoin(
+                         .nestedLoopJoinLeft(
                              matchHiveScan("nation")
                                  .project({"n_regionkey", "true as marker"})
                                  .broadcast(),
-                             velox::core::JoinType::kLeft,
                              "r_regionkey > n_regionkey")
                          .streamingAggregation(
                              {"unique_id"},
@@ -1931,9 +1912,8 @@ TEST_P(SubqueryTest, nonEquiCorrelatedProject) {
       auto matcher =
           matchHiveScan("nation")
               .project({"n_regionkey", "true as marker"})
-              .nestedLoopJoin(
+              .nestedLoopJoinRight(
                   matchHiveScan("region").assignUniqueId("unique_id"),
-                  velox::core::JoinType::kRight,
                   "r_regionkey > n_regionkey")
               .singleAggregation(
                   {"unique_id"},
@@ -1951,11 +1931,10 @@ TEST_P(SubqueryTest, nonEquiCorrelatedProject) {
     {
       auto matcher = matchHiveScan("region")
                          .assignUniqueId("unique_id")
-                         .nestedLoopJoin(
+                         .nestedLoopJoinLeft(
                              matchHiveScan("nation")
                                  .project({"n_regionkey", "true as marker"})
                                  .broadcast(),
-                             velox::core::JoinType::kLeft,
                              "r_regionkey > n_regionkey")
                          .streamingAggregation(
                              {"unique_id"},
@@ -2001,10 +1980,8 @@ TEST_P(SubqueryTest, unnestRowIdColocation) {
       matchMarked()
           .streamingAggregation(
               {"row_id"}, {"bool_or(m) as matched", "arbitrary(k) as k"})
-          .nestedLoopJoin(
-              matchScan("u").project({"c", "true as marker"}),
-              velox::core::JoinType::kLeft,
-              "k > c")
+          .nestedLoopJoinLeft(
+              matchScan("u").project({"c", "true as marker"}), "k > c")
           .streamingAggregation(
               {"row_id"},
               {
@@ -2023,9 +2000,8 @@ TEST_P(SubqueryTest, unnestRowIdColocation) {
           .localPartition({"row_id"})
           .finalAggregation(
               {"row_id"}, {"bool_or(matched) as matched", "arbitrary(k) as k"})
-          .nestedLoopJoin(
+          .nestedLoopJoinLeft(
               matchScan("u").project({"c", "true as marker"}).broadcast(),
-              velox::core::JoinType::kLeft,
               "k > c")
           .streamingAggregation(
               {"row_id"},
@@ -2048,9 +2024,8 @@ TEST_P(SubqueryTest, rowIdReuse) {
   const auto matchFirstCount = [&]() {
     return matchHiveScan("nation")
         .project({"n_regionkey", "true as marker1"})
-        .nestedLoopJoin(
+        .nestedLoopJoinRight(
             matchHiveScan("region").assignUniqueId("unique_id"),
-            velox::core::JoinType::kRight,
             "r_regionkey > n_regionkey")
         .singleAggregation(
             {"unique_id"},
@@ -2071,10 +2046,7 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "true as marker2"})
-            .nestedLoopJoin(
-                matchFirstCount(),
-                velox::core::JoinType::kRight,
-                "r_regionkey > s_suppkey")
+            .nestedLoopJoinRight(matchFirstCount(), "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"unique_id"},
                 {
@@ -2090,11 +2062,10 @@ TEST_P(SubqueryTest, rowIdReuse) {
         planVelox(parseSelect(query)).plan,
         matchHiveScan("region")
             .assignUniqueId("unique_id")
-            .nestedLoopJoin(
+            .nestedLoopJoinLeft(
                 matchHiveScan("nation")
                     .project({"n_regionkey", "true as marker1"})
                     .broadcast(),
-                velox::core::JoinType::kLeft,
                 "r_regionkey > n_regionkey")
             .streamingAggregation(
                 {"unique_id"},
@@ -2102,11 +2073,10 @@ TEST_P(SubqueryTest, rowIdReuse) {
                     "count(*) filter (where marker1) as x",
                     "arbitrary(r_regionkey) as r_regionkey",
                 })
-            .nestedLoopJoin(
+            .nestedLoopJoinLeft(
                 matchHiveScan("supplier")
                     .project({"s_suppkey", "true as marker2"})
                     .broadcast(),
-                velox::core::JoinType::kLeft,
                 "r_regionkey > s_suppkey")
             .streamingAggregation(
                 {"unique_id"},
@@ -2130,10 +2100,9 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "true as marker2"})
-            .nestedLoopJoin(
+            .nestedLoopJoinRight(
                 matchFirstCount().filter("x > 0").project(
                     {"r_regionkey", "unique_id"}),
-                velox::core::JoinType::kRight,
                 "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"unique_id"},
@@ -2165,10 +2134,7 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "s_nationkey", "true as marker2"})
-            .nestedLoopJoin(
-                matchFirstCount(),
-                velox::core::JoinType::kRight,
-                "r_regionkey > s_suppkey")
+            .nestedLoopJoinRight(matchFirstCount(), "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"unique_id"},
                 {
@@ -2199,10 +2165,7 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "true as marker2"})
-            .nestedLoopJoin(
-                matchFirstCount(),
-                velox::core::JoinType::kRight,
-                "r_regionkey > s_suppkey")
+            .nestedLoopJoinRight(matchFirstCount(), "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"unique_id"},
                 {
@@ -2232,10 +2195,7 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "s_nationkey", "true as marker2"})
-            .nestedLoopJoin(
-                matchFirstCount(),
-                velox::core::JoinType::kRight,
-                "r_regionkey > s_suppkey")
+            .nestedLoopJoinRight(matchFirstCount(), "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"unique_id", "s_nationkey"},
                 {
@@ -2265,11 +2225,10 @@ TEST_P(SubqueryTest, rowIdReuse) {
         toSingleNodePlan(query),
         matchHiveScan("supplier")
             .project({"s_suppkey", "s_nationkey", "true as marker2"})
-            .nestedLoopJoin(
+            .nestedLoopJoinRight(
                 matchFirstCount()
                     .project({"r_regionkey", "x"})
                     .assignUniqueId("row_id"),
-                velox::core::JoinType::kRight,
                 "r_regionkey > s_suppkey")
             .singleAggregation(
                 {"row_id", "s_nationkey"},
@@ -2297,13 +2256,12 @@ TEST_P(SubqueryTest, uncorrelatedThenNonEquiCorrelatedScalar) {
   auto matcher =
       matchHiveScan("nation")
           .project({"n_regionkey", "true as marker"})
-          .nestedLoopJoin(
+          .nestedLoopJoinRight(
               matchHiveScan("region")
                   .nestedLoopJoin(
                       matchHiveScan("supplier")
                           .singleAggregation({}, {"max(s_suppkey) as max_key"}))
                   .assignUniqueId("unique_id"),
-              velox::core::JoinType::kRight,
               "r_regionkey < n_regionkey")
           .singleAggregation(
               {"unique_id"},
@@ -2330,9 +2288,8 @@ TEST_P(SubqueryTest, nonEquiCorrelatedScalarThenCorrelatedExists) {
 
   auto matcher = matchHiveScan("nation")
                      .project({"n_regionkey", "true as marker"})
-                     .nestedLoopJoin(
-                         matchHiveScan("region").assignUniqueId("unique_id"),
-                         velox::core::JoinType::kRight)
+                     .nestedLoopJoinRight(
+                         matchHiveScan("region").assignUniqueId("unique_id"))
                      .singleAggregation(
                          {"unique_id"},
                          {
@@ -2340,9 +2297,7 @@ TEST_P(SubqueryTest, nonEquiCorrelatedScalarThenCorrelatedExists) {
                              "arbitrary(r_regionkey) as r_regionkey",
                          })
                      .project({"r_regionkey", "cnt"})
-                     .nestedLoopJoin(
-                         matchHiveScan("supplier"),
-                         velox::core::JoinType::kLeftSemiProject)
+                     .nestedLoopJoinLeftSemiProject(matchHiveScan("supplier"))
                      .project()
                      .build();
 
@@ -2363,9 +2318,8 @@ TEST_P(SubqueryTest, nonEquiCorrelatedThenUncorrelatedScalar) {
   auto matcher =
       matchHiveScan("nation")
           .project({"n_regionkey", "true as marker"})
-          .nestedLoopJoin(
+          .nestedLoopJoinRight(
               matchHiveScan("region").assignUniqueId("unique_id"),
-              velox::core::JoinType::kRight,
               "r_regionkey < n_regionkey")
           .singleAggregation(
               {"unique_id"}, {"count(*) filter (where marker) as cnt"})
@@ -2389,15 +2343,14 @@ TEST_P(SubqueryTest, correlatedExistsThenUncorrelatedIn) {
       "FROM region";
   SCOPED_TRACE(query);
 
-  auto matcher = matchHiveScan("supplier")
-                     .hashJoinRightSemiProject(
-                         matchHiveScan("region").nestedLoopJoin(
-                             matchHiveScan("nation"),
-                             velox::core::JoinType::kLeftSemiProject,
-                             "r_regionkey < n_regionkey"),
-                         {.nullAware = true})
-                     .project()
-                     .build();
+  auto matcher =
+      matchHiveScan("supplier")
+          .hashJoinRightSemiProject(
+              matchHiveScan("region").nestedLoopJoinLeftSemiProject(
+                  matchHiveScan("nation"), "r_regionkey < n_regionkey"),
+              {.nullAware = true})
+          .project()
+          .build();
 
   auto plan = toSingleNodePlan(query);
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
@@ -2446,15 +2399,13 @@ TEST_P(SubqueryTest, correlatedScalarWithoutAggregation) {
     auto query = "SELECT * FROM t WHERE a > (SELECT c + d FROM u WHERE d < b)";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .assignUniqueId("unique_id")
-            .nestedLoopJoin(
-                matchScan("u"), velox::core::JoinType::kLeft, "b > d")
-            .enforceDistinct({"unique_id"})
-            .filter("a > c + d")
-            .project()
-            .build();
+    auto matcher = matchScan("t")
+                       .assignUniqueId("unique_id")
+                       .nestedLoopJoinLeft(matchScan("u"), "b > d")
+                       .enforceDistinct({"unique_id"})
+                       .filter("a > c + d")
+                       .project()
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
@@ -2464,14 +2415,12 @@ TEST_P(SubqueryTest, correlatedScalarWithoutAggregation) {
     auto query = "SELECT a + (SELECT c + d FROM u WHERE d < b) FROM t";
     SCOPED_TRACE(query);
 
-    auto matcher =
-        matchScan("t")
-            .assignUniqueId("unique_id")
-            .nestedLoopJoin(
-                matchScan("u"), velox::core::JoinType::kLeft, "b > d")
-            .enforceDistinct({"unique_id"})
-            .project({"a + (c + d)"})
-            .build();
+    auto matcher = matchScan("t")
+                       .assignUniqueId("unique_id")
+                       .nestedLoopJoinLeft(matchScan("u"), "b > d")
+                       .enforceDistinct({"unique_id"})
+                       .project({"a + (c + d)"})
+                       .build();
 
     auto plan = toSingleNodePlan(parseSelect(query, kTestConnectorId));
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
@@ -2607,10 +2556,9 @@ TEST_P(SubqueryTest, innerJoinOnSubquery) {
     auto matcher = matchHiveScan("nation")
                        .hashJoinInner(matchHiveScan("region"))
                        .project()
-                       .nestedLoopJoin(
+                       .nestedLoopJoinInner(
                            matchHiveScan("supplier")
-                               .singleAggregation({}, {"min(s_nationkey)"}),
-                           velox::core::JoinType::kInner)
+                               .singleAggregation({}, {"min(s_nationkey)"}))
                        .project(
                            {"n_nationkey",
                             "n_name",
@@ -2657,10 +2605,9 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
 
     auto matcher =
         matchHiveScan("nation")
-            .hashJoinLeft(matchHiveScan("region").nestedLoopJoin(
+            .hashJoinLeft(matchHiveScan("region").nestedLoopJoinInner(
                 matchHiveScan("supplier")
                     .singleAggregation({}, {"min(s_nationkey) as m"}),
-                core::JoinType::kInner,
                 "r_regionkey > m"))
             .build();
 
@@ -2698,14 +2645,13 @@ TEST_P(SubqueryTest, leftJoinOnSubquery) {
         "ON r.r_name IN (SELECT s_name FROM supplier)";
     SCOPED_TRACE(query);
 
-    auto matcher = matchHiveScan("nation")
-                       .nestedLoopJoin(
-                           matchHiveScan("supplier")
-                               .hashJoin(
-                                   matchHiveScan("region"),
-                                   core::JoinType::kRightSemiFilter),
-                           core::JoinType::kLeft)
-                       .build();
+    auto matcher =
+        matchHiveScan("nation")
+            .nestedLoopJoinLeft(matchHiveScan("supplier")
+                                    .hashJoin(
+                                        matchHiveScan("region"),
+                                        core::JoinType::kRightSemiFilter))
+            .build();
 
     AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
@@ -2801,12 +2747,11 @@ TEST_P(SubqueryTest, nonEquiLeftJoinWithScalarSubquery) {
 
   // The scalar subquery is cross-joined, and the non-equi LEFT JOIN uses a
   // nested-loop join.
-  auto matcher =
-      matchScan("t")
-          .nestedLoopJoin(matchScan("v").enforceSingleRow())
-          .nestedLoopJoin(matchScan("u"), velox::core::JoinType::kLeft, "b < c")
-          .project()
-          .build();
+  auto matcher = matchScan("t")
+                     .nestedLoopJoin(matchScan("v").enforceSingleRow())
+                     .nestedLoopJoinLeft(matchScan("u"), "b < c")
+                     .project()
+                     .build();
 
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
@@ -3031,16 +2976,15 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
         ") "
         "SELECT (SELECT count(*) FROM matched) FROM t",
         kTestConnectorId));
-    auto matcher =
-        matchScan("t")
-            .aliases({"a"})
-            .hashJoin(
-                matchScan("u"),
-                core::JoinType::kInner,
-                {.keys = {{"a = x"}}, .filter = ""})
-            .singleAggregation({}, {"count(*) as c"})
-            .nestedLoopJoin(matchScan("t"), core::JoinType::kInner, "")
-            .build();
+    auto matcher = matchScan("t")
+                       .aliases({"a"})
+                       .hashJoin(
+                           matchScan("u"),
+                           core::JoinType::kInner,
+                           {.keys = {{"a = x"}}, .filter = ""})
+                       .singleAggregation({}, {"count(*) as c"})
+                       .nestedLoopJoinInner(matchScan("t"), "")
+                       .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
@@ -3049,12 +2993,11 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
     auto plan = toSingleNodePlan(parseSelect(
         "SELECT t.a FROM t, u WHERE NOT EXISTS (SELECT 1 WHERE t.a = u.x)",
         kTestConnectorId));
-    auto matcher =
-        matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
-            .filter("NOT coalesce(a = x, false)")
-            .project({"a"})
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoinInner(matchScan("u"), "")
+                       .filter("NOT coalesce(a = x, false)")
+                       .project({"a"})
+                       .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
@@ -3063,11 +3006,10 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
     auto plan = toSingleNodePlan(parseSelect(
         "SELECT t.a, EXISTS (SELECT 1 WHERE t.a = u.x) FROM t, u",
         kTestConnectorId));
-    auto matcher =
-        matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
-            .project({"a", "coalesce(a = x, false)"})
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoinInner(matchScan("u"), "")
+                       .project({"a", "coalesce(a = x, false)"})
+                       .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 
@@ -3095,12 +3037,10 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
         "SELECT a, nullif(a, 1) IN (SELECT x) FROM t, u", kTestConnectorId));
     auto matcher =
         matchScan("t")
-            .nestedLoopJoin(matchScan("u"), core::JoinType::kInner, "")
+            .nestedLoopJoinInner(matchScan("u"), "")
             .project({"a", "x = nullif(a, 1) AS matches"})
-            .nestedLoopJoin(
-                matchValues(makeRowVector(ROW({}, {}), 1)),
-                core::JoinType::kLeftSemiProject,
-                "matches")
+            .nestedLoopJoinLeftSemiProject(
+                matchValues(makeRowVector(ROW({}, {}), 1)), "matches")
             .aliases({std::nullopt, "m"})
             .project({"a", "m"})
             .build();
