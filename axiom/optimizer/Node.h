@@ -564,6 +564,10 @@ class Limit : public Node {
 
   explicit Limit(Key key);
 
+  /// True when a limit of 'offset' and 'count' returns every row of 'input':
+  /// it keeps the first row of an input with at most one.
+  static bool keepsAllRows(NodeCP input, int64_t offset, int64_t count);
+
   NodeCP input() const {
     return input_;
   }

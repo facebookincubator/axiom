@@ -852,7 +852,8 @@ TEST_P(JoinTest, constantSemiFilterJoinKeys) {
         matchScan("t")
             .filter("a = 1")
             .project({"b"})
-            .nestedLoopJoinLeftSemiProject(matchScan("u").filter("x = 1"))
+            .nestedLoopJoinLeftSemiProject(
+                matchScan("u").filter("x = 1").projectNone())
             .aliases({"b", "mark"})
             .filter("mark")
             .project({"b"})

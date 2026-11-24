@@ -1497,9 +1497,8 @@ TEST_P(UnnestTest, inOverCorrelatedUnnest) {
           .project(
               {"k",
                "row_id",
-               "coalesce(marker and v = e, false) as matched",
-               "coalesce(marker and (v = e) is null, false) "
-               "as unknown"})
+               "coalesce(if(marker, v = e, false), false) as matched",
+               "if(marker, v = e, false) is null as unknown"})
           .streamingAggregation(
               {"row_id"},
               {"bool_or(matched) as any_match",

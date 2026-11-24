@@ -209,19 +209,20 @@ bool onOneDriverPerTask(Placement placement) {
       placement == Placement::kSingleThread;
 }
 
-// The properties of a leaf with the unique keys 'unique': 'physical()' when
-// PlanPhysical placed it, with 'unique' as its global keys and the partitioning
-// one task or one driver per task implies; the relational properties otherwise.
+// The properties of a leaf with the relational properties 'relational':
+// 'physical()' when PlanPhysical placed it, with the unique keys of
+// 'relational' as its global keys and the partitioning one task or one driver
+// per task implies; 'relational' otherwise.
 template <typename Physical>
 Node::Properties leafProperties(
     Placement placement,
     Physical&& physical,
-    QGVector<PlanObjectSet> unique) {
+    RelationalProperties relational) {
   if (placement == Placement::kUnplaced) {
-    return RelationalProperties{.unique = std::move(unique)};
+    return relational;
   }
   PhysicalProperties properties = physical();
-  properties.globalUnique = std::move(unique);
+  properties.globalUnique = std::move(relational.unique);
   if (onOneTask(placement)) {
     properties.globalPartition = Partitioning::gather(PropertyScope::kGlobal);
   }
@@ -844,7 +845,10 @@ Scan::Scan(Key key)
                         key.outputColumns,
                         key.groupedPartitionType)};
               },
-              scanUnique(key.baseTable, key.outputColumns, key.scanHandle))),
+              {.unique = scanUnique(
+                   key.baseTable,
+                   key.outputColumns,
+                   key.scanHandle)})),
       baseTable_(key.baseTable),
       scanHandle_(key.scanHandle),
       groupedPartitionType_(key.groupedPartitionType),
@@ -1158,6 +1162,11 @@ Partitioning Limit::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
   return inheritedPartition(inputPartitions[0]);
+}
+
+// static
+bool Limit::keepsAllRows(NodeCP input, int64_t offset, int64_t count) {
+  return offset == 0 && count > 0 && input->atMostOneRow();
 }
 
 Limit::Limit(Key key)
@@ -1752,6 +1761,31 @@ Partitioning Values::globalPartition(
   return physicalProperties().globalPartition;
 }
 
+namespace {
+
+// Number of rows of a Values with the folded 'rows' or the passthrough
+// 'source'.
+size_t valuesCardinality(
+    const logical_plan::ValuesNode* source,
+    const velox::Variant* rows) {
+  if (rows != nullptr) {
+    return rows->array().size();
+  }
+  return source != nullptr ? source->cardinality() : 0;
+}
+
+// The relational properties of a Values: at most one row is unique on the
+// empty set.
+RelationalProperties valuesRelational(const Values::Key& key) {
+  const auto cardinality = valuesCardinality(key.source, key.rows);
+  if (cardinality > 1) {
+    return {};
+  }
+  return {.unique = {PlanObjectSet{}}, .singleRow = cardinality == 1};
+}
+
+} // namespace
+
 Values::Values(Key key)
     : Node(
           NodeType::kValues,
@@ -1759,7 +1793,7 @@ Values::Values(Key key)
           leafProperties(
               key.placement,
               [] { return PhysicalProperties{}; },
-              {})),
+              valuesRelational(key))),
       source_(key.source),
       rows_(key.rows),
       channels_(std::move(key.channels)),
@@ -1810,10 +1844,7 @@ const velox::Variant& Values::valueAt(size_t row, size_t column) const {
 }
 
 size_t Values::cardinality() const {
-  if (rows_ != nullptr) {
-    return rows_->array().size();
-  }
-  return source_ != nullptr ? source_->cardinality() : 0;
+  return valuesCardinality(source_, rows_);
 }
 
 bool Values::isEmpty(NodeCP node) {

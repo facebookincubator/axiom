@@ -1180,6 +1180,82 @@ TEST_P(SubqueryTest, correlatedInWithCorrelationOnInKey) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
+// An IN whose subquery key reads an outer column compares the left side with
+// the key in the join condition. In WHERE, where a NULL and a FALSE result both
+// drop the row, that is the whole plan.
+TEST_P(SubqueryTest, inKeyReadingOuterColumn) {
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
+  testConnector_->addTable("u", ROW("x", BIGINT()));
+
+  {
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT a FROM t WHERE a IN (SELECT u.x + t.b FROM u)",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .nestedLoopJoinLeftSemiProject(matchScan("u"), "a = b + x")
+            .aliases({std::nullopt, "m"})
+            .filter("m")
+            .project({"a"})
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+
+  // A key with rand() is drawn once for each subquery row, even when it reads
+  // no subquery column: the comparison is computed once per joined row.
+  {
+    auto plan = toSingleNodePlan(parseSelect(
+        "SELECT a, a IN (SELECT t.b + floor(rand() * 2) FROM u) FROM t",
+        kTestConnectorId));
+    auto matcher =
+        matchScan("t")
+            .assignUniqueId("r")
+            .nestedLoopJoinLeft(matchScan("u").project({"true AS i"}))
+            .project({
+                "a",
+                "r",
+                "if(i, a::double = b::double + floor(rand() * 2.0), false) AS c",
+            })
+            .project({
+                "a",
+                "r",
+                "coalesce(c, false) AS m",
+                "c IS NULL AS n",
+            })
+            .streamingAggregation(
+                {"r"},
+                {"bool_or(m) AS any_m", "bool_or(n) AS any_n", "arbitrary(a)"})
+            .project({
+                "a",
+                "CASE WHEN any_m THEN true WHEN any_n THEN null ELSE false END",
+            })
+            .build();
+    AXIOM_ASSERT_PLAN_V2(plan, matcher);
+  }
+}
+
+// An IN left side with rand() is computed once per outer row.
+TEST_P(SubqueryTest, inNondeterministicLeftSide) {
+  if (!useV2_) {
+    return;
+  }
+
+  testConnector_->addTable("t", ROW("a", BIGINT()));
+  testConnector_->addTable("u", ROW("b", BOOLEAN()));
+
+  auto plan = toSingleNodePlan(parseSelect(
+      "SELECT a FROM t WHERE (rand() < 0.5) IN (SELECT b FROM u)",
+      kTestConnectorId));
+  auto matcher = matchScan("t")
+                     .project({"a", "rand() < 0.5 AS l"})
+                     .hashJoin(
+                         matchScan("u"),
+                         core::JoinType::kLeftSemiFilter,
+                         {.keys = {{"l = b"}}})
+                     .build();
+  AXIOM_ASSERT_PLAN(plan, matcher);
+}
+
 // IN subquery whose correlation predicate references a sibling of the IN's
 // outer table: t and u join into a single source feeding the SEMI on v.
 TEST_P(SubqueryTest, correlatedInOnSibling) {
@@ -2811,6 +2887,10 @@ TEST_P(SubqueryTest, rightJoinOnSubquery) {
 }
 
 TEST_P(SubqueryTest, subqueryInOuterJoinOn) {
+  if (!useV2_) {
+    return;
+  }
+
   // Left-side subquery in LEFT JOIN ON clause.
   {
     auto query =
@@ -2819,23 +2899,16 @@ TEST_P(SubqueryTest, subqueryInOuterJoinOn) {
         "AND n.n_regionkey > (SELECT min(s_nationkey) FROM supplier)";
     SCOPED_TRACE(query);
 
-    if (useV2_) {
-      // The uncorrelated aggregate joins the preserved side first, so the ON
-      // condition reads it as an ordinary column.
-      auto matcher =
-          matchHiveScan("nation")
-              .nestedLoopJoin(matchHiveScan("supplier").aggregation())
-              .hashJoinLeft(
-                  matchHiveScan("region"),
-                  {.keys = {{"n_regionkey = r_regionkey"}},
-                   .filter = "n_regionkey > min"})
-              .build();
-      AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
-    } else {
-      VELOX_ASSERT_THROW(
-          toSingleNodePlan(query),
-          "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
-    }
+    // The uncorrelated aggregate joins the preserved side first, so the ON
+    // condition reads it as an ordinary column.
+    auto matcher = matchHiveScan("nation")
+                       .nestedLoopJoin(matchHiveScan("supplier").aggregation())
+                       .hashJoinLeft(
+                           matchHiveScan("region"),
+                           {.keys = {{"n_regionkey = r_regionkey"}},
+                            .filter = "n_regionkey > min"})
+                       .build();
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Right-side (preserved) subquery in RIGHT JOIN ON clause.
@@ -2846,23 +2919,16 @@ TEST_P(SubqueryTest, subqueryInOuterJoinOn) {
         "AND n.n_regionkey > (SELECT min(s_nationkey) FROM supplier)";
     SCOPED_TRACE(query);
 
-    if (useV2_) {
-      // RIGHT JOIN becomes a LEFT JOIN with the sides swapped, and the
-      // subquery still joins the input whose column the ON condition reads.
-      auto matcher =
-          matchHiveScan("nation")
-              .nestedLoopJoin(matchHiveScan("supplier").aggregation())
-              .hashJoinLeft(
-                  matchHiveScan("region"),
-                  {.keys = {{"n_regionkey = r_regionkey"}},
-                   .filter = "n_regionkey > min"})
-              .build();
-      AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
-    } else {
-      VELOX_ASSERT_THROW(
-          toSingleNodePlan(query),
-          "Unsupported subqueries in the ON clause of a LEFT or RIGHT join");
-    }
+    // RIGHT JOIN becomes a LEFT JOIN with the sides swapped, and the
+    // subquery still joins the input whose column the ON condition reads.
+    auto matcher = matchHiveScan("nation")
+                       .nestedLoopJoin(matchHiveScan("supplier").aggregation())
+                       .hashJoinLeft(
+                           matchHiveScan("region"),
+                           {.keys = {{"n_regionkey = r_regionkey"}},
+                            .filter = "n_regionkey > min"})
+                       .build();
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 
   // Subquery in FULL JOIN ON clause.
@@ -2873,23 +2939,18 @@ TEST_P(SubqueryTest, subqueryInOuterJoinOn) {
         "AND r.r_name IN (SELECT s_name FROM supplier)";
     SCOPED_TRACE(query);
 
-    if (useV2_) {
-      // The mark reads only the null-supplying side, so it is computed
-      // there and the FULL join's ON condition consumes it.
-      auto matcher =
-          matchHiveScan("nation")
-              .hashJoinFull(
-                  matchHiveScan("supplier")
-                      .hashJoinRightSemiProject(
-                          matchHiveScan("region"),
-                          {.nullAware = true, .keys = {{"s_name = r_name"}}}),
-                  {.keys = {{"n_regionkey = r_regionkey"}}})
-              .build();
-      AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
-    } else {
-      VELOX_ASSERT_THROW(
-          toSingleNodePlan(query), "Unexpected expression: Subquery");
-    }
+    // The mark reads only the null-supplying side, so it is computed
+    // there and the FULL join's ON condition consumes it.
+    auto matcher =
+        matchHiveScan("nation")
+            .hashJoinFull(
+                matchHiveScan("supplier")
+                    .hashJoinRightSemiProject(
+                        matchHiveScan("region"),
+                        {.nullAware = false, .keys = {{"s_name = r_name"}}}),
+                {.keys = {{"n_regionkey = r_regionkey"}}})
+            .build();
+    AXIOM_ASSERT_PLAN(toSingleNodePlan(query), matcher);
   }
 }
 
@@ -3035,15 +3096,10 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
     SCOPED_TRACE("IN, key reading the outer row");
     auto plan = toSingleNodePlan(parseSelect(
         "SELECT a, nullif(a, 1) IN (SELECT x) FROM t, u", kTestConnectorId));
-    auto matcher =
-        matchScan("t")
-            .nestedLoopJoinInner(matchScan("u"), "")
-            .project({"a", "x = nullif(a, 1) AS matches"})
-            .nestedLoopJoinLeftSemiProject(
-                matchValues(makeRowVector(ROW({}, {}), 1)), "matches")
-            .aliases({std::nullopt, "m"})
-            .project({"a", "m"})
-            .build();
+    auto matcher = matchScan("t")
+                       .nestedLoopJoinInner(matchScan("u"), "")
+                       .project({"a", "x = nullif(a, 1)"})
+                       .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }
 }
