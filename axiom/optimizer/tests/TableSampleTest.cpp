@@ -118,6 +118,17 @@ TEST_P(TableSampleTest, system) {
     return;
   }
 
+  // Nested SYSTEM samples of one table multiply their rates.
+  {
+    const auto& [plan, sampledScans] = planSampled(parseSelect(
+        "SELECT * "
+        "FROM (SELECT * FROM t TABLESAMPLE SYSTEM (50)) "
+        "TABLESAMPLE SYSTEM (10)"));
+    AXIOM_ASSERT_PLAN(plan, matchScan("t").build());
+    ASSERT_EQ(sampledScans.size(), 1);
+    EXPECT_EQ(sampledScans.begin()->second, 5);
+  }
+
   // SYSTEM over anything other than a table, optionally filtered or projected,
   // fails.
   testConnector_->addTable("u", ROW({"a", "b"}, INTEGER()));

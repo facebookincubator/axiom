@@ -1791,8 +1791,11 @@ Translated Translator::translateSample(
           scan,
           "TABLESAMPLE SYSTEM input must be a table, optionally filtered or "
           "projected");
-      const_cast<BaseTable*>(scan->baseTable())->sampledPercentage =
-          static_cast<float>(percentage);
+      // A sample of an already sampled table keeps that fraction of its rows.
+      auto& sampledPercentage =
+          const_cast<BaseTable*>(scan->baseTable())->sampledPercentage;
+      sampledPercentage = static_cast<float>(
+          sampledPercentage.value_or(100) * percentage / 100);
       return input;
     }
     case lp::SampleNode::SampleMethod::kBernoulli: {
