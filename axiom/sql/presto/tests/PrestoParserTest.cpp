@@ -713,7 +713,7 @@ TEST_F(PrestoParserTest, selectStarDuplicateColumns) {
       parseSql(
           "SELECT x FROM (SELECT *, 3 AS extra FROM (SELECT 1 AS x) "
           "JOIN (SELECT 2 AS x) ON TRUE)"),
-      "Cannot resolve column: x");
+      "Column is ambiguous: x");
 
   testSelect(
       "SELECT * EXCLUDE (x), 3 AS extra FROM (SELECT 1 AS x, 4 AS y) "
@@ -1106,6 +1106,23 @@ TEST_F(PrestoParserTest, join) {
             "SELECT (SELECT id FROM t1 JOIN t2 ON t1.id = t2.id) "
             "FROM t1 AS o"),
         "Column is ambiguous: id");
+
+    // A name that a relation gives two columns is ambiguous, with or without
+    // the relation's alias, and on either side of a join.
+    for (const auto* sql : {
+             "SELECT x FROM (SELECT 1 AS x, 2 AS x) t",
+             "SELECT t.x FROM (SELECT 1 AS x, 2 AS x) t",
+             "SELECT x FROM (SELECT 1 AS x, 2 AS x) t CROSS JOIN t3",
+             "SELECT x FROM t3 CROSS JOIN (SELECT 1 AS x, 2 AS x) t",
+             "SELECT x FROM (SELECT 1 AS x, 1 AS x) t",
+             "SELECT t.x FROM (SELECT 1 AS x, 1 AS x) t",
+             "SELECT x FROM (SELECT 1 AS x, 1 AS x) t CROSS JOIN t3",
+             "SELECT x FROM (SELECT 1 AS x, 1 AS x) t CROSS JOIN t1",
+         }) {
+      SCOPED_TRACE(sql);
+      AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+          parseSql(sql), "Column is ambiguous: x");
+    }
 
     // Qualified references are not ambiguous.
     auto matcher = matchScan()
@@ -2019,11 +2036,11 @@ TEST_F(PrestoParserTest, duplicateAliases) {
         matcher);
   }
 
-  // Referencing a duplicate column shoud fail.
+  // Referencing a duplicate column is ambiguous.
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT x FROM (SELECT a as x, b as x FROM (VALUES (1, 2)) AS t(a, b))"),
-      "Cannot resolve column: x");
+      "Column is ambiguous: x");
 
   // Two CROSS JOIN UNNEST relations may reuse a relation alias and a column
   // name (both `t` with column `u` here). The shared name `t.u` is ambiguous,

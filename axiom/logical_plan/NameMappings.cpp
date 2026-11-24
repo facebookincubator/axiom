@@ -55,6 +55,9 @@ void NameMappings::markAmbiguous(const QualifiedName& name) {
     return;
   }
 
+  // The column keeps the name as its output name.
+  userNames_.try_emplace(it->second, name.name);
+
   if (auto entry = reverseIndex_.find(it->second);
       entry != reverseIndex_.end()) {
     auto& names = entry->second;
@@ -143,27 +146,30 @@ void NameMappings::clearAliases() {
   folly::erase_if(mappings_, [](const auto& entry) {
     return entry.first.alias.has_value();
   });
+  folly::erase_if(ambiguousNames_, [](const QualifiedName& name) {
+    return name.alias.has_value();
+  });
 
   rebuildReverseIndex();
 }
 
 void NameMappings::setAlias(const std::string& alias) {
-  std::vector<std::pair<std::string, std::string>> names;
-  for (auto it = mappings_.begin(); it != mappings_.end();) {
-    if (it->first.alias.has_value()) {
-      it = mappings_.erase(it);
-    } else {
-      names.emplace_back(it->first.name, it->second);
-      ++it;
-    }
-  }
+  clearAliases();
 
-  // Every surviving entry gets the new alias.
+  // Every unqualified name, mapped or ambiguous, gets the new alias.
+  std::vector<std::pair<std::string, std::string>> names;
+  for (const auto& [name, id] : mappings_) {
+    names.emplace_back(name.name, id);
+  }
   for (auto& [name, id] : names) {
     insert(QualifiedName{.alias = alias, .name = std::move(name)}, id);
   }
 
-  rebuildReverseIndex();
+  std::vector<QualifiedName> ambiguous;
+  for (const auto& name : ambiguousNames_) {
+    ambiguous.push_back({.alias = alias, .name = name.name});
+  }
+  ambiguousNames_.insert(ambiguous.begin(), ambiguous.end());
 }
 
 void NameMappings::rebuildReverseIndex() {
@@ -174,15 +180,6 @@ void NameMappings::rebuildReverseIndex() {
 }
 
 void NameMappings::merge(const NameMappings& other) {
-  // Snapshot qualified names from the left side before merging. Used below to
-  // detect names that are ambiguous across previously-joined tables.
-  folly::F14FastSet<std::string> leftQualifiedNames;
-  for (const auto& [key, _] : mappings_) {
-    if (key.alias.has_value()) {
-      leftQualifiedNames.emplace(key.name);
-    }
-  }
-
   const auto preserveOtherUserName = [&](const std::string& id,
                                          const std::string& fallback) {
     if (const auto* userName = other.userName(id)) {
@@ -199,19 +196,18 @@ void NameMappings::merge(const NameMappings& other) {
       // both sides reuse a relation alias. Referencing a dropped name later
       // fails as unresolved, matching Presto's report-at-reference-time
       // behavior.
-      userNames_.try_emplace(existing->second, name.name);
       preserveOtherUserName(id, name.name);
       markAmbiguous(name);
-    } else if (
-        !name.alias.has_value() && leftQualifiedNames.contains(name.name)) {
-      // Don't add an unqualified name from the right side if the left side
-      // already has a qualified name with the same base. The name is ambiguous
-      // across joined tables even though the left's unqualified entry was
-      // removed by an earlier merge.
+    } else if (isAmbiguous(name)) {
       preserveOtherUserName(id, name.name);
     } else {
       insert(name, id);
     }
+  }
+
+  // A name ambiguous on either side is ambiguous across the merged relations.
+  for (const auto& name : other.ambiguousNames_) {
+    markAmbiguous(name);
   }
 
   for (const auto& id : other.hiddenIds_) {

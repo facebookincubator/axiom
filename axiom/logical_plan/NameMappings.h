@@ -48,7 +48,8 @@ class NameMappings {
 
   /// Drops the mapping for 'name' and marks it ambiguous: it names more than
   /// one column, so it names none. The columns stay in the output, reachable
-  /// by their other names. The mark lasts until 'reset'.
+  /// by their other names, and the column that had the mapping keeps 'name' as
+  /// its output name. The mark lasts until 'reset'.
   void markAmbiguous(const QualifiedName& name);
 
   /// Returns true if 'name' was marked ambiguous.
@@ -83,19 +84,22 @@ class NameMappings {
   std::vector<QualifiedName> reverseLookup(const std::string& id) const;
 
   /// Sets new alias for the names. Unique names will be accessible both with
-  /// the new alias and without. Ambiguous names will no longer be accessible.
+  /// the new alias and without. A name marked ambiguous stays ambiguous, with
+  /// and without the new alias.
   ///
   /// Used in PlanBuilder::as() API.
   void setAlias(const std::string& alias);
 
   /// Drops all qualified names, leaving only unqualified access. Columns that
-  /// were reachable only through an alias are no longer accessible by name.
+  /// were reachable only through an alias are no longer accessible by name,
+  /// and a qualified name is no longer ambiguous.
   ///
   /// Used in PlanBuilder::clearAliases() API.
   void clearAliases();
 
   /// Merges mappings and user names from 'other' into this. Removes
-  /// unqualified access to non-unique names.
+  /// unqualified access to non-unique names. A name marked ambiguous on either
+  /// side is ambiguous in the result.
   ///
   /// @pre IDs are unique across 'this' and 'other'. This expectation is not
   /// verified explicitly. Violations would lead to undefined behavior.

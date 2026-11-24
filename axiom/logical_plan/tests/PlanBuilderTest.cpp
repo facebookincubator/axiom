@@ -186,9 +186,14 @@ TEST_F(PlanBuilderTest, duplicateAliasAllowed) {
 
     auto names = builder.findOrAssignOutputNames();
     EXPECT_EQ(3, names.size());
-    EXPECT_EQ("a", names[0].name);
     EXPECT_EQ("b", names[1].name);
-    EXPECT_TRUE(names[2].name.starts_with("a_"));
+    EXPECT_THAT(
+        (std::vector<std::string>{
+            names[0].outputName(), names[2].outputName()}),
+        testing::ElementsAre("a", "a"));
+    EXPECT_THAT(names[0].name, testing::StartsWith("a_"));
+    EXPECT_THAT(names[2].name, testing::StartsWith("a_"));
+    EXPECT_THAT(names[0].name, testing::Ne(names[2].name));
   }
 
   // Assigning access names does not make a duplicate alias resolvable.
