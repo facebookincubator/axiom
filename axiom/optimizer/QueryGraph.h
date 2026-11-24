@@ -797,7 +797,7 @@ class Aggregate : public Call {
       OrderTypeVector orderTypes,
       std::optional<logical_plan::SpecialAggregateKind> specialKind =
           std::nullopt,
-      const Aggregate* fallback = nullptr)
+      bool allowFallback = false)
       : Call(
             PlanType::kAggregateExpr,
             name,
@@ -814,7 +814,7 @@ class Aggregate : public Call {
         orderKeys_(std::move(orderKeys)),
         orderTypes_(std::move(orderTypes)),
         specialKind_(specialKind),
-        fallback_(fallback) {
+        allowFallback_(allowFallback) {
     VELOX_CHECK_EQ(orderKeys_.size(), orderTypes_.size());
 
     for (auto& arg : this->args()) {
@@ -860,17 +860,17 @@ class Aggregate : public Call {
 
   /// The metadata-aggregate kind if this is a special-form metadata aggregate,
   /// or std::nullopt for an ordinary aggregate. A metadata aggregate is folded
-  /// into constants from table metadata or replaced by 'fallback' before
-  /// lowering; its 'name' is the canonical kind name and is never lowered to a
-  /// Velox aggregate.
+  /// into constants from table metadata or, if 'allowFallback', replaced by
+  /// a count before lowering; its 'name' is the canonical kind name and is
+  /// never lowered to a Velox aggregate.
   const std::optional<logical_plan::SpecialAggregateKind>& specialKind() const {
     return specialKind_;
   }
 
-  /// For a metadata aggregate, the ordinary aggregate (e.g. count) to use when
-  /// no connector can answer it from metadata, or nullptr if none was supplied.
-  const Aggregate* fallback() const {
-    return fallback_;
+  /// For a metadata aggregate, whether it may be replaced by a count over the
+  /// data when metadata cannot answer it.
+  bool allowFallback() const {
+    return allowFallback_;
   }
 
   /// Returns the typed result for empty input: 0 for a special (metadata
@@ -915,7 +915,7 @@ class Aggregate : public Call {
   ExprVector orderKeys_;
   OrderTypeVector orderTypes_;
   const std::optional<logical_plan::SpecialAggregateKind> specialKind_;
-  const Aggregate* fallback_;
+  const bool allowFallback_;
 };
 
 using AggregateCP = const Aggregate*;

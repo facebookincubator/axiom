@@ -71,9 +71,6 @@ class SubqueryVisitor : public ExprVisitor {
   void visit(const SpecialFormAggExpr& expr, ExprVisitorContext& context)
       const override {
     visitAggregate(expr, context);
-    if (expr.fallback() != nullptr) {
-      expr.fallback()->accept(*this, context);
-    }
   }
 
   void visit(const WindowExpr& expr, ExprVisitorContext& context)
@@ -320,7 +317,7 @@ bool AggregateExpr::equalTo(const Expr& other) const {
 bool SpecialFormAggExpr::equalTo(const Expr& other) const {
   const auto* rhs = other.as<SpecialFormAggExpr>();
   return AggregateExpr::equalTo(other) && kind_ == rhs->kind_ &&
-      equalNullableExprs(fallback_, rhs->fallback_);
+      allowFallback_ == rhs->allowFallback_;
 }
 
 bool WindowExpr::Frame::operator==(const Frame& other) const {
@@ -615,9 +612,7 @@ ExprPtr AggregateExpr::create(const folly::dynamic& obj, void* context) {
 folly::dynamic SpecialFormAggExpr::serialize() const {
   auto obj = serializeBase("SpecialFormAggExpr");
   obj["specialAggregateKind"] = SpecialAggregateKindName::toName(kind_);
-  if (fallback_) {
-    obj["fallback"] = fallback_->serialize();
-  }
+  obj["allowFallback"] = allowFallback_;
   return obj;
 }
 
@@ -626,15 +621,8 @@ ExprPtr SpecialFormAggExpr::create(const folly::dynamic& obj, void* context) {
   auto inputs = deserializeInputs(obj, context);
   auto kind = SpecialAggregateKindName::toSpecialAggregateKind(
       obj["specialAggregateKind"].asString());
-  AggregateExprPtr fallback = nullptr;
-  if (obj.count("fallback")) {
-    fallback = std::dynamic_pointer_cast<const AggregateExpr>(
-        velox::ISerializable::deserialize<Expr>(obj["fallback"], context));
-    VELOX_CHECK_NOT_NULL(
-        fallback, "SpecialFormAggExpr fallback must be an AggregateExpr");
-  }
   return std::make_shared<SpecialFormAggExpr>(
-      kind, std::move(inputs), std::move(fallback));
+      kind, std::move(inputs), obj["allowFallback"].asBool());
 }
 
 folly::dynamic WindowExpr::Frame::serialize() const {
@@ -858,10 +846,10 @@ AXIOM_DEFINE_ENUM_NAME(SpecialAggregateKind, specialAggregateKindNames)
 SpecialFormAggExpr::SpecialFormAggExpr(
     SpecialAggregateKind kind,
     std::vector<ExprPtr> inputs,
-    AggregateExprPtr fallback)
+    bool allowFallback)
     : AggregateExpr{ExprKind::kSpecialFormAgg, velox::BIGINT(), std::string(SpecialAggregateKindName::toName(kind)), std::move(inputs)},
       kind_{kind},
-      fallback_{std::move(fallback)} {
+      allowFallback_{allowFallback} {
   switch (kind_) {
     case SpecialAggregateKind::kMetadataRowCount:
       VELOX_USER_CHECK_EQ(
@@ -878,13 +866,6 @@ SpecialFormAggExpr::SpecialFormAggExpr(
           "Metadata aggregate takes exactly one input: {}",
           SpecialAggregateKindName::toName(kind_));
       break;
-  }
-
-  if (fallback_ != nullptr) {
-    VELOX_USER_CHECK_EQ(
-        fallback_->typeKind(),
-        velox::TypeKind::BIGINT,
-        "Metadata aggregate fallback must return BIGINT");
   }
 }
 

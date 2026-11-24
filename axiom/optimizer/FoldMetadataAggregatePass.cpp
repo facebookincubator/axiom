@@ -21,6 +21,7 @@
 #include "folly/coro/BlockingWait.h"
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/optimizer/ExprFactory.h"
 #include "axiom/optimizer/NodeRewriter.h"
 #include "axiom/optimizer/OptimizerMetrics.h"
 #include "axiom/optimizer/QueryGraph.h"
@@ -69,8 +70,9 @@ class Folder : public NodeRewriter<NoContext> {
  private:
   // Folds an aggregation of only metadata aggregates directly over a Scan into
   // a Values node. The caller guarantees that shape. Returns nullptr if the
-  // scan is sampled with TABLESAMPLE SYSTEM, a grouping key is neither a column
-  // nor a constant, or the connector declines.
+  // scan is sampled with TABLESAMPLE SYSTEM, an aggregate has a FILTER, a
+  // grouping key is neither a column nor a constant, or the connector
+  // declines.
   NodeCP tryFold(AggregationCP node) {
     const auto* scan = node->input()->as<Scan>();
     if (scan->baseTable()->sampledPercentage.has_value()) {
@@ -117,6 +119,10 @@ class Folder : public NodeRewriter<NoContext> {
     std::vector<int32_t> nullCountIndex;
     nullCountIndex.reserve(node->aggregates().size());
     for (const optimizer::Aggregate* aggregate : node->aggregates()) {
+      // Metadata counts every row; a FILTER selects only some.
+      if (aggregate->condition() != nullptr) {
+        return nullptr;
+      }
       if (*aggregate->specialKind() ==
           SpecialAggregateKind::kMetadataRowCount) {
         nullCountIndex.push_back(-1);
@@ -228,8 +234,50 @@ class Folder : public NodeRewriter<NoContext> {
         "Unhandled SpecialAggregateKind: {}", static_cast<int>(kind));
   }
 
-  // Rebuilds the aggregation with each metadata aggregate replaced by its
-  // fallback.
+  // The count that scans the data for metadata aggregate 'aggregate': count()
+  // for a row count, count(x) for a non-null count, and count() over the rows
+  // where x is null for a null count. Keeps the aggregate's FILTER.
+  AggregateCP makeFallback(AggregateCP aggregate) {
+    VELOX_USER_CHECK(
+        aggregate->allowFallback(),
+        "Aggregate cannot be answered from metadata and has no fallback: {}",
+        aggregate->name());
+    const auto& countName = queryCtx()->functionRegistry().count();
+    VELOX_USER_CHECK(
+        countName.has_value(),
+        "Aggregate cannot be answered from metadata and count is not registered: {}",
+        aggregate->name());
+    ExprVector args;
+    ExprCP condition = aggregate->condition();
+    switch (*aggregate->specialKind()) {
+      case SpecialAggregateKind::kMetadataRowCount:
+        break;
+      case SpecialAggregateKind::kMetadataNonNullCount:
+        args = aggregate->args();
+        break;
+      case SpecialAggregateKind::kMetadataNullCount: {
+        ExprFactory exprFactory{builder()};
+        ExprCP isNull = exprFactory.makeIsNull(aggregate->args()[0]);
+        condition = condition == nullptr
+            ? isNull
+            : exprFactory.makeAnd(condition, isNull);
+        break;
+      }
+    }
+    return builder().makeAggregate(
+        toName(*countName),
+        aggregate->value(),
+        std::move(args),
+        FunctionSet{},
+        /*isDistinct=*/false,
+        condition,
+        aggregate->intermediateType(),
+        /*orderKeys=*/{},
+        /*orderTypes=*/{});
+  }
+
+  // Rebuilds the aggregation with each metadata aggregate replaced by the
+  // count that scans the data.
   NodeCP replaceWithFallbacks(AggregationCP node, NoContext& context) {
     NodeCP newInput = rewrite(node->input(), context);
     AggregateCallVector aggregates;
@@ -239,11 +287,7 @@ class Folder : public NodeRewriter<NoContext> {
         aggregates.push_back(aggregate);
         continue;
       }
-      VELOX_USER_CHECK_NOT_NULL(
-          aggregate->fallback(),
-          "Aggregate cannot be answered from metadata and has no fallback: {}",
-          aggregate->name());
-      aggregates.push_back(aggregate->fallback());
+      aggregates.push_back(makeFallback(aggregate));
     }
 
     return builder().make<Aggregation>(

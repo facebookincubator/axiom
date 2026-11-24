@@ -181,7 +181,7 @@ AggregateCP Builder::makeAggregate(
     ExprVector orderKeys,
     OrderTypeVector orderTypes,
     std::optional<logical_plan::SpecialAggregateKind> specialKind,
-    AggregateCP fallback) {
+    bool allowFallback) {
   optimizer::Aggregate::KeyView view{
       name, args, isDistinct, condition, orderKeys, orderTypes};
   if (auto it = aggregateCalls_.find(view); it != aggregateCalls_.end()) {
@@ -198,7 +198,7 @@ AggregateCP Builder::makeAggregate(
       std::move(orderKeys),
       std::move(orderTypes),
       specialKind,
-      fallback);
+      allowFallback);
   aggregateCalls_.insert(aggregate);
   return aggregate;
 }
@@ -220,7 +220,7 @@ AggregateCP Builder::rebuildAggregate(
       std::move(orderKeys),
       aggregate->orderTypes(),
       aggregate->specialKind(),
-      aggregate->fallback());
+      aggregate->allowFallback());
 }
 
 AggregateCP Builder::replaceCondition(AggregateCP aggregate, ExprCP condition) {

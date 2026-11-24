@@ -29,13 +29,13 @@ namespace facebook::axiom::optimizer {
 /// by the grouping keys and declines otherwise. A scan sampled with
 /// TABLESAMPLE SYSTEM (`BaseTable::sampledPercentage`) is not folded: that
 /// sampling happens at split generation, where the connector cannot see it.
-/// When the fold does not apply, each metadata aggregate is replaced by its
-/// fallback (an ordinary count / count_if); a metadata aggregate with no
-/// fallback that cannot be answered from metadata is an error.
+/// An aggregate with a FILTER is not folded. When the fold does not apply,
+/// each metadata aggregate that allows a fallback is replaced by the
+/// registered count over its argument and FILTER; any other is an error.
 ///
 /// Runs after `PushdownAndPrunePass`, which guarantees a `Scan` carries all of
 /// its filters (no `Filter` node sits directly over it). Every metadata
-/// aggregate is either folded, replaced by its fallback, or rejected here, so
+/// aggregate is either folded, replaced by a count, or rejected here, so
 /// none reaches emit, where the kind name is not a Velox aggregate.
 class FoldMetadataAggregatePass {
  public:
