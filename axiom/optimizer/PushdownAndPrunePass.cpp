@@ -742,7 +742,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       return false;
     }
     return simplifier_.simplifyFilter(
-        simplifier_.simplify(substituted, nonNullTargets), derived);
+        {simplifier_.simplify(substituted, nonNullTargets)}, derived);
   }
 
   // Appends derived filters that can be evaluated entirely by one input.
@@ -996,14 +996,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     }
 
     auto [substitutable, blocked] = partition(context.pending, blockedOutputs);
-    ExprVector pushable;
-    pushable.reserve(substitutable.size());
+    ExprVector substituted;
+    substituted.reserve(substitutable.size());
     for (ExprCP conjunct : substitutable) {
-      ExprCP substituted =
-          exprs_.substitute(conjunct, node->outputColumns(), node->exprs());
-      if (simplifier_.simplifyFilter(substituted, pushable)) {
-        return makeEmptyValues(node);
-      }
+      substituted.push_back(
+          exprs_.substitute(conjunct, node->outputColumns(), node->exprs()));
+    }
+    ExprVector pushable;
+    if (simplifier_.simplifyFilter(substituted, pushable)) {
+      return makeEmptyValues(node);
     }
 
     // A conjunct pushed below this Project reads the expressions it was
@@ -1111,14 +1112,15 @@ class Pushdown : public NodeRewriter<PushdownContext> {
           .push_back(conjunct);
     }
 
-    ExprVector pushable;
-    pushable.reserve(substitutable.size());
+    ExprVector substituted;
+    substituted.reserve(substitutable.size());
     for (ExprCP conjunct : substitutable) {
-      ExprCP substituted =
-          exprs_.substitute(conjunct, groupingKeyOutputs, node->groupingKeys());
-      if (simplifier_.simplifyFilter(substituted, pushable)) {
-        return makeEmptyValues(node);
-      }
+      substituted.push_back(exprs_.substitute(
+          conjunct, groupingKeyOutputs, node->groupingKeys()));
+    }
+    ExprVector pushable;
+    if (simplifier_.simplifyFilter(substituted, pushable)) {
+      return makeEmptyValues(node);
     }
 
     PlanObjectSet outputsKept = context.requiredAbove;
@@ -1163,16 +1165,10 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         std::move(simplified), std::move(blocked), context);
   }
 
-  // True if a conjunct of 'conjuncts' is statically false, so no row passes.
+  // True if 'conjuncts' are statically false, so no row passes.
   bool neverMatches(const ExprVector& conjuncts) {
     ExprVector kept;
-    for (ExprCP conjunct : conjuncts) {
-      kept.clear();
-      if (simplifier_.simplifyFilter(conjunct, kept)) {
-        return true;
-      }
-    }
-    return false;
+    return simplifier_.simplifyFilter(conjuncts, kept);
   }
 
   // A join condition no row satisfies decides the join's answer without a
@@ -1377,13 +1373,14 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     PlanObjectSet nonNullKeys;
     addNonNullKeys(node->leftKeys(), node->nullAsValue(), nonNullKeys);
     addNonNullKeys(node->rightKeys(), node->nullAsValue(), nonNullKeys);
+    ExprVector conjuncts = keys.apply(pending, exprs_);
+    for (ExprCP& conjunct : conjuncts) {
+      conjunct = simplifier_.simplify(conjunct, nonNullKeys);
+    }
     ExprVector simplified;
-    for (ExprCP conjunct : keys.apply(pending, exprs_)) {
-      if (simplifier_.simplifyFilter(
-              simplifier_.simplify(conjunct, nonNullKeys), simplified)) {
-        pending = {builder().makeBoolean(false)};
-        return;
-      }
+    if (simplifier_.simplifyFilter(conjuncts, simplified)) {
+      pending = {builder().makeBoolean(false)};
+      return;
     }
     pending = std::move(simplified);
   }
@@ -2035,7 +2032,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       ExprVector impliedFilters;
       for (ExprCP derivedFilter :
            ImpliedFilters::deriveForColumns(filters, exprs_)) {
-        if (simplifier_.simplifyFilter(derivedFilter, impliedFilters)) {
+        if (simplifier_.simplifyFilter({derivedFilter}, impliedFilters)) {
           return makeEmptyValues(node);
         }
       }

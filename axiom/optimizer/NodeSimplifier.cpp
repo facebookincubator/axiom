@@ -188,11 +188,8 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     predicate = simplifier_.simplify(predicate, nonNullColumns);
   }
   ExprVector kept;
-  kept.reserve(predicates.size());
-  for (ExprCP predicate : predicates) {
-    if (simplifier_.simplifyFilter(predicate, kept)) {
-      return emptyPassThroughResult(key.input, input);
-    }
+  if (simplifier_.simplifyFilter(predicates, kept)) {
+    return emptyPassThroughResult(key.input, input);
   }
 
   NodeCP output = input.node;
@@ -297,6 +294,9 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     SimplifiedNode input) {
   if (input.empty() || key.count == 0) {
     return emptyPassThroughResult(key.input, input);
+  }
+  if (Limit::keepsAllRows(input.node, key.offset, key.count)) {
+    return input;
   }
   key.input = input.node;
   NodeCP output = builder_.make<Limit>(std::move(key));
@@ -1292,10 +1292,9 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
   PlanSubstitutions allSubstitutions{input.substitutions};
   allSubstitutions.merge(body.substitutions);
   ExprVector filter;
-  for (ExprCP conjunct : allSubstitutions.apply(key.filter, exprs_)) {
-    if (simplifier_.simplifyFilter(conjunct, filter)) {
-      return withoutBody();
-    }
+  if (simplifier_.simplifyFilter(
+          allSubstitutions.apply(key.filter, exprs_), filter)) {
+    return withoutBody();
   }
   key.filter = std::move(filter);
 

@@ -500,6 +500,29 @@ class Translator {
       const Scope& scope,
       LiftTarget* liftTarget);
 
+  // Translates each conjunct of 'predicate', a filter or a join condition.
+  ExprVector translatePredicate(
+      const logical_plan::Expr& predicate,
+      const Scope& scope,
+      LiftTarget* liftTarget);
+
+  // Translates a conjunct of a predicate whose NULL and FALSE results both
+  // reject the row: a filter or a join condition. A positive IN subquery
+  // becomes an EXISTS.
+  ExprCP translateConjunct(
+      const logical_plan::Expr& conjunct,
+      const Scope& scope,
+      LiftTarget* liftTarget);
+
+  // Translates `lhs IN (subquery)` by lifting an `Apply(kLeftSemiProject)`.
+  // 'asExists' builds `EXISTS (subquery WHERE key = lhs)` instead, which is
+  // the same filter conjunct: a NULL and a FALSE IN both drop the row.
+  ExprCP translateInSubquery(
+      const logical_plan::SpecialFormExpr& expr,
+      const Scope& scope,
+      LiftTarget* liftTarget,
+      bool asExists);
+
   // Translates an EXISTS special form by lifting an `Apply(kLeftSemiProject)`,
   // with a fast path that folds EXISTS over a scalar Aggregate to constant
   // TRUE.
@@ -604,12 +627,14 @@ class Translator {
   // `kind` is the `Apply.kind` to emit. `inLhs` is the IN expression's
   // left-hand side, non-null only when shaping an IN-form Apply
   // (`liftSubquery` stores it together with the body's single output
-  // column as `Apply.inLhs` / `Apply.inBodyKey`). Throws if
+  // column as `Apply.inLhs` / `Apply.inBodyKey`). 'asExists' turns the IN
+  // into an EXISTS whose filter compares 'inLhs' with that column. Throws if
   // `liftTarget` is null.
   ExprCP liftSubquery(
       const logical_plan::SubqueryExpr& subqueryExpr,
       velox::core::JoinType kind,
       ExprCP inLhs,
+      bool asExists,
       const Scope& outerScope,
       LiftTarget* liftTarget);
 
