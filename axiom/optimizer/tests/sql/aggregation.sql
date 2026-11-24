@@ -66,6 +66,22 @@ SELECT sum(a) FILTER (WHERE 1 = 1) FROM t
 -- Constant-false FILTER: aggregate sees the empty set (count 0, sum null).
 SELECT count(a) FILTER (WHERE false), sum(a) FILTER (WHERE false) FROM t
 ----
+-- Aggregates whose result over the empty set is not NULL: entropy is 0 and
+-- classification functions return an empty array.
+-- duckdb: SELECT 0.0::DOUBLE, []::DOUBLE[], []::DOUBLE[]
+SELECT
+  entropy(a) FILTER (WHERE false),
+  classification_precision(2, b > 30, c / 100) FILTER (WHERE false),
+  classification_thresholds(2, b > 30, c / 100) FILTER (WHERE false)
+FROM t
+----
+-- The same for a scalar subquery with no matching rows.
+-- duckdb: SELECT 0.0::DOUBLE, []::DOUBLE[]
+SELECT
+  (SELECT entropy(a) FROM t WHERE t.b = o.k),
+  (SELECT classification_recall(2, t.b > 30, t.c / 100) FROM t WHERE t.b = o.k)
+FROM (VALUES 1) AS o(k)
+----
 -- FILTER with an expression that evaluates to false: empty-set aggregate.
 SELECT count(a) FILTER (WHERE 1 = 0), sum(a) FILTER (WHERE 1 = 0) FROM t
 ----

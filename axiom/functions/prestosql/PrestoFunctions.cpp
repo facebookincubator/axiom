@@ -179,6 +179,24 @@ void PrestoFunctions::registerAll(
         return velox::Variant::create<velox::TypeKind::BIGINT>(0);
       });
 
+  registry.registerAggregateEmptyResultResolver(
+      {fullName("entropy")},
+      [](std::string_view /*name*/,
+         std::span<const velox::Type* const> /*argTypes*/) {
+        return velox::Variant::create<velox::TypeKind::DOUBLE>(0.0);
+      });
+
+  registry.registerAggregateEmptyResultResolver(
+      {fullName("classification_fall_out"),
+       fullName("classification_miss_rate"),
+       fullName("classification_precision"),
+       fullName("classification_recall"),
+       fullName("classification_thresholds")},
+      [](std::string_view /*name*/,
+         std::span<const velox::Type* const> /*argTypes*/) {
+        return velox::Variant::array({});
+      });
+
   registerDrawnFrom(registry, fullName);
 
   for (std::string_view name :
