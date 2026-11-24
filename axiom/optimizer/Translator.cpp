@@ -1517,7 +1517,8 @@ std::pair<ExprVector, OrderTypeVector> Translator::translateOrdering(
 // Materializes 'expr' through 'precompute' and records the column, so a later
 // boundary reading the same expression reuses it rather than recomputing.
 // Returns 'expr' as a column of '*node', extending '*node' with a `Project`
-// computing it when it is not already a column. A column already materialized
+// computing it when it is not one of '*node''s columns. An outer column that a
+// subquery body returns unchanged is not one. A column already materialized
 // for the same expression is reused while it is still in '*node''s output, so
 // a second boundary reading that expression does not compute it again.
 // Successive calls share one `Project`, which `makeProject` folds as each is
@@ -1526,7 +1527,8 @@ ColumnCP Translator::materializeColumn(
     NodeCP* node,
     ExprCP expr,
     std::string_view name) {
-  if (expr->is(PlanType::kColumnExpr)) {
+  if (expr->is(PlanType::kColumnExpr) &&
+      outputContains(*node, expr->as<Column>())) {
     return expr->as<Column>();
   }
   if (auto it = materialized_.find(expr); it != materialized_.end()) {
@@ -1591,14 +1593,14 @@ ColumnVector Translator::narrowToNames(
   for (const auto& name : names) {
     auto it = scope.find(name);
     VELOX_CHECK(it != scope.end(), "Name not in scope: {}", name);
-    ColumnCP column = empty && !it->second->isColumn()
+    ColumnCP column = empty &&
+            !(it->second->isColumn() &&
+              outputContains(*node, it->second->as<Column>()))
         ? columnForSymbol(toName(name), it->second->value())
         : materializeColumn(node, it->second, name);
     exprs.push_back(column);
-    // Names bound to one column still need distinct output columns, and so does
-    // a column the node does not produce, such as an outer column a subquery
-    // body returns unchanged.
-    if (seen.contains(column) || !outputContains(*node, column)) {
+    // Names bound to one column still need distinct output columns.
+    if (seen.contains(column)) {
       column = columnForSymbol(toName(name), column->value());
     }
     seen.add(column);
@@ -1630,7 +1632,7 @@ void Translator::materializeScope(
     const velox::RowType& type) {
   for (const auto& name : type.names()) {
     auto it = scope.find(name);
-    if (it == scope.end() || it->second->is(PlanType::kColumnExpr)) {
+    if (it == scope.end()) {
       continue;
     }
     it->second = materializeColumn(node, it->second, name);
