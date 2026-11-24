@@ -1597,7 +1597,7 @@ TEST_P(UnnestTest, longChain) {
   query += "JOIN (VALUES 1, 2) AS w(k) ON t.k = w.k";
 
   auto matcher = matchScan("t").hashJoinInner(
-      matchValues().project({"cast(c0 as bigint)"}));
+      matchValues(ROW("x", INTEGER())).project({"x::bigint"}));
   for (int32_t i = 0; i < kNumUnnests; ++i) {
     matcher.unnest(
         i + 1 == kNumUnnests ? std::vector<std::string>{"k"}

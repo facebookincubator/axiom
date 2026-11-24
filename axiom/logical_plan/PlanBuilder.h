@@ -267,7 +267,15 @@ class PlanBuilder {
   /// @overload Takes column names and per-row expressions.
   PlanBuilder& values(
       const std::vector<std::string>& names,
-      const std::vector<std::vector<ExprApi>>& values);
+      const std::vector<std::vector<ExprApi>>& values) {
+    return addValues(&names, values);
+  }
+
+  /// @overload Takes per-row expressions. The columns have no names: a later
+  /// node can read them only by position, e.g. after a rename.
+  PlanBuilder& values(const std::vector<std::vector<ExprApi>>& values) {
+    return addValues(nullptr, values);
+  }
 
   /// @overload Takes column names and per-row SQL strings.
   PlanBuilder& values(
@@ -1034,6 +1042,11 @@ class PlanBuilder {
       const velox::core::WindowCallExpr& windowCallExpr) const;
 
   std::vector<ExprApi> parse(const std::vector<std::string>& exprs);
+
+  // Adds a Values node. 'names' is nullptr for columns without names.
+  PlanBuilder& addValues(
+      const std::vector<std::string>* names,
+      const std::vector<std::vector<ExprApi>>& values);
 
   void resolveProjections(
       const std::vector<ExprApi>& projections,

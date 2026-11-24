@@ -356,12 +356,12 @@ TEST_P(FilterPushdownTest, belowSingleRowSubqueryCrossJoin) {
       "FROM t WHERE a <> 0 AND c = 5 GROUP BY 1 "
       "HAVING (SELECT max(b) FROM u) / a > 1");
 
-  auto matcher = matchValues()
-                     .filter("neq(c0, 0) AND eq(c1, 5)")
+  auto matcher = matchValues(ROW({"a", "c"}, INTEGER()))
+                     .filter("neq(a, 0) AND eq(c, 5)")
                      .nestedLoopJoin(
                          matchValues().singleAggregation(),
                          velox::core::JoinType::kInner,
-                         useV2_ ? "gt(divide(max, c0), 1)" : "")
+                         useV2_ ? "gt(divide(max, a), 1)" : "")
                      .filterIf(!useV2_)
                      .project()
                      .singleAggregation()
