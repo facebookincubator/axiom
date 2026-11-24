@@ -109,7 +109,7 @@ class SubqueryMarkerExpr : public core::IExpr {
 namespace {
 
 // Translates a Presto call already recognized as the metadata aggregate 'kind'
-// into a SpecialFormAggCallExpr carrying its fallback. Enforces the modifier
+// into a SpecialFormAggCallExpr. Enforces the modifier
 // semantics: window / DISTINCT / FILTER are rejected; ORDER BY is accepted and
 // ignored (these aggregates are order-insensitive).
 lp::ExprApi makeMetadataAggregate(
@@ -152,25 +152,13 @@ lp::ExprApi makeMetadataAggregate(
     inputs.push_back(arg.expr());
   }
 
-  // Each kind supplies its fallback, used when the connector cannot answer the
-  // aggregate from metadata, expressed as count / count_if.
-  const auto make = [&](const lp::ExprApi& fallback) {
-    return lp::ExprApi{std::make_shared<core::SpecialFormAggCallExpr>(
-        kind,
-        std::move(inputs),
-        fallback.expr(),
-        /*alias=*/std::nullopt,
-        funcName)};
-  };
-
-  switch (kind) {
-    case lp::SpecialAggregateKind::kMetadataRowCount:
-      return make(lp::Call("count"));
-    case lp::SpecialAggregateKind::kMetadataNonNullCount:
-      return make(lp::Call("count", args));
-    case lp::SpecialAggregateKind::kMetadataNullCount:
-      return make(lp::Call("count_if", args[0].isNull()));
-  }
+  // When metadata cannot answer the aggregate, the optimizer counts the data.
+  return lp::ExprApi{std::make_shared<core::SpecialFormAggCallExpr>(
+      kind,
+      std::move(inputs),
+      /*allowFallback=*/true,
+      /*alias=*/std::nullopt,
+      funcName)};
 }
 
 // Returns the set of relation aliases directly visible in a simple

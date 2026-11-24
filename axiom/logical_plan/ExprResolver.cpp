@@ -1356,13 +1356,8 @@ AggregateExprPtr ExprResolver::resolveSpecialFormAgg(
 
   auto inputs = resolveScalarInputs(expr.inputs(), inputNameResolver);
 
-  AggregateExprPtr fallback;
-  if (expr.fallback() != nullptr) {
-    fallback = resolveAggregateTypes(expr.fallback(), inputNameResolver);
-  }
-
   return std::make_shared<SpecialFormAggExpr>(
-      expr.specialAggregateKind(), std::move(inputs), std::move(fallback));
+      expr.specialAggregateKind(), std::move(inputs), expr.allowFallback());
 }
 
 ExprPtr ExprResolver::coerceToBoolean(

@@ -118,8 +118,8 @@ class Builder {
   /// Returns a canonical aggregate `Call`. 'functions' is the aggregate's own
   /// bits (see Aggregate::ownFunctions()). Result type and 'intermediateType'
   /// are determined by (name, args), so identity excludes them. 'specialKind'
-  /// and 'fallback' mark a metadata aggregate (see optimizer::Aggregate); they
-  /// are also excluded from identity (determined by 'name').
+  /// and 'allowFallback' mark a metadata aggregate (see optimizer::Aggregate);
+  /// they are also excluded from identity (determined by 'name').
   AggregateCP makeAggregate(
       Name name,
       const Value& value,
@@ -132,7 +132,7 @@ class Builder {
       OrderTypeVector orderTypes,
       std::optional<logical_plan::SpecialAggregateKind> specialKind =
           std::nullopt,
-      AggregateCP fallback = nullptr);
+      bool allowFallback = false);
 
   /// Returns 'aggregate' with the given arguments, DISTINCT flag, FILTER
   /// condition (nullptr for none) and order keys, keeping every other field.

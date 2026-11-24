@@ -96,12 +96,6 @@ class ToTextVisitor : public ExprVisitor {
 
     out << SpecialAggregateKindName::toName(expr.kind());
     appendInputs(expr, out, context);
-
-    if (expr.fallback() != nullptr) {
-      out << " [fallback: ";
-      expr.fallback()->accept(*this, context);
-      out << "]";
-    }
   }
 
   void visit(const WindowExpr& expr, ExprVisitorContext& context)

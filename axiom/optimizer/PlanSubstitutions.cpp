@@ -107,13 +107,8 @@ optimizer::AggregateCP PlanSubstitutions::apply(
   ExprVector orderKeys = apply(aggregate->orderKeys(), exprs);
   OrderTypeVector orderTypes = aggregate->orderTypes();
   dropDuplicateOrderKeys(orderKeys, orderTypes);
-  optimizer::AggregateCP fallback = aggregate->fallback();
-  if (fallback != nullptr) {
-    fallback = apply(fallback, exprs, builder);
-  }
   if (arguments == aggregate->args() && condition == aggregate->condition() &&
-      orderKeys == aggregate->orderKeys() &&
-      fallback == aggregate->fallback()) {
+      orderKeys == aggregate->orderKeys()) {
     return aggregate;
   }
   return builder.makeAggregate(
@@ -127,7 +122,7 @@ optimizer::AggregateCP PlanSubstitutions::apply(
       std::move(orderKeys),
       std::move(orderTypes),
       aggregate->specialKind(),
-      fallback);
+      aggregate->allowFallback());
 }
 
 AggregateCallVector PlanSubstitutions::apply(

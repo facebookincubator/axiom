@@ -813,7 +813,7 @@ AXIOM_DECLARE_ENUM_NAME(SpecialAggregateKind)
 /// name. Represents an aggregate whose result is derivable from table metadata
 /// rather than from reading the data (see SpecialAggregateKind). It never
 /// executes in Velox: the optimizer either folds it into constants from
-/// metadata or replaces it with 'fallback'.
+/// metadata or, if 'allowFallback', replaces it with a count over the data.
 ///
 /// Subclasses AggregateExpr so it fits anywhere an aggregate does
 /// (AggregateNode and expression resolution), but carries its own ExprKind
@@ -825,20 +825,19 @@ class SpecialFormAggExpr : public AggregateExpr {
   /// @param kind Which metadata aggregate this is.
   /// @param inputs Arguments, validated per kind (0 inputs for
   /// kMetadataRowCount, 1 for kMetadataNullCount / kMetadataNonNullCount).
-  /// @param fallback Optional ordinary aggregate to use when the aggregate
-  /// cannot be answered from metadata. If null, the aggregate is plannable only
-  /// where metadata can answer it.
+  /// @param allowFallback Whether the optimizer may count the data when
+  /// metadata cannot answer the aggregate. If false, that is an error.
   SpecialFormAggExpr(
       SpecialAggregateKind kind,
       std::vector<ExprPtr> inputs,
-      AggregateExprPtr fallback = nullptr);
+      bool allowFallback);
 
   SpecialAggregateKind kind() const {
     return kind_;
   }
 
-  const AggregateExprPtr& fallback() const {
-    return fallback_;
+  bool allowFallback() const {
+    return allowFallback_;
   }
 
   void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
@@ -852,7 +851,7 @@ class SpecialFormAggExpr : public AggregateExpr {
   bool equalTo(const Expr& other) const override;
 
   const SpecialAggregateKind kind_;
-  const AggregateExprPtr fallback_;
+  const bool allowFallback_;
 };
 
 using SpecialFormAggExprPtr = std::shared_ptr<const SpecialFormAggExpr>;

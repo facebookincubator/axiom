@@ -1253,11 +1253,8 @@ const optimizer::Aggregate* Translator::toAggregateCall(
         "Metadata aggregate does not support FILTER: {}",
         aggregateExpr.name());
     // The kind name is not a registered Velox aggregate, so skip the registry
-    // lookup and carry the kind and translated fallback for the fold pass.
-    // Result and intermediate types are BIGINT.
-    const optimizer::Aggregate* fallback = special.fallback() != nullptr
-        ? toAggregateCall(*special.fallback(), scope, liftTarget)
-        : nullptr;
+    // lookup and carry the kind for the fold pass. Result and intermediate
+    // types are BIGINT.
     return builder_.makeAggregate(
         toName(aggregateExpr.name()),
         Value(toType(aggregateExpr.type())),
@@ -1269,7 +1266,7 @@ const optimizer::Aggregate* Translator::toAggregateCall(
         /*orderKeys=*/{},
         /*orderTypes=*/{},
         special.kind(),
-        fallback);
+        special.allowFallback());
   }
 
   std::vector<velox::TypePtr> argTypes;

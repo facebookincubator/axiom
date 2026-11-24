@@ -193,19 +193,22 @@ ExprApi Placeholder(velox::TypePtr type, int32_t position) {
 ExprApi MetadataRowCount() {
   return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
       SpecialAggregateKind::kMetadataRowCount,
-      std::vector<velox::core::ExprPtr>{})};
+      std::vector<velox::core::ExprPtr>{},
+      /*allowFallback=*/false)};
 }
 
 ExprApi MetadataNullCount(const ExprApi& input) {
   return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
       SpecialAggregateKind::kMetadataNullCount,
-      std::vector<velox::core::ExprPtr>{input.expr()})};
+      std::vector<velox::core::ExprPtr>{input.expr()},
+      /*allowFallback=*/false)};
 }
 
 ExprApi MetadataNonNullCount(const ExprApi& input) {
   return ExprApi{std::make_shared<velox::core::SpecialFormAggCallExpr>(
       SpecialAggregateKind::kMetadataNonNullCount,
-      std::vector<velox::core::ExprPtr>{input.expr()})};
+      std::vector<velox::core::ExprPtr>{input.expr()},
+      /*allowFallback=*/false)};
 }
 
 ExprApi DuckSql(const std::string& sql) {

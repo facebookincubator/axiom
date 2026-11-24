@@ -118,8 +118,8 @@ class SubqueryExpr : public core::IExpr {
 /// Untyped carrier for a metadata-answerable aggregate. Subclasses
 /// AggregateCallExpr so it flows through aggregate detection and type
 /// resolution as an ordinary aggregate; ExprResolver recognizes it by type and
-/// produces an axiom::logical_plan::SpecialFormAggExpr. Carries the optional
-/// fallback aggregate (e.g. count(*)) the dialect supplies.
+/// produces an axiom::logical_plan::SpecialFormAggExpr. 'allowFallback' says
+/// whether the optimizer may count the data when metadata cannot answer it.
 class SpecialFormAggCallExpr : public AggregateCallExpr {
  public:
   /// 'name' is the dialect-supplied name for the aggregate; defaults to the
@@ -127,7 +127,7 @@ class SpecialFormAggCallExpr : public AggregateCallExpr {
   SpecialFormAggCallExpr(
       axiom::logical_plan::SpecialAggregateKind kind,
       std::vector<ExprPtr> inputs,
-      ExprPtr fallback = nullptr,
+      bool allowFallback,
       std::optional<std::string> alias = std::nullopt,
       std::optional<std::string> name = std::nullopt)
       : AggregateCallExpr(
@@ -142,33 +142,33 @@ class SpecialFormAggCallExpr : public AggregateCallExpr {
             /*orderBy=*/{},
             std::move(alias)),
         specialAggregateKind_{kind},
-        fallback_{std::move(fallback)} {}
+        allowFallback_{allowFallback} {}
 
   axiom::logical_plan::SpecialAggregateKind specialAggregateKind() const {
     return specialAggregateKind_;
   }
 
-  const ExprPtr& fallback() const {
-    return fallback_;
+  bool allowFallback() const {
+    return allowFallback_;
   }
 
   ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
     return std::make_shared<SpecialFormAggCallExpr>(
         specialAggregateKind_,
         std::move(newInputs),
-        fallback_,
+        allowFallback_,
         alias(),
         name());
   }
 
   ExprPtr withAlias(const std::string& alias) const override {
     return std::make_shared<SpecialFormAggCallExpr>(
-        specialAggregateKind_, inputs(), fallback_, alias, name());
+        specialAggregateKind_, inputs(), allowFallback_, alias, name());
   }
 
   ExprPtr dropAlias() const override {
     return std::make_shared<SpecialFormAggCallExpr>(
-        specialAggregateKind_, inputs(), fallback_, std::nullopt, name());
+        specialAggregateKind_, inputs(), allowFallback_, std::nullopt, name());
   }
 
   bool operator==(const IExpr& other) const override {
@@ -176,13 +176,8 @@ class SpecialFormAggCallExpr : public AggregateCallExpr {
     if (casted == nullptr) {
       return false;
     }
-    if (specialAggregateKind_ != casted->specialAggregateKind_) {
-      return false;
-    }
-    if ((fallback_ == nullptr) != (casted->fallback_ == nullptr)) {
-      return false;
-    }
-    if (fallback_ != nullptr && !(*fallback_ == *casted->fallback_)) {
+    if (specialAggregateKind_ != casted->specialAggregateKind_ ||
+        allowFallback_ != casted->allowFallback_) {
       return false;
     }
     return compareAliasAndInputs(other);
@@ -190,17 +185,12 @@ class SpecialFormAggCallExpr : public AggregateCallExpr {
 
  protected:
   size_t localHash() const override {
-    size_t hash =
-        std::hash<int8_t>{}(static_cast<int8_t>(specialAggregateKind_));
-    if (fallback_ != nullptr) {
-      hash = bits::hashMix(hash, fallback_->hash());
-    }
-    return hash;
+    return std::hash<int8_t>{}(static_cast<int8_t>(specialAggregateKind_));
   }
 
  private:
   const axiom::logical_plan::SpecialAggregateKind specialAggregateKind_;
-  const ExprPtr fallback_;
+  const bool allowFallback_;
 };
 
 } // namespace facebook::velox::core

@@ -57,6 +57,25 @@ FROM (VALUES (0), (1), (2), (3)) AS x(k)
 SELECT x.k, (SELECT approx_null_count(v) FROM m WHERE m.k = x.k)
 FROM (VALUES (0), (1), (2), (3)) AS x(k)
 ----
+-- A non-equality correlation counts only the matching rows of each outer row.
+-- duckdb: SELECT x.k, (SELECT count(*) FROM m WHERE m.k > x.k) FROM (VALUES (0), (1), (2), (3)) AS x(k)
+SELECT x.k, (SELECT approx_count_star() FROM m WHERE m.k > x.k)
+FROM (VALUES (0), (1), (2), (3)) AS x(k)
+----
+-- duckdb: SELECT x.k, (SELECT count(*) - count(v) FROM m WHERE m.k >= x.k) FROM (VALUES (0), (1), (2), (3)) AS x(k)
+SELECT x.k, (SELECT approx_null_count(v) FROM m WHERE m.k >= x.k)
+FROM (VALUES (0), (1), (2), (3)) AS x(k)
+----
+-- An IN or EXISTS argument is counted over the data.
+-- duckdb: SELECT count(v IN (SELECT v FROM m WHERE k = 1)) FROM m
+SELECT approx_non_null_count(v IN (SELECT v FROM m WHERE k = 1)) FROM m
+----
+-- duckdb: SELECT count(*) - count(v IN (SELECT v FROM m WHERE k = 1)) FROM m
+SELECT approx_null_count(v IN (SELECT v FROM m WHERE k = 1)) FROM m
+----
+-- duckdb: SELECT count(EXISTS (SELECT 1 FROM e WHERE e.v = m.v)) FROM m
+SELECT approx_non_null_count(EXISTS (SELECT 1 FROM e WHERE e.v = m.v)) FROM m
+----
 -- A regular aggregate alongside a metadata aggregate.
 -- duckdb: SELECT count(*), sum(v) FROM m
 SELECT approx_count_star(), sum(v) FROM m
