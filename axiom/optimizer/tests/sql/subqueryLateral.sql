@@ -81,6 +81,19 @@ SELECT t.x, g.m
 FROM t
 LEFT JOIN LATERAL (SELECT u.a AS m FROM u WHERE u.a <= t.x) g ON g.m < t.x
 ----
+-- LEFT JOIN LATERAL pads every body column of an unmatched outer row with
+-- NULL, including a constant, an outer column and an expression over one.
+-- DuckDB rejects ON true for a LEFT JOIN LATERAL.
+-- duckdb: VALUES (1, 1, 1, 11), (9, NULL, NULL, NULL)
+-- error_v1: Unsupported PlanNode LATERAL_JOIN
+WITH t(x) AS (VALUES (1), (9)),
+     u(a) AS (VALUES (1), (2))
+SELECT t.x, g.c, g.o, g.e
+FROM t
+LEFT JOIN LATERAL (
+  SELECT 1 AS c, t.x AS o, t.x + 10 AS e FROM u WHERE u.a = t.x
+) g ON true
+----
 -- INNER JOIN LATERAL with an ON condition combining outer and lateral
 -- columns.
 -- error_v1: Unsupported PlanNode LATERAL_JOIN
