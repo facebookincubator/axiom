@@ -686,12 +686,14 @@ SELECT
 FROM t
 ----
 -- Block B.3: CNA scalar + correlated IN
+-- error_v1: Duplicate output column
 SELECT
     (SELECT count(*) FROM u WHERE u.a > t.a) AS x,
     t.a IN (SELECT v.a FROM v WHERE v.a > t.b) AS y
 FROM t
 ----
 -- Block B.4: CNA scalar + correlated NOT IN
+-- error_v1: Duplicate output column
 SELECT
     (SELECT count(*) FROM u WHERE u.a > t.a) AS x,
     t.a NOT IN (SELECT v.a FROM v WHERE v.a > t.b) AS y

@@ -52,10 +52,12 @@ lp::GraphBuilder::Endpoint toEndpoint(const EdgeEndpoint& endpoint) {
 // Returns the name of the column 'expr' reads. The AST builder requires a
 // property that is not a column to have a name.
 std::string columnName(const lp::ExprApi& expr) {
-  const auto* column =
-      facebook::velox::core::FieldAccessExpr::tryAsRootColumn(expr.expr());
-  VELOX_CHECK_NOT_NULL(column, "Graph property needs a name");
-  return column->name();
+  VELOX_CHECK(
+      facebook::velox::core::FieldAccessExpr::tryAsRootColumn(expr.expr()) !=
+              nullptr &&
+          expr.name().has_value(),
+      "Graph property needs a name");
+  return expr.name().value();
 }
 
 } // namespace
@@ -68,22 +70,37 @@ lp::PropertyGraphPtr GraphTablePlanner::buildGraph(
 
   auto addTable = [&](const GraphElementTable& table) {
     const auto name = tableName(table);
-    auto plan = planTable(table);
     const auto keyColumns = namesOf(table.keyColumns());
 
     std::vector<GraphLabel> labels = table.labels();
     if (labels.empty()) {
       labels.push_back({});
     }
-    for (const auto& label : labels) {
+
+    // Each label's property expressions, which read the table's columns.
+    std::vector<std::vector<lp::ExprApi>> labelExpressions(labels.size());
+    auto plan = planTable(table, [&]() {
+      for (size_t i = 0; i < labels.size(); ++i) {
+        if (labels[i].properties.has_value()) {
+          for (const auto& property : labels[i].properties.value()) {
+            labelExpressions[i].push_back(
+                exprPlanner_.toExpr(property.expression));
+          }
+        }
+      }
+    });
+
+    for (size_t i = 0; i < labels.size(); ++i) {
+      const auto& label = labels[i];
       auto labelName = label.name != nullptr ? nameOf(label.name) : name;
 
       // A label without a property list exposes every column.
       std::vector<std::string> propertyNames;
       std::vector<lp::ExprApi> expressions;
       if (label.properties.has_value()) {
-        for (const auto& property : label.properties.value()) {
-          auto expr = exprPlanner_.toExpr(property.expression);
+        for (size_t j = 0; j < label.properties->size(); ++j) {
+          const auto& property = label.properties.value()[j];
+          const auto& expr = labelExpressions[i][j];
           auto propertyName = property.name != nullptr ? nameOf(property.name)
                                                        : columnName(expr);
           propertyNames.push_back(propertyName);

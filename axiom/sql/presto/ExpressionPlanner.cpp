@@ -894,6 +894,172 @@ std::optional<lp::ExprApi> tryMakeRowLiteral(
 
 } // namespace
 
+std::optional<lp::ExprApi> ExpressionPlanner::outputAlias(
+    const std::string& name,
+    const NodeLocation& location) const {
+  if (outputAliases_.exprs == nullptr) {
+    return std::nullopt;
+  }
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      outputAliases_.ambiguous == nullptr ||
+          !outputAliases_.ambiguous->contains(name),
+      location,
+      name,
+      "Column is ambiguous");
+  if (auto it = outputAliases_.exprs->find(name);
+      it != outputAliases_.exprs->end()) {
+    return lp::ExprApi(it->second);
+  }
+  return std::nullopt;
+}
+
+std::optional<lp::ExprApi> ExpressionPlanner::bindColumn(
+    const std::optional<std::string>& qualifier,
+    const std::string& name,
+    const NodeLocation& location) {
+  if (!bindsNames()) {
+    return std::nullopt;
+  }
+  auto bound = columnBinder_(qualifier, name, location);
+  if (!bound.has_value()) {
+    return std::nullopt;
+  }
+  auto column = lp::Col(bound->id).as(name);
+  BoundColumnSource source{
+      .name =
+          qualifier.has_value() ? fmt::format("{}.{}", *qualifier, name) : name,
+      .location = location,
+      .local = bound->local};
+  if (!bound->local) {
+    outerColumns_.insert_or_assign(bound->id, source);
+    outerBinds_.push_back(bound->id);
+  }
+  boundColumns_.emplace(
+      column.expr().get(), std::make_pair(column.expr(), std::move(source)));
+  return column;
+}
+
+lp::ExprApi ExpressionPlanner::unboundColumn(
+    std::string_view name,
+    const NodeLocation& location) const {
+  if (!bindsNames()) {
+    return lp::Col(name);
+  }
+  AXIOM_PRESTO_SEMANTIC_FAIL(
+      location,
+      std::string(name),
+      "Cannot resolve column: {} not in [{}]",
+      name,
+      scopeDescriber_ != nullptr ? scopeDescriber_() : "");
+}
+
+const ExpressionPlanner::BoundColumnSource*
+ExpressionPlanner::boundColumnSource(const core::IExpr* expr) const {
+  auto it = boundColumns_.find(expr);
+  return it == boundColumns_.end() ? nullptr : &it->second.second;
+}
+
+const ExpressionPlanner::BoundColumnSource*
+ExpressionPlanner::outerColumnSource(const std::string& id) const {
+  auto it = outerColumns_.find(id);
+  return it == outerColumns_.end() ? nullptr : &it->second;
+}
+
+namespace {
+
+// True if 'name' is a lambda parameter in 'scope'.
+bool isLambdaParam(
+    const std::vector<std::string>& scope,
+    std::string_view name) {
+  return std::find(scope.rbegin(), scope.rend(), name) != scope.rend();
+}
+
+// Adds the names of the root column references in 'expr' to 'names', and
+// those 'isBound' accepts to 'boundNames'.
+void collectColumnNames(
+    const core::ExprPtr& expr,
+    const std::function<bool(const core::IExpr*)>& isBound,
+    folly::F14FastSet<std::string>& names,
+    folly::F14FastSet<std::string>& boundNames) {
+  if (const auto* field = core::FieldAccessExpr::tryAsRootColumn(expr)) {
+    names.insert(field->name());
+    if (isBound(expr.get())) {
+      boundNames.insert(field->name());
+    }
+    return;
+  }
+  if (const auto* lambda = dynamic_cast<const core::LambdaExpr*>(expr.get())) {
+    collectColumnNames(lambda->body(), isBound, names, boundNames);
+    return;
+  }
+  for (const auto& input : expr->inputs()) {
+    collectColumnNames(input, isBound, names, boundNames);
+  }
+}
+
+// Replaces unbound references to 'from' in 'expr' with references to 'to'.
+// Stops at a nested lambda that declares 'from' itself.
+core::ExprPtr renameParam(
+    const core::ExprPtr& expr,
+    const std::string& from,
+    const std::string& to,
+    const std::function<bool(const core::IExpr*)>& isBound) {
+  if (const auto* field = core::FieldAccessExpr::tryAsRootColumn(expr)) {
+    if (field->name() == from && !isBound(expr.get())) {
+      return std::make_shared<core::FieldAccessExpr>(to, std::nullopt);
+    }
+    return expr;
+  }
+  if (const auto* lambda = dynamic_cast<const core::LambdaExpr*>(expr.get())) {
+    const auto& arguments = lambda->arguments();
+    if (std::find(arguments.begin(), arguments.end(), from) !=
+        arguments.end()) {
+      return expr;
+    }
+    auto body = renameParam(lambda->body(), from, to, isBound);
+    if (body == lambda->body()) {
+      return expr;
+    }
+    return std::make_shared<core::LambdaExpr>(arguments, std::move(body));
+  }
+  std::vector<core::ExprPtr> inputs;
+  bool changed = false;
+  for (const auto& input : expr->inputs()) {
+    inputs.push_back(renameParam(input, from, to, isBound));
+    changed |= inputs.back() != input;
+  }
+  return changed ? expr->replaceInputs(std::move(inputs)) : expr;
+}
+
+// Renames each lambda parameter in 'names' that has the ID of a column 'body'
+// binds, so the parameter does not shadow the column. A new name avoids every
+// name 'body' reads.
+void renameShadowingParams(
+    std::vector<std::string>& names,
+    core::ExprPtr& body,
+    const std::function<bool(const core::IExpr*)>& isBound) {
+  folly::F14FastSet<std::string> columnNames;
+  folly::F14FastSet<std::string> boundNames;
+  collectColumnNames(body, isBound, columnNames, boundNames);
+  for (auto& name : names) {
+    if (!boundNames.contains(name)) {
+      continue;
+    }
+    std::string fresh;
+    for (size_t i = 1;; ++i) {
+      fresh = fmt::format("{}_{}", name, i);
+      if (!columnNames.contains(fresh) &&
+          std::find(names.begin(), names.end(), fresh) == names.end()) {
+        break;
+      }
+    }
+    body = renameParam(body, name, fresh, isBound);
+    name = fresh;
+  }
+}
+
+} // namespace
+
 lp::ExprApi ExpressionPlanner::toExpr(
     const ExpressionPtr& node,
     ExprOptions options) {
@@ -911,28 +1077,22 @@ lp::ExprApi ExpressionPlanner::toExpr(
   switch (node->type()) {
     case NodeType::kIdentifier: {
       auto name = canonicalizeIdentifier(*node->as<Identifier>());
-      // An output alias resolves to the expression its SELECT item projects,
-      // unless a column of that name outranks it, or a lambda parameter of
-      // that name shadows it. Lambda parameters are searched innermost-first
-      // to match SQL lexical scoping.
-      if (outputAliases_.exprs != nullptr &&
-          !(outputAliases_.columnNames != nullptr &&
-            outputAliases_.columnNames->contains(name)) &&
-          std::find(
-              lambdaParamScope_.rbegin(), lambdaParamScope_.rend(), name) ==
-              lambdaParamScope_.rend()) {
-        AXIOM_PRESTO_SEMANTIC_CHECK(
-            outputAliases_.ambiguous == nullptr ||
-                !outputAliases_.ambiguous->contains(name),
-            node->location(),
-            name,
-            "Column is ambiguous");
-        if (auto it = outputAliases_.exprs->find(name);
-            it != outputAliases_.exprs->end()) {
-          return lp::ExprApi(it->second);
-        }
+      if (isLambdaParam(lambdaParamScope_, name)) {
+        return lp::Col(name);
       }
-      return lp::Col(name);
+
+      const auto alias = [&]() { return outputAlias(name, node->location()); };
+      if (auto expr = outputAliases_.columnsFirst ? std::nullopt : alias()) {
+        return *expr;
+      }
+      if (auto column = bindColumn(std::nullopt, name, node->location())) {
+        return *column;
+      }
+      if (auto expr = outputAliases_.columnsFirst ? alias() : std::nullopt) {
+        return *expr;
+      }
+
+      return unboundColumn(name, node->location());
     }
 
     case NodeType::kDereferenceExpression: {
@@ -951,18 +1111,27 @@ lp::ExprApi ExpressionPlanner::toExpr(
         const std::span<const std::string> qualifierParts{
             parts.data(), parts.size() - 1};
         if (auto qualifier = relationQualifierResolver_(qualifierParts)) {
+          if (auto column =
+                  bindColumn(*qualifier, parts.back(), node->location())) {
+            return *column;
+          }
+          if (bindsNames()) {
+            return unboundColumn(
+                fmt::format("{}.{}", *qualifier, parts.back()),
+                node->location());
+          }
           return lp::Col(parts.back(), lp::Col(*qualifier));
         }
       }
 
-      // Try to resolve as an enum literal (e.g., catalog.schema.Type.VALUE).
-      // When columnResolver_ is nullptr (e.g., resolveSqlExpression for CREATE
-      // TABLE property values), there is no column scope to compete with — a
-      // 4-part dotted name can only be an enum literal.
+      // Try to resolve as an enum literal (e.g., catalog.schema.Type.VALUE),
+      // unless the name starts with a column: 'a.b...' or 'a.b.c...' where
+      // 'a.b' is a qualified column.
       if (isDottedName && parts.size() >= 4) {
-        bool isColumn =
-            columnResolver_ != nullptr && columnResolver_(parts[0], parts[1]);
-
+        const bool isColumn = bindsNames() &&
+            (columnBinder_(std::nullopt, parts[0], node->location())
+                 .has_value() ||
+             columnBinder_(parts[0], parts[1], node->location()).has_value());
         if (!isColumn) {
           auto resolved = tryResolveEnumLiteral(
               *session_, parts, typeCache_, node->location());
@@ -973,32 +1142,26 @@ lp::ExprApi ExpressionPlanner::toExpr(
       }
 
       auto field = canonicalizeIdentifier(*dereference->field());
-      // The base of a dereference is a scope qualifier (table alias or
-      // struct-typed column), not a value-producing expression. Lateral
-      // column alias substitution must not apply to it; bypass toExpr to
-      // build the qualifier directly when the base is a bare identifier.
-      //
-      // TODO: extend the resolver so lateral aliases are a third fallback
-      // scope after table.column and struct dereference. Requires moving
-      // lateral substitution from here into PlanBuilder::resolveInputName.
+      // The base of a dereference is a relation qualifier or a struct-typed
+      // column.
+      // TODO: Bind a lateral column alias as the base of a dereference.
       if (dereference->base()->is(NodeType::kIdentifier)) {
         auto qualifier =
             canonicalizeIdentifier(*dereference->base()->as<Identifier>());
-        // A lambda parameter shadows any outer alias of the same name, so
-        // the qualifier must be preserved for ExprResolver to dereference it
-        // as a struct field of the parameter. Search innermost-first to
-        // match SQL lexical scoping.
-        const bool isLambdaParam = std::find(
-                                       lambdaParamScope_.rbegin(),
-                                       lambdaParamScope_.rend(),
-                                       qualifier) != lambdaParamScope_.rend();
-        // Strip table qualifier when safe (not a struct field, name is
-        // unambiguous).
-        if (!isLambdaParam && shouldDropQualifier_ &&
-            shouldDropQualifier_(qualifier, field)) {
-          return lp::Col(field);
+        if (isLambdaParam(lambdaParamScope_, qualifier)) {
+          return lp::Col(field, lp::Col(qualifier));
         }
-        return lp::Col(field, lp::Col(qualifier));
+        if (auto column = bindColumn(qualifier, field, node->location())) {
+          return *column;
+        }
+        if (auto column = bindColumn(
+                std::nullopt, qualifier, dereference->base()->location())) {
+          return lp::Col(field, *column);
+        }
+        if (!bindsNames()) {
+          return lp::Col(field, lp::Col(qualifier));
+        }
+        return unboundColumn(qualifier, dereference->base()->location());
       }
       return lp::Col(field, toExpr(dereference->base(), options));
     }
@@ -1440,7 +1603,11 @@ lp::ExprApi ExpressionPlanner::toExpr(
         lambdaParamScope_.resize(scopeBegin);
       };
 
-      return lp::Lambda(names, toExpr(lambda->body(), options));
+      auto body = toExpr(lambda->body(), options).expr();
+      renameShadowingParams(names, body, [&](const core::IExpr* expr) {
+        return boundColumns_.contains(expr);
+      });
+      return lp::Lambda(names, body);
     }
 
     case NodeType::kSubscriptExpression: {
@@ -1723,7 +1890,7 @@ lp::ExprApi ExpressionPlanner::planSubquery(
   // scope they were planned in; caching would let a second outer
   // context reuse a plan whose references point at the first context's
   // (now stale) names.
-  if (!result.touchedOuterScope) {
+  if (!result.correlated) {
     subqueryCache_.emplace(query, expr);
   }
   if (options.deferSubqueries) {
@@ -1749,9 +1916,7 @@ ExpressionPlanner::OutputAliasScope::OutputAliasScope(
   }
 
   planner_.setOutputAliases(
-      {.exprs = &aliasExprs_,
-       .columnNames = nullptr,
-       .ambiguous = &ambiguousAliases_});
+      {.exprs = &aliasExprs_, .ambiguous = &ambiguousAliases_});
 }
 
 void ExpressionPlanner::pushMarkerScope() {

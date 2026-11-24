@@ -168,6 +168,18 @@ class PlanBuilder {
     /// null.
     connector::ConnectorContextPtr connectorContext;
 
+    /// How a builder resolves an unqualified column reference, Col(x):
+    ///  - By name (default): 'x' is a user-visible name, looked up in the
+    ///    builder's names, then in the enclosing builder's scope. This is the
+    ///    dataframe API.
+    ///  - By ID (columnsById): 'x' is a column ID; the caller has bound names
+    ///    itself. 'x' resolves to the input column with that ID, else to an
+    ///    enclosing builder's column with that ID. A qualified reference is a
+    ///    struct field access.
+    /// Names are tracked in both modes. A builder's mode never changes; see
+    /// byColumnName().
+    bool columnsById{false};
+
     explicit Context(
         const std::optional<std::string>& defaultConnectorId = std::nullopt,
         const std::optional<std::string>& defaultSchema = std::nullopt,
@@ -797,28 +809,21 @@ class PlanBuilder {
     };
   }
 
-  /// Returns the enclosing scope this builder resolves against for correlated
-  /// references, or nullptr if there is none. Unlike scope(), this does not
-  /// expose the builder's own output columns.
-  const Scope& outerScope() const {
-    return outerScope_;
+  /// Returns the names of this builder's output columns, or nullptr before
+  /// the first node.
+  const NameMappings* outputMapping() const {
+    return outputMapping_.get();
   }
 
-  /// Replaces the enclosing scope. The plan a builder holds outlives the scope
-  /// it was built in when a relation defined in one query, such as a CTE body,
-  /// becomes part of another that resolves the remaining names.
-  void switchOuterScope(Scope scope) {
-    outerScope_ = std::move(scope);
-  }
+  /// Returns a builder over the same plan and names that resolves column
+  /// references by name (see Context::columnsById), to hand a plan built by
+  /// ID to code that composes plans by name. This builder is unchanged.
+  PlanBuilder byColumnName() const;
 
-  /// Returns true if the given unqualified name resolves to a column in this
-  /// builder's output without chaining to outer scopes.
-  bool hasColumn(const std::string& name) const;
-
-  /// Returns true if the given qualified name (alias.name) resolves to a column
-  /// in this builder's output without chaining to outer scopes.
-  bool hasQualifiedColumn(const std::string& qualifier, const std::string& name)
-      const;
+  /// Returns a builder over the same plan and names that resolves column
+  /// references by ID. Takes back a plan that code composing by name returned.
+  /// This builder is unchanged.
+  PlanBuilder byColumnId() const;
 
   /// Returns the number of output columns.
   size_t numOutput() const;
@@ -1046,6 +1051,14 @@ class PlanBuilder {
   // there is no context.
   std::shared_ptr<connector::ConnectorMetadata> findMetadata(
       const std::string& connectorId) const;
+
+  // Returns a builder over the same plan and names that resolves column
+  // references by ID if 'columnsById', else by name.
+  PlanBuilder withColumnsById(bool columnsById) const;
+
+  // Returns the name that resolves the output column at 'index', assigning
+  // one if the column has none or an ambiguous one.
+  OutputColumnName findOrAssignResolutionNameAt(size_t index) const;
 
   // Shared state this builder was created with. See Context.
   const Context context_;

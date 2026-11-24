@@ -222,10 +222,36 @@ struct ResolvedTable {
   std::map<std::string, ExprPtr> properties;
 };
 
+// Returns a reference to each output column of 'plan', by name, in the way
+// 'plan' resolves columns.
+folly::F14FastMap<std::string, ExprApi> columnsByName(const PlanBuilder& plan) {
+  folly::F14FastMap<std::string, ExprApi> columns;
+  for (const auto& column : plan.findOrAssignOutputNames()) {
+    columns.emplace(column.outputName(), column.toCol());
+  }
+  return columns;
+}
+
+// Returns the reference 'references' has for the column 'column' of the
+// element table 'table'. Throws a user error if the table has none.
+const ExprApi& columnOf(
+    const folly::F14FastMap<std::string, ExprApi>& references,
+    std::string_view table,
+    const std::string& column) {
+  const auto it = references.find(column);
+  VELOX_USER_CHECK(
+      it != references.end(),
+      "Graph element table has no column: {}.{}",
+      table,
+      column);
+  return it->second;
+}
+
 // Projects 'plan' to 'properties', each aliased with its name, and to
 // 'columns' that no property already provides under the same name. A column
 // whose name a property uses for another value gets an internal name.
 ResolvedTable resolveTable(
+    std::string_view table,
     PlanBuilder plan,
     const std::vector<std::string>& columns,
     const std::vector<std::pair<std::string, ExprApi>>& properties) {
@@ -236,21 +262,22 @@ ResolvedTable resolveTable(
     projections.emplace_back(expr.expr(), name);
   }
 
+  const auto references = columnsByName(plan);
   folly::F14FastMap<std::string, size_t> columnIndex;
   for (const auto& column : columns) {
     if (columnIndex.contains(column)) {
       continue;
     }
     const auto it = propertyIndex.find(column);
+    const auto& reference = columnOf(references, table, column);
     if (it != propertyIndex.end() &&
-        *properties[it->second].second.expr() == *Col(column).expr()) {
+        *properties[it->second].second.expr() == *reference.expr()) {
       columnIndex.emplace(column, it->second);
       continue;
     }
     columnIndex.emplace(column, projections.size());
     projections.push_back(
-        it != propertyIndex.end() ? Col(column).as("__" + column)
-                                  : Col(column));
+        it != propertyIndex.end() ? reference.as("__" + column) : reference);
   }
   plan.project(projections);
 
@@ -292,8 +319,9 @@ std::optional<size_t> GraphBuilder::findTable(std::string_view name) const {
 
 std::vector<std::vector<std::pair<std::string, ExprApi>>>
 GraphBuilder::propertiesByTable() const {
-  std::vector<std::vector<std::pair<std::string, ExprApi>>> result(
-      tables_.size());
+  // Each table's properties, with the expression a backing gave, if any.
+  std::vector<std::vector<std::pair<std::string, std::optional<ExprApi>>>>
+      declared(tables_.size());
   auto find = [](auto& properties, const std::string& name) {
     return std::find_if(
         properties.begin(), properties.end(), [&](const auto& entry) {
@@ -303,17 +331,17 @@ GraphBuilder::propertiesByTable() const {
 
   for (const auto& label : labels_) {
     for (const auto& table : label.tables) {
-      auto& properties = result[findTable(table).value()];
+      auto& properties = declared[findTable(table).value()];
       for (const auto& property : label.properties) {
         if (find(properties, property) == properties.end()) {
-          properties.emplace_back(property, Col(property));
+          properties.emplace_back(property, std::nullopt);
         }
       }
     }
   }
 
-  for (auto i = 0; i < tables_.size(); ++i) {
-    auto& properties = result[i];
+  for (size_t i = 0; i < tables_.size(); ++i) {
+    auto& properties = declared[i];
     for (const auto& [name, expr] : tables_[i].properties) {
       const auto defined = find(properties, name);
       VELOX_USER_CHECK(
@@ -323,12 +351,25 @@ GraphBuilder::propertiesByTable() const {
           tables_[i].name,
           name);
       VELOX_USER_CHECK(
-          *defined->second.expr() == *Col(name).expr() ||
-              *defined->second.expr() == *expr.expr(),
+          !defined->second.has_value() ||
+              *defined->second->expr() == *expr.expr(),
           "Graph element table gives a property two expressions: {}.{}",
           tables_[i].name,
           name);
       defined->second = expr;
+    }
+  }
+
+  // A property no backing gave an expression is the column of its name.
+  std::vector<std::vector<std::pair<std::string, ExprApi>>> result(
+      tables_.size());
+  for (size_t i = 0; i < tables_.size(); ++i) {
+    const auto references = columnsByName(tables_[i].plan);
+    for (const auto& [name, expr] : declared[i]) {
+      result[i].emplace_back(
+          name,
+          expr.has_value() ? *expr
+                           : columnOf(references, tables_[i].name, name));
     }
   }
   return result;
@@ -387,7 +428,8 @@ PropertyGraphPtr GraphBuilder::build() {
           columns.end(), destinationColumns.begin(), destinationColumns.end());
     }
 
-    resolved.push_back(resolveTable(table.plan, columns, tableProperties[i]));
+    resolved.push_back(
+        resolveTable(table.name, table.plan, columns, tableProperties[i]));
     PropertyGraph::ElementTable element{
         .id = static_cast<int32_t>(i),
         .plan = resolved[i].plan,

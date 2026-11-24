@@ -43,6 +43,7 @@ add_library(
   IntervalParser.cpp
   RecursiveCteValidator.cpp
   SortProjection.cpp
+  BindingScope.cpp
   PrestoParser.cpp
   ShowStatsBuilder.cpp
   SpecialAggregates.cpp

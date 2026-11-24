@@ -22,12 +22,60 @@
 
 #include "axiom/logical_plan/ExprApi.h"
 
+namespace facebook::axiom::logical_plan {
+class PlanBuilder;
+} // namespace facebook::axiom::logical_plan
+
 namespace axiom::sql::presto {
 
-/// Lists of column references, for the plans the parser builds without SQL
-/// text.
+/// Lists of column references, for plans built without SQL text. The
+/// overloads that take a plan refer to its columns by ID, for a plan that
+/// resolves columns by ID (see PlanBuilder::Context::columnsById). The others
+/// refer to columns by name.
 class ColumnExprs {
  public:
+  /// Returns the ID of the output column of 'plan' named 'name'. Throws if
+  /// there is none.
+  static std::string id(
+      const facebook::axiom::logical_plan::PlanBuilder& plan,
+      std::string_view name);
+
+  /// Returns a reference to the output column of 'plan' named 'name', by ID.
+  static facebook::axiom::logical_plan::ExprApi column(
+      const facebook::axiom::logical_plan::PlanBuilder& plan,
+      std::string_view name) {
+    return facebook::axiom::logical_plan::Col(id(plan, name)).as(name);
+  }
+
+  /// Returns a reference to each column of 'plan' named in 'names', by ID,
+  /// named 'prefix' + its name.
+  static std::vector<facebook::axiom::logical_plan::ExprApi> renamed(
+      const facebook::axiom::logical_plan::PlanBuilder& plan,
+      const std::vector<std::string>& names,
+      std::string_view prefix);
+
+  /// Returns a reference to each column of 'plan' named in 'names', by ID.
+  static std::vector<facebook::axiom::logical_plan::ExprApi> of(
+      const facebook::axiom::logical_plan::PlanBuilder& plan,
+      const std::vector<std::string>& names) {
+    return renamed(plan, names, "");
+  }
+
+  /// Returns the conjunction of each column of 'left' named in 'names' = the
+  /// column of 'right' named 'prefix' + its name, for a join of the two;
+  /// nullopt when 'names' is empty.
+  static std::optional<facebook::axiom::logical_plan::ExprApi> equal(
+      const facebook::axiom::logical_plan::PlanBuilder& left,
+      const facebook::axiom::logical_plan::PlanBuilder& right,
+      const std::vector<std::string>& names,
+      std::string_view prefix);
+
+  /// Returns message(prefix, names) over the columns of 'plan'.
+  static facebook::axiom::logical_plan::ExprApi message(
+      const facebook::axiom::logical_plan::PlanBuilder& plan,
+      std::string_view prefix,
+      const std::vector<std::string>& names);
+
   /// Returns a reference to each column of 'names', named 'prefix' + its name.
   static std::vector<facebook::axiom::logical_plan::ExprApi> renamed(
       const std::vector<std::string>& names,

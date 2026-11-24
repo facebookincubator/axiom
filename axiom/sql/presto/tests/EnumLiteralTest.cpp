@@ -18,8 +18,8 @@
 #include "axiom/common/SchemaTypeName.h"
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/VarcharEnumRegistration.h"
@@ -190,7 +190,7 @@ TEST_F(EnumLiteralTest, unknownTypeAndCatalog) {
       "near 'tc.myschema.foo.bar': Type not found");
 
   // Unknown catalog falls through to column dereference.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSelect("SELECT other.myschema.Status.ACTIVE FROM nation"),
       "Cannot resolve column: other");
 }
@@ -228,6 +228,14 @@ TEST_F(EnumLiteralTest, columnFirstResolution) {
   enumMetadata_->reset();
   parseSelect("SELECT tc.myschema.status.active FROM aliastest AS tc");
   EXPECT_EQ(enumMetadata_->count(), 0);
+
+  // An ambiguous column still names a column, so the enum literal does not
+  // apply.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSelect(
+          "SELECT tc.myschema.Status.ACTIVE "
+          "FROM structtest AS t, structtest AS u"),
+      "Column is ambiguous: tc");
 }
 
 TEST_F(EnumLiteralTest, structFieldDereference) {

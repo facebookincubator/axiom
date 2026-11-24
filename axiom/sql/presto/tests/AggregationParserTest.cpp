@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <numeric>
+#include "axiom/sql/presto/tests/ExpectPrestoSqlError.h"
 #include "axiom/sql/presto/tests/PrestoParserTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -178,6 +179,13 @@ TEST_F(AggregationParserTest, pureOuterAggregateLift) {
           .aggregate({}, {"max(n_nationkey) FILTER (WHERE any_exists())"})
           .project()
           .output());
+
+  // A lifted aggregate in ORDER BY makes the block a global aggregation, so a
+  // column it selects must be grouped.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql(
+          "SELECT t.n_name FROM nation t ORDER BY (SELECT max(t.n_nationkey))"),
+      "Column must be an aggregate expression or appear in GROUP BY clause: t.n_name");
 }
 
 // Aggregate references an inner-scope column, so lift does not fire
@@ -204,12 +212,12 @@ TEST_F(AggregationParserTest, innerScopeAggregateNotLifted) {
 
   // A correlation to a column unavailable after global aggregation is not
   // allowed, even when the subquery also contains an inner aggregate.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT count(*), "
           "(SELECT max(r.x) + t.n_nationkey FROM struct_table) "
           "FROM nation t"),
-      "Cannot resolve column: t");
+      "Cannot resolve column: t.n_nationkey");
 }
 
 // Outer-scope aggregate in shapes the lift does not handle is
@@ -270,7 +278,7 @@ TEST_F(AggregationParserTest, simpleGroupBy) {
   }
 
   // GROUP BY resolves against FROM columns, not SELECT aliases.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT n_name AS x FROM nation GROUP BY x"),
       "Cannot resolve column: x");
 
@@ -1050,15 +1058,15 @@ TEST_F(AggregationParserTest, correlatedSubqueryWithGroupBy) {
           .project()
           .output());
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT x FROM t, u GROUP BY t.x, u.x"),
-      "Cannot resolve column: x");
+      "Column is ambiguous: x");
 
   // A correlation to a column that is neither a grouping key nor an aggregate
   // is not allowed.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT (SELECT 1 WHERE t.x = 1) FROM t, u GROUP BY u.x"),
-      "Cannot resolve column: t");
+      "Cannot resolve column: t.x");
 }
 
 TEST_F(AggregationParserTest, subqueryEvaluatedByAggregation) {
@@ -1085,9 +1093,9 @@ TEST_F(AggregationParserTest, subqueryEvaluatedByAggregation) {
 
   // A subquery that is only part of a grouping key is not itself a grouping
   // key, so SELECT cannot read it.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT (SELECT u.x) FROM t, u GROUP BY (SELECT u.x) + 1"),
-      "Cannot resolve column: u");
+      "Cannot resolve column: u.x");
 }
 
 TEST_F(AggregationParserTest, subqueryGroupingKeyOutputName) {
@@ -1134,38 +1142,87 @@ TEST_F(AggregationParserTest, having) {
       "SELECT n_name FROM nation GROUP BY 1 HAVING count(*) > 5", matcher);
 
   // HAVING cannot reference SELECT aliases.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT sum(n_regionkey) AS s FROM nation HAVING s > 10"),
-      "HAVING clause cannot reference column: s");
+      "Cannot resolve column: s");
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey AS k, count(*) FROM nation GROUP BY 1 HAVING k > 2"),
-      "HAVING clause cannot reference column: k");
+      "Cannot resolve column: k");
 
   // HAVING cannot reference non-grouped columns.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey FROM nation GROUP BY 1 HAVING n_comment = 'x'"),
-      "HAVING clause cannot reference column: n_comment");
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_comment");
 
   // HAVING with alias-on-aggregate shadowing a FROM column must not silently
   // resolve to the aggregate. 'n_regionkey' in HAVING refers to the FROM
   // column, which is not a grouping key ('n_regionkey + 1' is).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey + 1, count(*) AS n_regionkey FROM nation "
           "GROUP BY 1 HAVING n_regionkey > 10"),
-      "HAVING clause cannot reference column: n_regionkey");
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_regionkey");
 
   // HAVING with alias-on-grouping-key shadowing a FROM column must not
   // silently resolve to the grouping key. 'n_nationkey' in HAVING refers to
   // the FROM column, which is not a grouping key ('n_regionkey' is).
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT n_regionkey AS n_nationkey, count(*) FROM nation "
           "GROUP BY 1 HAVING n_nationkey > 10"),
-      "HAVING clause cannot reference column: n_nationkey");
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_nationkey");
+}
+
+// In an aggregated query, a column that is neither a grouping key nor inside
+// an aggregate is an error, even when an aggregate, a grouping key or a
+// generated aggregate name carries its name.
+TEST_F(AggregationParserTest, nonGroupedColumn) {
+  // Each query reads n_name, a column that is neither grouped nor aggregated,
+  // directly or inside a correlated subquery.
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"SELECT n_regionkey, n_name, count(*) FROM nation GROUP BY 1",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
+      // Aggregate alias.
+      {"SELECT sum(n_regionkey) AS n_name, n_name FROM nation",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
+      {"SELECT n_regionkey, sum(n_nationkey) AS n_name, n_name FROM nation "
+       "GROUP BY 1",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
+      // Grouping key alias.
+      {"SELECT n_regionkey AS n_name, n_name FROM nation GROUP BY 1",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
+      {"SELECT n_regionkey, count(*) FROM nation GROUP BY 1 ORDER BY n_name",
+       "Column must be an aggregate expression or appear in GROUP BY clause: "
+       "n_name"},
+      {"SELECT sum(n_regionkey) AS n_name, (SELECT n_name) FROM nation",
+       "Cannot resolve column: n_name"},
+      {"SELECT n_regionkey AS n_name, (SELECT n_name) FROM nation GROUP BY 1",
+       "Cannot resolve column: n_name"},
+  };
+  for (const auto& [sql, error] : cases) {
+    SCOPED_TRACE(sql);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(parseSql(sql), error);
+  }
+
+  // Generated aggregate name.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT count(*), count FROM (VALUES (1, 2)) AS t(a, count)"),
+      "Column must be an aggregate expression or appear in GROUP BY clause: "
+      "count");
+
+  // Inside a lambda body.
+  VELOX_ASSERT_THROW(
+      parseSql(
+          "SELECT sum(n_regionkey) AS n_name, "
+          "transform(array[1], x -> concat(n_name, 'x')) FROM nation"),
+      "Cannot resolve column");
 }
 
 // An aggregate in HAVING forms a global aggregation on its own.
@@ -1188,9 +1245,9 @@ TEST_F(AggregationParserTest, havingWithoutGroupBy) {
           .output());
 
   // HAVING makes the query an aggregation, so a bare column is not selectable.
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT n_name FROM nation HAVING sum(n_regionkey) > 10"),
-      "Cannot resolve column: n_name");
+      "Column must be an aggregate expression or appear in GROUP BY clause: n_name");
 }
 
 // HAVING with no aggregate anywhere filters rows like WHERE.
@@ -1706,11 +1763,11 @@ TEST_F(AggregationParserTest, columnCanonicalization) {
     connector_->addTable(
         "st",
         ROW({"x", "s"}, {INTEGER(), ROW({"x", "y"}, {VARCHAR(), DOUBLE()})}));
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT s.x, count(*) FROM st "
             "GROUP BY 1 HAVING x > 0"),
-        "HAVING clause cannot reference column: x");
+        "Column must be an aggregate expression or appear in GROUP BY clause: x");
   }
 
   // JOIN with GROUP BY: ambiguous columns must stay qualified.
@@ -1727,11 +1784,11 @@ TEST_F(AggregationParserTest, columnCanonicalization) {
         "GROUP BY t.a HAVING t.a > 0",
         matchScan().join(matchScan().build()).aggregate().filter().output());
 
-    VELOX_ASSERT_THROW(
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
         parseSql(
             "SELECT t.a, count(*) FROM t JOIN u ON t.b = u.c "
             "GROUP BY t.a HAVING a > 0"),
-        "HAVING clause cannot reference column: a");
+        "Column is ambiguous: a");
   }
 
   // Chained LEFT JOINs with same-named columns. After two merges the

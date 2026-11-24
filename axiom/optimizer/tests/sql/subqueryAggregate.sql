@@ -43,6 +43,7 @@ SELECT t.a FROM t WHERE EXISTS (
 ----
 -- Correlated IN over a grouping aggregate body where the IN right-
 -- hand side is one of the grouping keys.
+-- error_v1: Duplicate output column
 SELECT t.a FROM t WHERE t.a IN (
   SELECT u.a FROM u WHERE u.a >= t.a GROUP BY u.a
 )
@@ -477,6 +478,7 @@ SELECT EXISTS (
 ) FROM t
 ----
 -- Correlated IN whose inner key is a grouping-key expression.
+-- error_v1: Duplicate output column
 SELECT t.a IN (SELECT u.a FROM u WHERE u.a > t.b GROUP BY u.a) FROM t
 ----
 -- Correlated IN whose inner key is an aggregate result.

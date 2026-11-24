@@ -18,6 +18,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <folly/ScopeGuard.h>
+#include <folly/String.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/container/small_vector.h>
@@ -138,41 +139,6 @@ std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
       ParserOptions::kInformationSchemaConnectorIdDefault);
 }
 
-// Resolves a column reference against both sides of a JOIN. Raises an error
-// for unqualified names that exist on both sides.
-lp::ExprPtr resolveJoinColumn(
-    const lp::PlanBuilder::Scope& leftScope,
-    const lp::PlanBuilder::Scope& rightScope,
-    const lp::PlanBuilder& leftBuilder,
-    const lp::PlanBuilder& rightBuilder,
-    const std::optional<std::string>& alias,
-    const std::string& name) {
-  // Qualified name: try left, then right. No ambiguity since table
-  // aliases are unique.
-  if (alias.has_value()) {
-    if (auto expr = leftScope(alias, name)) {
-      return expr;
-    }
-    return rightScope(alias, name);
-  }
-
-  // For unqualified names, check both sides for ambiguity.
-  const bool leftHas = leftBuilder.hasColumn(name);
-  const bool rightHas = rightBuilder.hasColumn(name);
-
-  // Not found on either side. Delegate to leftScope which chains to the
-  // outer scope for correlated subqueries, or throws.
-  if (!leftHas && !rightHas) {
-    return leftScope(alias, name);
-  }
-
-  VELOX_USER_CHECK(leftHas != rightHas, "Column is ambiguous: {}", name);
-
-  // Resolve from the side that has it. Calling leftScope for a name only on
-  // the right would throw (unqualified not-found with no outer scope).
-  return leftHas ? leftScope(alias, name) : rightScope(alias, name);
-}
-
 // Recursively replaces expression tree nodes per the replacement map.
 core::ExprPtr replaceInputs(
     const core::ExprPtr& expr,
@@ -235,6 +201,7 @@ class RelationPlanner : public AstVisitor {
         &::facebook::velox::functions::prestosql::typeCoercer()};
     ctx.identifierCanonicalizer = &canonicalizeName;
     ctx.connectorContext = session->context();
+    ctx.columnsById = true;
     ctx.sqlFunctionResolver =
         makeSqlFunctionResolver(session, parseSql, ctx.coercer);
     return ctx;
@@ -276,10 +243,8 @@ class RelationPlanner : public AstVisitor {
       // A refresh writes whole partitions: a condition on other columns would
       // index only some rows of a partition the index then covers.
       folly::F14FastSet<std::string> partitionColumns;
-      const auto scope = builder_->scope();
       for (const auto& name : index.partitionColumns->names()) {
-        partitionColumns.insert(
-            scope(std::nullopt, name)->as<lp::InputReferenceExpr>()->name());
+        partitionColumns.insert(ColumnExprs::id(*builder_, name));
       }
       auto plan = lp::PlanBuilder(*builder_).build();
       while (plan->kind() != lp::NodeKind::kFilter) {
@@ -299,19 +264,22 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames.clear();
     builder_->project(
         ColumnExprs::concat(
-            {lp::Col(index.keyColumn), lp::Col(index.embeddingColumn)},
-            ColumnExprs::of(index.partitionColumns->names())));
+            {ColumnExprs::column(*builder_, index.keyColumn),
+             ColumnExprs::column(*builder_, index.embeddingColumn)},
+            ColumnExprs::of(*builder_, index.partitionColumns->names())));
     return *builder_;
   }
 
-  // Returns 'storageScan', a scan of a storage table of an index of the table
+  // Returns a scan of 'storageTable', a storage table of an index of the table
   // 'node' refreshes, which has the table's partition columns, filtered by the
   // condition of 'node'. The table's name qualifies the columns, as it does in
   // the condition.
-  lp::PlanBuilder addVectorIndexCondition(
+  lp::PlanBuilder scanVectorIndexStorage(
       const RefreshVectorIndex& node,
-      lp::PlanBuilder storageScan) {
-    builder_ = std::make_shared<lp::PlanBuilder>(std::move(storageScan));
+      const std::string& connectorId,
+      const facebook::axiom::SchemaTableName& storageTable) {
+    builder_ = newBuilder();
+    builder_->tableScan(connectorId, storageTable.schema, storageTable.table);
     builder_->as(canonicalizeName(node.tableName()->suffix()));
     addFilter(node.where());
     return *builder_;
@@ -523,6 +491,16 @@ class RelationPlanner : public AstVisitor {
     return guard;
   }
 
+  // Replaces 'blockScope_' with 'scope' until the guard dies, then restores it.
+  [[nodiscard]] auto scopedBlockScope(
+      std::shared_ptr<const BindingScope> scope) {
+    auto guard = folly::makeGuard([this, saved = blockScope_]() mutable {
+      blockScope_ = std::move(saved);
+    });
+    blockScope_ = std::move(scope);
+    return guard;
+  }
+
   // Restores the relations in scope when the guard dies. 'from' replaces them
   // for the guard's lifetime; without it they only need restoring, which is
   // what a nested query that adds its own relations wants.
@@ -560,7 +538,8 @@ class RelationPlanner : public AstVisitor {
         presto::RecursiveCteValidator::extractAndValidateRecursiveUnion(
             withEntry, cteName);
 
-    builder_ = newBuilder(definingScope.columns);
+    // The body binds names in the scope where the WITH is written.
+    builder_ = newBuilder(definingScope.names);
     {
       auto guard = scopedResetLastNames();
       processQueryBody(unionExpr->left());
@@ -676,15 +655,15 @@ class RelationPlanner : public AstVisitor {
 
       const auto& definingScope = *entry.definingScope;
       auto relationsGuard = scopedRelations(&definingScope);
-      // The body resolves in the scope where the WITH is written. The relation
-      // it yields belongs to the referencing query, which resolves the rest of
-      // its own names, correlated ones included, in its own scope.
-      auto referencingScope = builder_->outerScope();
+      // The body binds names in the scope where the WITH is written. The
+      // relation it yields belongs to the referencing query, which binds the
+      // rest of its own names, correlated ones included, in its own scope.
+      auto referencingNames = bindingParent(builder_);
 
       if (entry.isRecursive) {
         translateRecursiveCteReference(*entry.withQuery, name, definingScope);
       } else {
-        builder_ = newBuilder(definingScope.columns);
+        builder_ = newBuilder(definingScope.names);
         processQuery(entry.withQuery->query().get());
 
         // Apply CTE column-alias list, e.g. 'WITH t(a, b) AS (...)' renames
@@ -694,7 +673,7 @@ class RelationPlanner : public AstVisitor {
           applyColumnAliases(*columnAliases, entry.withQuery->location(), name);
         }
       }
-      builder_->switchOuterScope(std::move(referencingScope));
+      setBindingParent(builder_, std::move(referencingNames));
       finalizeCteReference(name);
       return true;
     }
@@ -789,9 +768,9 @@ class RelationPlanner : public AstVisitor {
         name.fullyQualifiedName());
 
     // Arguments are planned on their own, in the enclosing query's outer scope.
-    const auto outerScope = builder_->outerScope();
+    const auto outerNames = bindingParent(builder_);
     const auto planTable = [&](const RelationPtr& table) {
-      auto builderGuard = scopedBuilder(newBuilder(outerScope));
+      auto builderGuard = scopedBuilder(newBuilder(outerNames));
       auto relationsGuard = scopedRelations();
       auto namesGuard = scopedResetLastNames();
       processFrom(table);
@@ -799,7 +778,7 @@ class RelationPlanner : public AstVisitor {
     };
     const auto planRow = [&](const ExpressionPtr& expression,
                              std::string_view name) {
-      auto builderGuard = scopedBuilder(newBuilder(outerScope));
+      auto builderGuard = scopedBuilder(newBuilder(outerNames));
       builder_->values(
           std::vector<std::string>{std::string(name)},
           std::vector<std::vector<lp::ExprApi>>{{toExpr(expression)}});
@@ -808,6 +787,7 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames.clear();
     builder_ = std::make_shared<lp::PlanBuilder>(
         VectorSearchPlanner::plan(call, planTable, planRow));
+    setBindingParent(builder_, outerNames);
   }
 
   // Adds the GraphMatch node 'graphTable' describes, over a graph a WITH
@@ -823,17 +803,23 @@ class RelationPlanner : public AstVisitor {
         name.suffix(),
         "Property graph not found: {}",
         name.fullyQualifiedName());
-    GraphTablePlanner(exprPlanner_)
-        .planGraphTable(graphTable, it->second, *builder_);
+    {
+      // Pattern variables are not columns.
+      ExpressionPlanner::UnboundNames unbound{exprPlanner_};
+      GraphTablePlanner(exprPlanner_)
+          .planGraphTable(graphTable, it->second, *builder_);
+    }
     finishDerivedRelation();
   }
 
   // Builds the property graphs 'with' defines and puts them in scope.
   void addGraphs(const With& with) {
-    auto planTable = [&](const GraphElementTable& table) {
+    auto planTable = [&](const GraphElementTable& table,
+                         const std::function<void()>& translate) {
       auto relationsGuard = scopedRelations();
       auto builderGuard = scopedBuilder(newBuilder());
       processTable(table.location(), *table.table());
+      translate();
       return *builder_;
     };
     std::unordered_set<std::string> namesInList;
@@ -998,9 +984,9 @@ class RelationPlanner : public AstVisitor {
     }
 
     auto leftBuilder = builder_;
-    auto leftScope = leftBuilder->scope();
 
-    builder_ = newBuilder(lateral ? leftScope : leftBuilder->outerScope());
+    builder_ = newBuilder(
+        lateral ? snapshot(leftBuilder) : bindingParent(leftBuilder));
     processFrom(join.right());
 
     // 'lastNames' now holds only the right leg's names; its size no
@@ -1018,17 +1004,12 @@ class RelationPlanner : public AstVisitor {
         // Create a combined scope that can resolve columns from both sides of
         // the join. Subqueries in the ON clause may contain correlated
         // references to either side.
-        lp::PlanBuilder::Scope joinScope = [leftScope,
-                                            rightScope = rightBuilder->scope(),
-                                            leftBuilder,
-                                            rightBuilder](
-                                               const auto& alias,
-                                               const auto& name) {
-          return resolveJoinColumn(
-              leftScope, rightScope, *leftBuilder, *rightBuilder, alias, name);
-        };
-
-        builder_ = newBuilder(joinScope);
+        // The ON condition binds names against both sides.
+        auto joinNames = std::make_shared<BindingScope>();
+        joinNames->relations = {
+            relationOf(*leftBuilder), relationOf(*rightBuilder)};
+        joinNames->parent = bindingParent(leftBuilder);
+        builder_ = newBuilder(std::move(joinNames));
         std::optional<lp::ExprApi> condition;
         condition = toExpr(criteria->as<JoinOn>()->expression());
 
@@ -1201,18 +1182,12 @@ class RelationPlanner : public AstVisitor {
     // Lateral column alias map: alias name → expression. When friendlySql is
     // enabled, aliases defined in earlier SELECT items can be referenced in
     // later items. Populated left-to-right as aliases are encountered.
-    // Column names take priority over aliases to preserve backward
-    // compatibility (e.g., SELECT a AS b, b FROM t — second b is column b).
+    // Columns, including those of enclosing queries, take priority over
+    // aliases (e.g., SELECT a AS b, b FROM t — second b is column b).
     folly::F14FastMap<std::string, core::ExprPtr> aliasExprs;
-    folly::F14FastSet<std::string> columnNames;
     if (options_.friendlySql) {
-      for (const auto& name : builder_->outputNames()) {
-        if (name.has_value()) {
-          columnNames.insert(name.value());
-        }
-      }
       exprPlanner_.setOutputAliases(
-          {.exprs = &aliasExprs, .columnNames = &columnNames});
+          {.exprs = &aliasExprs, .columnsFirst = true});
     }
     SCOPE_EXIT {
       exprPlanner_.clearOutputAliases();
@@ -1566,6 +1541,8 @@ class RelationPlanner : public AstVisitor {
   // Plans 'query' as a subquery in a fresh builder, reporting whether it
   // referenced the outer scope.
   ExpressionPlanner::SubqueryPlanResult planSubquery(Query* query) {
+    auto bindingParent = currentScope();
+
     // Save and restore the outer builder and 'displayNames_.lastNames'.
     // Correlated subqueries run on the same RelationPlanner and must not
     // leak their planning into the outer scope.
@@ -1576,20 +1553,58 @@ class RelationPlanner : public AstVisitor {
       displayNames_.lastNames = std::move(savedDisplayNames);
     };
 
-    // Wrap the outer scope so that any invocation flips a local flag.
-    // A subquery that resolves a name against the outer scope is
-    // correlated; its planned output binds physical column names from
-    // this outer context and must not be cached for reuse under a
-    // different outer.
-    bool touchedOuterScope = false;
-    builder_ = newBuilder(
-        [&touchedOuterScope, outerScope = builder->scope()](
-            const std::optional<std::string>& alias, const std::string& name) {
-          touchedOuterScope = true;
-          return outerScope(alias, name);
-        });
+    const auto firstOuterBind = exprPlanner_.outerBinds().size();
+    builder_ = newBuilder(bindingParent);
     processQuery(query);
-    return {builder_->planNode(), touchedOuterScope};
+
+    // A JOIN ON builder has no node: the condition reads both sides, which
+    // have every column.
+    const auto enclosingNode =
+        builder->outputMapping() != nullptr ? builder->planNode() : nullptr;
+    return {
+        builder_->planNode(),
+        readsEnclosingColumns(firstOuterBind, *bindingParent, enclosingNode)};
+  }
+
+  // Returns true if the subquery planned with 'enclosing' as its binding
+  // parent reads a column of an enclosing query: one the binder bound since
+  // outer bind 'firstOuterBind'. A correlated subquery is not cached, as its
+  // plan reads columns of a specific enclosing query.
+  //
+  // A column of the enclosing block's FROM is missing from the block's current
+  // node 'enclosingNode' when the subquery is evaluated above a node that
+  // dropped it, such as an aggregation that does not group by it. The error
+  // names the column as the query wrote it.
+  bool readsEnclosingColumns(
+      size_t firstOuterBind,
+      const BindingScope& enclosing,
+      const lp::LogicalPlanNodePtr& enclosingNode) const {
+    bool correlated = false;
+    const auto& binds = exprPlanner_.outerBinds();
+    for (auto i = firstOuterBind; i < binds.size(); ++i) {
+      const auto& id = binds[i];
+      if (enclosing.typeOf(id) != nullptr) {
+        correlated = true;
+        if (enclosingNode != nullptr &&
+            !enclosingNode->outputType()->containsChild(id)) {
+          const auto* source = exprPlanner_.outerColumnSource(id);
+          AXIOM_PRESTO_SEMANTIC_FAIL(
+              source->location,
+              source->name,
+              "Cannot resolve column: {}",
+              source->name);
+        }
+        continue;
+      }
+      for (auto scope = enclosing.parent; scope != nullptr;
+           scope = scope->parent) {
+        if (scope->typeOf(id) != nullptr) {
+          correlated = true;
+          break;
+        }
+      }
+    }
+    return correlated;
   }
 
   void addOrderBy(const OrderByPtr& orderBy) {
@@ -1651,6 +1666,10 @@ class RelationPlanner : public AstVisitor {
   }
 
   void processQuery(Query* query) {
+    // A nested query binds enclosing names through its builder's parent until
+    // one of its own blocks sets a block scope.
+    auto blockScopeGuard = scopedBlockScope(nullptr);
+
     AXIOM_PRESTO_SEMANTIC_CHECK_LT(
         subqueryDepth_,
         options_.maxSubqueryDepth,
@@ -1683,7 +1702,7 @@ class RelationPlanner : public AstVisitor {
 
     if (const auto& with = query->with()) {
       auto definingScope = std::make_shared<const CteScope::DefiningScope>(
-          builder_->outerScope(), scopeRelations_, ambiguousScopeRelations_);
+          bindingParent(builder_), scopeRelations_, ambiguousScopeRelations_);
 
       // Names must be unique within a single WITH list. A nested WITH may
       // still reuse an enclosing name -- that is shadowing, handled below.
@@ -1777,7 +1796,9 @@ class RelationPlanner : public AstVisitor {
     ExpressionPlanner::MarkerScope markers{exprPlanner_};
 
     // FROM t -> builder.tableScan(t)
+    auto blockScopeGuard = scopedBlockScope(nullptr);
     processFrom(node->from());
+    blockScope_ = snapshot(builder_);
 
     const auto& selectItems = node->select()->selectItems();
     const bool distinct = node->select()->isDistinct();
@@ -1950,7 +1971,7 @@ class RelationPlanner : public AstVisitor {
     // SQL set-operation output names come from the left input.
     auto leftDisplayNames = std::move(displayNames_.lastNames);
 
-    builder_ = newBuilder(leftBuilder->outerScope());
+    builder_ = newBuilder(bindingParent(leftBuilder));
     {
       auto relationsGuard = scopedRelations();
       right->accept(this);
@@ -1962,12 +1983,115 @@ class RelationPlanner : public AstVisitor {
     displayNames_.lastNames = std::move(leftDisplayNames);
   }
 
+  // Returns a builder that binds names of enclosing queries' columns through
+  // 'bindingParent'.
   std::shared_ptr<lp::PlanBuilder> newBuilder(
-      const lp::PlanBuilder::Scope& outerScope = nullptr) {
-    return std::make_shared<lp::PlanBuilder>(
+      std::shared_ptr<const BindingScope> bindingParent = nullptr) {
+    auto builder = std::make_shared<lp::PlanBuilder>(
         context_,
         /*allowAmbiguousOutputNames=*/true,
-        outerScope);
+        [this](const std::optional<std::string>& alias, const std::string& id) {
+          return enclosingColumn(alias, id);
+        });
+    setBindingParent(builder, std::move(bindingParent));
+    return builder;
+  }
+
+  // Returns a reference to the enclosing queries' column 'id', for a builder
+  // resolving a column its input does not have; nullptr if no enclosing scope
+  // of the current builder has it.
+  lp::ExprPtr enclosingColumn(
+      const std::optional<std::string>& alias,
+      const std::string& id) const {
+    if (alias.has_value()) {
+      return nullptr;
+    }
+    for (auto scope = bindingParent(builder_); scope != nullptr;
+         scope = scope->parent) {
+      if (auto type = scope->typeOf(id)) {
+        return std::make_shared<lp::InputReferenceExpr>(std::move(type), id);
+      }
+    }
+    return nullptr;
+  }
+
+  // Returns the names and types of 'builder''s output.
+  static BindingScope::Relation relationOf(const lp::PlanBuilder& builder) {
+    return {*builder.outputMapping(), builder.planNode()->outputType()};
+  }
+
+  void setBindingParent(
+      const std::shared_ptr<lp::PlanBuilder>& builder,
+      std::shared_ptr<const BindingScope> parent) {
+    bindingParents_[builder.get()] = {builder, std::move(parent)};
+  }
+
+  // Returns the scope enclosing 'builder''s, which binds names of enclosing
+  // queries' columns.
+  std::shared_ptr<const BindingScope> bindingParent(
+      const std::shared_ptr<lp::PlanBuilder>& builder) const {
+    auto it = bindingParents_.find(builder.get());
+    if (it == bindingParents_.end() || it->second.first.lock() != builder) {
+      return nullptr;
+    }
+    return it->second.second;
+  }
+
+  // Returns the names 'builder''s output has now, as a scope.
+  std::shared_ptr<const BindingScope> snapshot(
+      const std::shared_ptr<lp::PlanBuilder>& builder) const {
+    auto scope = std::make_shared<BindingScope>();
+    if (builder->outputMapping() != nullptr) {
+      scope->relations.push_back(relationOf(*builder));
+    }
+    scope->parent = bindingParent(builder);
+    return scope;
+  }
+
+  // Returns the scope a subquery planned now binds enclosing names against:
+  // the current block's FROM, or the current relation outside a block's
+  // clauses.
+  std::shared_ptr<const BindingScope> currentScope() const {
+    return blockScope_ != nullptr ? blockScope_ : snapshot(builder_);
+  }
+
+  // Binds 'qualifier.name' or 'name': a column of the current relation, else
+  // of an enclosing query.
+  std::optional<ExpressionPlanner::BoundColumn> bindColumn(
+      const std::optional<std::string>& qualifier,
+      const std::string& name,
+      const NodeLocation& location) const {
+    // A name that names several columns of a scope is ambiguous there; it
+    // does not bind to a column of an enclosing scope.
+    if (const auto* mapping = builder_->outputMapping()) {
+      if (auto id = BindingScope::lookup(*mapping, qualifier, name)) {
+        return ExpressionPlanner::BoundColumn{
+            .id = std::move(id.value()), .local = true};
+      }
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          !mapping->isAmbiguous({qualifier, name}),
+          location,
+          name,
+          "Column is ambiguous: {}",
+          name);
+    }
+    for (auto scope = bindingParent(builder_); scope != nullptr;
+         scope = scope->parent) {
+      auto ids = scope->lookup(qualifier, name);
+      AXIOM_PRESTO_SEMANTIC_CHECK_LE(
+          ids.size(), 1, location, name, "Column is ambiguous: {}", name);
+      AXIOM_PRESTO_SEMANTIC_CHECK(
+          !ids.empty() || !scope->isAmbiguous(qualifier, name),
+          location,
+          name,
+          "Column is ambiguous: {}",
+          name);
+      if (ids.size() == 1) {
+        return ExpressionPlanner::BoundColumn{
+            .id = std::move(ids.front()), .local = false};
+      }
+    }
+    return std::nullopt;
   }
 
   lp::PlanBuilder::Context context_;
@@ -1976,6 +2100,18 @@ class RelationPlanner : public AstVisitor {
       std::string_view /*sql*/)>
       parseSql_;
   const ParserSessionPtr session_;
+  // Declared before 'builder_', which the constructor creates with
+  // newBuilder().
+  // Each builder's enclosing binding scope; see newBuilder. Holds the builder
+  // weakly, so an entry for a destroyed builder is not mistaken for one at
+  // the same address.
+  folly::F14FastMap<
+      const lp::PlanBuilder*,
+      std::pair<
+          std::weak_ptr<lp::PlanBuilder>,
+          std::shared_ptr<const BindingScope>>>
+      bindingParents_;
+
   std::shared_ptr<lp::PlanBuilder> builder_;
   ParserOptions options_;
   // Current processQuery recursion depth.
@@ -1987,15 +2123,24 @@ class RelationPlanner : public AstVisitor {
         return toSortingKey(expr, options);
       },
       options_,
-      [this](const std::string& qualifier, const std::string& name) {
-        // Only canonicalize if the qualifier resolves as a table alias (not a
-        // struct field dereference) and the unqualified name is unambiguous.
-        return builder_->hasQualifiedColumn(qualifier, name) &&
-            builder_->hasColumn(name);
+      [this](
+          const std::optional<std::string>& qualifier,
+          const std::string& name,
+          const NodeLocation& location) {
+        return bindColumn(qualifier, name, location);
       },
-      [this](const std::string& first, const std::string& second) {
-        return builder_->hasColumn(first) ||
-            builder_->hasQualifiedColumn(first, second);
+      [this]() {
+        if (const auto* mapping = builder_->outputMapping()) {
+          return mapping->toString();
+        }
+        // A JOIN ON condition binds against both sides.
+        std::vector<std::string> relations;
+        if (auto parent = bindingParent(builder_)) {
+          for (const auto& relation : parent->relations) {
+            relations.push_back(relation.names.toString());
+          }
+        }
+        return folly::join(", ", relations);
       },
       [this](std::span<const std::string> parts) {
         return resolveRelationQualifier(parts);
@@ -2013,6 +2158,11 @@ class RelationPlanner : public AstVisitor {
   folly::F14FastSet<std::string> ambiguousScopeRelations_;
 
   CteScope ctes_;
+
+  // The FROM of the query block whose clauses are being translated, for the
+  // subqueries in them to bind enclosing names against. Null outside a
+  // block's clauses.
+  std::shared_ptr<const BindingScope> blockScope_;
 
   // Property graphs WITH clauses define, by name. A graph is visible in the
   // query that defines it and in the queries nested in it.
@@ -3017,8 +3167,9 @@ SqlStatementPtr parseRefreshVectorIndex(
       *index,
       connectorId,
       [&]() { return planner.planVectorIndexRows(refresh, *index); },
-      [&](lp::PlanBuilder storageScan) {
-        return planner.addVectorIndexCondition(refresh, std::move(storageScan));
+      [&](const facebook::axiom::SchemaTableName& storageTable) {
+        return planner.scanVectorIndexStorage(
+            refresh, connectorId, storageTable);
       },
       session->vectorIndexCodecTrainer().get());
 

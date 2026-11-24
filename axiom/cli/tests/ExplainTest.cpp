@@ -119,7 +119,7 @@ TEST_P(ExplainTest, explainValidate) {
             format));
   }
 
-  VELOX_ASSERT_THROW(
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       run("EXPLAIN (TYPE VALIDATE) SELECT nosuchcolumn FROM lineitem"),
       "Cannot resolve column: nosuchcolumn");
 
