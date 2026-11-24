@@ -126,18 +126,17 @@ void collectUsedNamesInPlan(
   }
 }
 
-// Returns the single Scan leaf reached through single-input nodes (Filter,
-// Project, ...), or nullptr if the subtree branches (join, set) or bottoms out
-// in a non-Scan leaf. SYSTEM sampling requires exactly one scan to sample.
-ScanCP soleScan(NodeCP node) {
-  const auto inputs = node->inputs();
-  if (inputs.empty()) {
-    return node->is(NodeType::kScan) ? node->as<Scan>() : nullptr;
+// Returns the Scan under 'node' if only Filters and Projects lie between them,
+// or nullptr otherwise. SYSTEM sampling drops whole splits of that scan, which
+// samples the output of the Filters and Projects above it.
+ScanCP sampledScan(NodeCP node) {
+  if (node->is(NodeType::kScan)) {
+    return node->as<Scan>();
   }
-  if (inputs.size() != 1) {
-    return nullptr;
+  if (node->is(NodeType::kFilter) || node->is(NodeType::kProject)) {
+    return sampledScan(node->inputs()[0]);
   }
-  return soleScan(inputs[0]);
+  return nullptr;
 }
 
 // Collects every `InputReferenceExpr::name` referenced anywhere in `expr`.
@@ -1787,11 +1786,11 @@ Translated Translator::translateSample(
 
   switch (sample.sampleMethod()) {
     case lp::SampleNode::SampleMethod::kSystem: {
-      // SYSTEM sampling drops whole splits, so it needs a single scan to
-      // sample.
-      ScanCP scan = soleScan(input.node);
+      ScanCP scan = sampledScan(input.node);
       VELOX_USER_CHECK_NOT_NULL(
-          scan, "TABLESAMPLE SYSTEM is only supported directly over a table");
+          scan,
+          "TABLESAMPLE SYSTEM input must be a table, optionally filtered or "
+          "projected");
       const_cast<BaseTable*>(scan->baseTable())->sampledPercentage =
           static_cast<float>(percentage);
       return input;

@@ -62,10 +62,9 @@ TEST_P(TableSampleTest, system) {
   testConnector_->addTable("t", ROW({"a", "b"}, INTEGER()));
 
   // Returns the single fragment's plan node and its sampled-scan map.
-  auto planSampled = [&](const std::string& sample) {
+  auto planSampled = [&](const lp::LogicalPlanNodePtr& logicalPlan) {
     auto result = planVelox(
-        parseSampledScan(sample),
-        {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
+        logicalPlan, {.maxRemotePartitions = 1, .maxLocalPartitions = 1});
     EXPECT_EQ(result.plan->stages().size(), 1);
     const auto& fragment = result.plan->stages().at(0);
     return std::make_pair(
@@ -75,7 +74,8 @@ TEST_P(TableSampleTest, system) {
   // SYSTEM samples whole splits, so the percentage rides on the scan's split
   // generation with no per-row filter.
   {
-    const auto& [plan, sampledScans] = planSampled("SYSTEM (50)");
+    const auto& [plan, sampledScans] =
+        planSampled(parseSampledScan("SYSTEM (50)"));
     AXIOM_ASSERT_PLAN(plan, matchScan("t").build());
     ASSERT_EQ(sampledScans.size(), 1);
     EXPECT_EQ(sampledScans.begin()->second, 50);
@@ -83,25 +83,68 @@ TEST_P(TableSampleTest, system) {
 
   // 100% is a no-op passthrough: a plain scan with nothing sampled.
   {
-    const auto& [plan, sampledScans] = planSampled("SYSTEM (100)");
+    const auto& [plan, sampledScans] =
+        planSampled(parseSampledScan("SYSTEM (100)"));
     AXIOM_ASSERT_PLAN(plan, matchScan("t").build());
     EXPECT_TRUE(sampledScans.empty());
   }
 
   // 0% produces an empty result: no scan, nothing sampled.
   {
-    const auto& [plan, sampledScans] = planSampled("SYSTEM (0)");
+    const auto& [plan, sampledScans] =
+        planSampled(parseSampledScan("SYSTEM (0)"));
     AXIOM_ASSERT_PLAN(plan, matchValues().build());
     EXPECT_TRUE(sampledScans.empty());
   }
 
-  // SYSTEM needs a single scan to sample; a non-scan source fails.
-  VELOX_ASSERT_THROW(
-      planVelox(
-          parseSelect(
-              "SELECT * FROM (VALUES (1)) AS v (x) TABLESAMPLE SYSTEM (50)"),
-          {.maxRemotePartitions = 1, .maxLocalPartitions = 1}),
-      "TABLESAMPLE SYSTEM is only supported directly over a table");
+  // SYSTEM over a filtered or projected table samples the table's scan.
+  {
+    const auto& [plan, sampledScans] = planSampled(parseSelect(
+        "SELECT * FROM (SELECT a FROM t WHERE b > 1) TABLESAMPLE SYSTEM (50)"));
+    AXIOM_ASSERT_PLAN(
+        plan, matchScan("t").filter("b > 1").project({"a"}).build());
+    ASSERT_EQ(sampledScans.size(), 1);
+    EXPECT_EQ(sampledScans.begin()->second, 50);
+  }
+  {
+    const auto& [plan, sampledScans] = planSampled(parseSelect(
+        "SELECT * FROM (SELECT a + b AS c FROM t) TABLESAMPLE SYSTEM (50)"));
+    AXIOM_ASSERT_PLAN(plan, matchScan("t").project({"a + b AS c"}).build());
+    ASSERT_EQ(sampledScans.size(), 1);
+    EXPECT_EQ(sampledScans.begin()->second, 50);
+  }
+
+  if (!useV2_) {
+    return;
+  }
+
+  // SYSTEM over anything other than a table, optionally filtered or projected,
+  // fails.
+  testConnector_->addTable("u", ROW({"a", "b"}, INTEGER()));
+  for (
+      const auto* sql : {
+          "SELECT * FROM (VALUES (1)) AS v (x) TABLESAMPLE SYSTEM (50)",
+          "SELECT * FROM (SELECT count(*) AS c FROM t) TABLESAMPLE SYSTEM (50)",
+          "SELECT * FROM (SELECT DISTINCT a FROM t) TABLESAMPLE SYSTEM (50)",
+          "SELECT * "
+          "FROM (SELECT a, row_number() OVER (ORDER BY b) AS r FROM t) "
+          "TABLESAMPLE SYSTEM (50)",
+          "SELECT * FROM (SELECT a FROM t LIMIT 10) TABLESAMPLE SYSTEM (50)",
+          "SELECT * "
+          "FROM (SELECT t.a FROM t JOIN u ON t.b = u.b) "
+          "TABLESAMPLE SYSTEM (50)",
+          "SELECT * "
+          "FROM (SELECT a FROM t UNION ALL SELECT a FROM u) "
+          "TABLESAMPLE SYSTEM (50)",
+      }) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_THROW(
+        planVelox(
+            parseSelect(sql),
+            {.maxRemotePartitions = 1, .maxLocalPartitions = 1}),
+        "TABLESAMPLE SYSTEM input must be a table, optionally filtered or "
+        "projected");
+  }
 }
 
 TEST_P(TableSampleTest, explainShowsSampleRate) {
