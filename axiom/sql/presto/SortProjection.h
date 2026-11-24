@@ -25,19 +25,19 @@ namespace axiom::sql::presto {
 
 class SortProjection {
  public:
-  /// Matches sort key expressions against items in the SELECT list. A key that
-  /// names an output alias arrives as that item's expression, so matching is by
-  /// expression alone. For unmatched expressions, appends them to
-  /// `projections`, widening the projection list. Returns a 1-based ordinal for
-  /// each sort key in the widened projection list.
+  /// Matches sort key expressions against items in the SELECT list by
+  /// expression. For unmatched expressions, appends them to `projections`,
+  /// widening the projection list. Returns a 1-based ordinal for each sort key
+  /// in the widened projection list.
   ///
   /// @param sortKeyExprs List of expressions from the ORDER BY list. Keys not
   /// in the projection list (above) are considered unmatched and used to widen
   /// the projection list.
   /// @param preResolvedOrdinals 1-based ordinals for sort keys that are already
-  /// resolved. Must be the same size as sortKeyExprs. A value of 0 means
-  /// unresolved. All non-zero values must map to valid positions in projections
-  /// (1-based).
+  /// resolved: a key that is a SELECT position or an output alias names that
+  /// item, even when another item has the same expression. Must be the same
+  /// size as sortKeyExprs. A value of 0 means unresolved. All non-zero values
+  /// must map to valid positions in projections (1-based).
   /// @param projections Mutable list of expressions from the SELECT list. This
   /// is where unmatched sort key expressions are appended. All pre-resolved
   /// ordinals should match to a projection here. An appended expression is

@@ -28,6 +28,7 @@
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/IntervalParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SelectProjection.h"
 #include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
 #include "velox/exec/Aggregate.h"
@@ -707,7 +708,8 @@ ExpressionPlanner::WindowScope::WindowScope(
       [&] { planner_.windowDefinitions_ = std::move(saved_); });
   planner_.windowDefinitions_.clear();
 
-  OutputAliasScope aliases{planner_, {}};
+  // A window definition is not in the scope of the SELECT aliases.
+  OutputAliasScope noAliases{planner_};
 
   for (const auto& definition : definitions) {
     const auto name = canonicalizeIdentifier(*definition->name());
@@ -785,6 +787,90 @@ void ExpressionPlanner::findWindowExprs(
   for (const auto& input : expr->inputs()) {
     findWindowExprs(input, windowExprs, traversalOrder);
   }
+}
+
+core::ExprPtr ExpressionPlanner::rewriteInputs(
+    const core::ExprPtr& expr,
+    const std::function<core::ExprPtr(const core::ExprPtr&)>& rewrite) {
+  bool changed{false};
+  const auto apply = [&](const core::ExprPtr& input) {
+    auto result = rewrite(input);
+    changed |= result.get() != input.get();
+    return result;
+  };
+
+  if (const auto* lambda = expr->as<core::LambdaExpr>()) {
+    auto body = apply(lambda->body());
+    return changed ? std::make_shared<core::LambdaExpr>(
+                         lambda->arguments(), std::move(body))
+                   : expr;
+  }
+
+  std::vector<core::ExprPtr> newInputs;
+  newInputs.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    newInputs.push_back(apply(input));
+  }
+
+  const auto applyToSortKeys = [&](const std::vector<core::SortKey>& keys) {
+    std::vector<core::SortKey> newKeys;
+    newKeys.reserve(keys.size());
+    for (const auto& key : keys) {
+      newKeys.push_back({apply(key.expr), key.ascending, key.nullsFirst});
+    }
+    return newKeys;
+  };
+
+  if (const auto* aggregate = expr->as<core::AggregateCallExpr>()) {
+    auto filter =
+        aggregate->filter() != nullptr ? apply(aggregate->filter()) : nullptr;
+    auto orderBy = applyToSortKeys(aggregate->orderBy());
+    return changed ? std::make_shared<core::AggregateCallExpr>(
+                         aggregate->name(),
+                         std::move(newInputs),
+                         aggregate->isDistinct(),
+                         std::move(filter),
+                         std::move(orderBy),
+                         aggregate->alias())
+                   : expr;
+  }
+
+  if (!expr->is(core::IExpr::Kind::kWindow)) {
+    return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+  }
+
+  const auto* window = expr->as<core::WindowCallExpr>();
+
+  std::vector<core::ExprPtr> newPartitionKeys;
+  newPartitionKeys.reserve(window->partitionKeys().size());
+  for (const auto& key : window->partitionKeys()) {
+    newPartitionKeys.push_back(apply(key));
+  }
+
+  auto newOrderByKeys = applyToSortKeys(window->orderByKeys());
+
+  // A RANGE offset bound is rewritten to `<order_by> +/- <offset>`, so it can
+  // reference the same columns as the ORDER BY key.
+  std::optional<core::WindowCallExpr::Frame> newFrame = window->frame();
+  if (newFrame.has_value()) {
+    if (newFrame->startValue) {
+      newFrame->startValue = apply(newFrame->startValue);
+    }
+    if (newFrame->endValue) {
+      newFrame->endValue = apply(newFrame->endValue);
+    }
+  }
+
+  if (!changed) {
+    return expr;
+  }
+  return std::make_shared<core::WindowCallExpr>(
+      window->name(),
+      std::move(newInputs),
+      std::move(newPartitionKeys),
+      std::move(newOrderByKeys),
+      std::move(newFrame),
+      window->isIgnoreNulls());
 }
 
 void ExpressionPlanner::findNestedWindowExprs(
@@ -1849,10 +1935,7 @@ lp::ExprApi ExpressionPlanner::planSubquery(
   // the subquery is planned so a bare column reference inside the subquery
   // resolves against the subquery's own FROM (and then the outer scope's
   // columns for correlation), not an outer SELECT alias.
-  const auto savedAliases = std::exchange(outputAliases_, {});
-  SCOPE_EXIT {
-    outputAliases_ = savedAliases;
-  };
+  OutputAliasScope noAliases{*this};
 
   auto result = subqueryPlanner_(query->as<Query>());
 
@@ -1900,18 +1983,30 @@ lp::ExprApi ExpressionPlanner::planSubquery(
 }
 
 ExpressionPlanner::OutputAliasScope::OutputAliasScope(
+    ExpressionPlanner& planner)
+    : planner_{planner}, saved_{planner.outputAliases_} {
+  planner_.clearOutputAliases();
+}
+
+ExpressionPlanner::OutputAliasScope::OutputAliasScope(
     ExpressionPlanner& planner,
-    const std::vector<lp::ExprApi>& projections)
+    const std::vector<lp::ExprApi>& projections,
+    SelectProjection& selectProjection)
     : planner_{planner}, saved_{planner.outputAliases_} {
   core::IExprEqual exprEqual;
-  for (const auto& projection : projections) {
+  // First item carrying each alias.
+  folly::F14FastMap<std::string, size_t> firstItems;
+  for (size_t i = 0; i < projections.size(); ++i) {
+    const auto& projection = projections[i];
     if (!projection.alias().has_value()) {
       continue;
     }
-    auto [it, inserted] =
-        aliasExprs_.emplace(projection.alias().value(), projection.expr());
-    if (!inserted && !exprEqual(it->second, projection.expr())) {
-      ambiguousAliases_.insert(projection.alias().value());
+    const auto& alias = projection.alias().value();
+    auto [it, inserted] = firstItems.emplace(alias, i);
+    if (inserted) {
+      aliasExprs_.emplace(alias, selectProjection.reference(i));
+    } else if (!exprEqual(projections[it->second].expr(), projection.expr())) {
+      ambiguousAliases_.insert(alias);
     }
   }
 

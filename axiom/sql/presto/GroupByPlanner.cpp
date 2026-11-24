@@ -15,10 +15,12 @@
  */
 
 #include "axiom/sql/presto/GroupByPlanner.h"
+
 #include <set>
 #include "axiom/sql/presto/ColumnExprs.h"
 #include "axiom/sql/presto/ColumnsExpansion.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
+#include "axiom/sql/presto/SelectProjection.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/SpecialAggregates.h"
 #include "axiom/sql/presto/ast/DefaultTraversalVisitor.h"
@@ -47,58 +49,6 @@ using AggregateExprSet =
 using AggregateExprMap = folly::
     F14FastMap<core::ExprPtr, core::ExprPtr, core::IExprHash, core::IExprEqual>;
 
-// Rewrites a window function expression: replaces column references in the
-// function arguments, PARTITION BY keys, ORDER BY keys, and frame bounds using
-// the provided rewrite function. Constructs a new WindowCallExpr directly.
-lp::ExprApi rewriteWindowExpr(
-    const lp::ExprApi& item,
-    const std::function<core::ExprPtr(const core::ExprPtr&)>& rewriteIExpr) {
-  VELOX_CHECK(item.expr()->is(core::IExpr::Kind::kWindow));
-  auto* window = item.expr()->as<core::WindowCallExpr>();
-
-  // Rewrite function arguments.
-  std::vector<core::ExprPtr> newInputs;
-  for (const auto& input : window->inputs()) {
-    newInputs.push_back(rewriteIExpr(input));
-  }
-
-  // Rewrite partition keys.
-  std::vector<core::ExprPtr> newPartitionKeys;
-  for (const auto& key : window->partitionKeys()) {
-    newPartitionKeys.push_back(rewriteIExpr(key));
-  }
-
-  // Rewrite order by keys.
-  std::vector<core::SortKey> newOrderByKeys;
-  for (const auto& key : window->orderByKeys()) {
-    newOrderByKeys.push_back(
-        {rewriteIExpr(key.expr), key.ascending, key.nullsFirst});
-  }
-
-  // Rewrite frame bounds. A RANGE offset bound is rewritten to
-  // `<order_by> +/- <offset>`, so it can reference the same aggregate as the
-  // ORDER BY key and must be rewritten alongside it.
-  std::optional<core::WindowCallExpr::Frame> newFrame = window->frame();
-  if (newFrame.has_value()) {
-    if (newFrame->startValue) {
-      newFrame->startValue = rewriteIExpr(newFrame->startValue);
-    }
-    if (newFrame->endValue) {
-      newFrame->endValue = rewriteIExpr(newFrame->endValue);
-    }
-  }
-
-  return lp::ExprApi(
-      std::make_shared<core::WindowCallExpr>(
-          window->name(),
-          std::move(newInputs),
-          std::move(newPartitionKeys),
-          std::move(newOrderByKeys),
-          std::move(newFrame),
-          window->isIgnoreNulls()),
-      item.name());
-}
-
 // Given an expression, and pairs of search-and-replace sub-expressions,
 // produces a new expression with sub-expressions replaced. Uses keyReplacements
 // for grouping keys and aggregateReplacements for aggregates. If
@@ -123,27 +73,18 @@ core::ExprPtr replaceInputs(
     return aggIt->second;
   }
 
-  std::vector<core::ExprPtr> newInputs;
-  bool hasNewInput = false;
-  for (const auto& input : expr->inputs()) {
-    auto newInput = replaceInputs(
-        input, keyReplacements, aggregateReplacements, onUnreplacedLeaf);
-    if (newInput.get() != input.get()) {
-      hasNewInput = true;
-    }
-    newInputs.push_back(newInput);
-  }
+  auto result =
+      ExpressionPlanner::rewriteInputs(expr, [&](const core::ExprPtr& input) {
+        return replaceInputs(
+            input, keyReplacements, aggregateReplacements, onUnreplacedLeaf);
+      });
 
-  if (!hasNewInput && onUnreplacedLeaf &&
+  if (result == expr && onUnreplacedLeaf &&
       expr->is(core::IExpr::Kind::kFieldAccess)) {
     onUnreplacedLeaf(*expr->as<core::FieldAccessExpr>());
   }
 
-  if (hasNewInput) {
-    return expr->replaceInputs(std::move(newInputs));
-  }
-
-  return expr;
+  return result;
 }
 
 // Walks the expression tree looking for aggregate function calls and appending
@@ -402,15 +343,10 @@ core::ExprPtr planMarkers(
     return subquery->expr();
   }
 
-  std::vector<core::ExprPtr> newInputs;
-  newInputs.reserve(expr->inputs().size());
-  bool changed{false};
-  for (const auto& input : expr->inputs()) {
-    newInputs.push_back(planMarkers(input, exprPlanner, planned));
-    changed |= newInputs.back().get() != input.get();
-  }
-
-  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
+  return ExpressionPlanner::rewriteInputs(
+      expr, [&](const core::ExprPtr& input) {
+        return planMarkers(input, exprPlanner, planned);
+      });
 }
 
 // As above, and a marker that is the whole expression also keeps the planned
@@ -485,16 +421,19 @@ void GroupByPlanner::plan(
   // Populates: groupingSets_, groupingKeys_, groupingSetsIndices_,
   //   groupingKeyToIndex_.
   groupingSets_ = expandGroupingSets(groupingElements, selectExprs);
+
+  // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
+  // function calls and expressions evaluated above the aggregate.
+  collectAggregates(selectExprs, having, orderBy, windowDefinitionExprs);
+
+  lowerBelowAggregate();
+
   deduplicateGroupingKeys();
   // GROUP BY DISTINCT removes duplicate grouping sets after expansion
   // (order-insensitive comparison).
   if (distinct) {
     deduplicateGroupingSets(groupingSetsIndices_);
   }
-
-  // Walk SELECT, HAVING, and ORDER BY expressions to collect aggregate
-  // function calls and expressions evaluated above the aggregate.
-  collectAggregates(selectExprs, having, orderBy, windowDefinitionExprs);
 
   buildAggregationPlan(selectExprs, orderBy, std::move(windowDefinitionExprs));
 }
@@ -523,10 +462,14 @@ void GroupByPlanner::buildAggregationPlan(
   // Mutates: filter_, projections_, sortingKeyExprs_.
   rewritePostAggregateExprs(windowDefinitionExprs);
 
+  // Nested window functions and items read through an alias are computed
+  // below the final projection, over the aggregate's output.
+  selectProjection_.lower(*builder_, projections_, sortingKeyExprs_);
+
   // Resolve sorting key ordinals before projecting: ORDER BY expressions
   // that are not in the SELECT list are appended to projections_ so they
   // are included in the project node. Must happen before builder_->project().
-  auto sortingKeyOrdinals = resolveSortOrdinals(orderBy);
+  auto sortingKeyOrdinals = resolveSortOrdinals();
 
   if (!isIdentityProjection()) {
     builder_->project(projections_);
@@ -552,8 +495,38 @@ bool GroupByPlanner::tryPlanGlobalAgg(
     return false;
   }
 
+  lowerBelowAggregate();
   buildAggregationPlan(selectExprs, orderBy, windowDefinitionExprs);
   return true;
+}
+
+void GroupByPlanner::lowerBelowAggregate() {
+  // A key in several grouping sets is one grouping key, evaluated once.
+  ExprMap<size_t> keyIndex;
+  std::vector<lp::ExprApi> readers;
+  for (const auto& groupingSet : groupingSets_) {
+    for (const auto& key : groupingSet) {
+      if (keyIndex.emplace(key.expr(), readers.size()).second) {
+        readers.push_back(key);
+      }
+    }
+  }
+  const auto numKeys = readers.size();
+  readers.insert(readers.end(), aggregates_.begin(), aggregates_.end());
+
+  // An item computed below the aggregate evaluates its subqueries there.
+  PlannedMarkers planned;
+  itemValues_ = selectProjection_.lowerBelowAggregate(
+      *builder_, projections_, readers, [&](const core::ExprPtr& expr) {
+        return planMarkers(expr, exprPlanner_, planned);
+      });
+
+  for (auto& groupingSet : groupingSets_) {
+    for (auto& key : groupingSet) {
+      key = readers.at(keyIndex.at(key.expr()));
+    }
+  }
+  loweredAggregates_.assign(readers.begin() + numKeys, readers.end());
 }
 
 bool GroupByPlanner::containsAggregate(
@@ -662,6 +635,29 @@ void GroupByPlanner::deduplicateGroupingKeys() {
   }
 }
 
+namespace {
+
+// True if 'expr' is or holds an aggregate or a window function.
+bool containsAggregateOrWindow(const core::ExprPtr& expr) {
+  if (expr->is(core::IExpr::Kind::kAggregate) ||
+      expr->is(core::IExpr::Kind::kWindow)) {
+    return true;
+  }
+  // A simple aggregate such as sum(x) is a plain call.
+  if (expr->is(core::IExpr::Kind::kCall) &&
+      exec::getAggregateFunctionEntry(expr->as<core::CallExpr>()->name())) {
+    return true;
+  }
+  bool found{false};
+  ExpressionPlanner::rewriteInputs(expr, [&](const core::ExprPtr& input) {
+    found = found || containsAggregateOrWindow(input);
+    return input;
+  });
+  return found;
+}
+
+} // namespace
+
 void GroupByPlanner::collectAggregates(
     const std::vector<lp::ExprApi>& selectExprs,
     const ExpressionPtr& having,
@@ -689,6 +685,23 @@ void GroupByPlanner::collectAggregates(
     projections_.emplace_back(selectExpr);
   }
 
+  // An aggregate can read another item through a lateral column alias. That
+  // item must not compute an aggregate or a window function itself.
+  for (const auto& aggregate : aggregates_) {
+    if (!selectProjection_.readsItem(aggregate.expr())) {
+      continue;
+    }
+    const auto inlined =
+        selectProjection_.inlineReferences(aggregate.expr(), selectExprs);
+    ExpressionPlanner::rewriteInputs(inlined, [&](const core::ExprPtr& input) {
+      VELOX_USER_CHECK(
+          !containsAggregateOrWindow(input),
+          "Cannot nest an aggregate or a window function inside aggregation: {}",
+          aggregate.expr()->as<core::CallExpr>()->name());
+      return input;
+    });
+  }
+
   for (const auto& expr : windowDefinitionExprs) {
     findAggregates(expr.expr(), aggregates_, aggregateSet);
   }
@@ -701,14 +714,36 @@ void GroupByPlanner::collectAggregates(
   }
 
   if (orderBy != nullptr) {
-    ExpressionPlanner::OutputAliasScope aliasScope{exprPlanner_, projections_};
+    ExpressionPlanner::OutputAliasScope aliasScope{
+        exprPlanner_, projections_, selectProjection_};
 
     const auto& sortItems = orderBy->sortItems();
     for (const auto& item : sortItems) {
-      auto expr = exprPlanner_.toExpr(
-          item->sortKey(), {.allowGrouping = true, .deferSubqueries = true});
+      const auto& sortKey = item->sortKey();
+      auto resolved =
+          selectProjection_.resolveSortKey(*sortKey, projections_, [&]() {
+            return exprPlanner_.toExpr(
+                sortKey, {.allowGrouping = true, .deferSubqueries = true});
+          });
+      sortKeyItems_.push_back(resolved.item);
+      if (resolved.item != 0) {
+        sortingKeyExprs_.emplace_back(projections_.at(resolved.item - 1));
+        continue;
+      }
+
+      const auto& expr = resolved.expr.value();
+      std::vector<lp::ExprApi> keyAggregates;
+      AggregateExprSet keyAggregateSet;
+      findAggregates(expr.expr(), keyAggregates, keyAggregateSet);
+      for (const auto& aggregate : keyAggregates) {
+        AXIOM_PRESTO_SEMANTIC_CHECK(
+            !selectProjection_.readsItem(aggregate.expr()),
+            sortKey->location(),
+            std::nullopt,
+            "Invalid reference to output projection attribute from ORDER BY aggregation");
+      }
       findAggregates(expr.expr(), aggregates_, aggregateSet);
-      sortingKeyExprs_.emplace_back(expr);
+      sortingKeyExprs_.push_back(expr);
     }
   }
 }
@@ -759,8 +794,8 @@ void GroupByPlanner::addAggregate(bool useGroupingSets) {
   // aggregate, so strip the colliding alias here; the subsequent project
   // step reapplies the alias on top of the aggregate, realizing the shadow.
   std::vector<lp::ExprApi> aggregateExprs;
-  aggregateExprs.reserve(aggregates_.size());
-  for (const auto& agg : aggregates_) {
+  aggregateExprs.reserve(loweredAggregates_.size());
+  for (const auto& agg : loweredAggregates_) {
     if (agg.name().has_value() &&
         groupingKeyNames.contains(agg.name().value())) {
       aggregateExprs.emplace_back(agg.expr());
@@ -794,10 +829,19 @@ void GroupByPlanner::rewritePostAggregateExprs(
     ++index;
   }
 
+  // SELECT, HAVING and ORDER BY read the aggregates as written.
   for (const auto& agg : aggregates_) {
     flatInputs_.emplace_back(outputColumns_.at(index).toCol());
     aggregateInputs.emplace(agg.expr(), flatInputs_.back().expr());
     ++index;
+  }
+
+  // An item a GROUP BY position names reads its grouping key.
+  for (const auto item : groupedItems_) {
+    const auto it = groupingKeyToIndex_.find(itemValues_.at(item));
+    VELOX_CHECK(it != groupingKeyToIndex_.end());
+    projections_[item] = lp::ExprApi(
+        flatInputs_.at(it->second).expr(), projections_[item].name());
   }
 
   // GROUPING() resolution introduces Col(kGroupingSetIdColumn) references
@@ -843,32 +887,11 @@ void GroupByPlanner::rewritePostAggregateExprs(
     builder_->filter(filter_.value());
   }
 
-  // Project nested window functions (e.g. sum(sum(a)) OVER () inside
-  // sum(a) / sum(sum(a)) OVER ()) and add replacements to keyInputs. These
-  // reach PlanBuilder here rather than through the rewrite below, so they are
-  // planned, not just substituted.
-  projectNestedWindows(substituteAndPlan, keyInputs);
-
   // Rewrite projections and sorting keys to reference post-aggregate columns.
-  // Top-level windows need rewriteWindowExpr to rewrite args and
-  // partition/order keys. Non-window expressions use replaceInputs which also
-  // substitutes nested window references added to keyInputs by
-  // projectNestedWindows above.
-
-  auto rewriteExpr = [&](lp::ExprApi& item) {
-    if (item.expr()->is(core::IExpr::Kind::kWindow)) {
-      item = rewriteWindowExpr(item, substituteAndPlan);
-    } else {
-      item = lp::ExprApi(substituteAndPlan(item.expr()), item.name());
+  for (auto* exprs : {&projections_, &sortingKeyExprs_}) {
+    for (auto& expr : *exprs) {
+      expr = lp::ExprApi(substituteAndPlan(expr.expr()), expr.name());
     }
-  };
-
-  for (auto& item : projections_) {
-    rewriteExpr(item);
-  }
-
-  for (auto& expr : sortingKeyExprs_) {
-    rewriteExpr(expr);
   }
 
   // A named window that no function uses is still checked.
@@ -877,68 +900,13 @@ void GroupByPlanner::rewritePostAggregateExprs(
   }
 }
 
-void GroupByPlanner::projectNestedWindows(
-    const std::function<core::ExprPtr(const core::ExprPtr&)>& rewriteIExpr,
-    ExprMap<core::ExprPtr>& keyInputs) {
-  std::unordered_map<const core::IExpr*, core::ExprPtr> windowExprPtrs;
-  std::vector<const core::IExpr*> windowOrder;
-  ExpressionPlanner::findNestedWindowExprs(
-      projections_, windowExprPtrs, windowOrder);
-  ExpressionPlanner::findNestedWindowExprs(
-      sortingKeyExprs_, windowExprPtrs, windowOrder);
-
-  if (windowOrder.empty()) {
-    return;
-  }
-
-  // Deduplicate structurally-identical windows so a window that appears in both
-  // a SELECT item and an ORDER BY expression is computed once.
-  ExprMap<size_t> columnByWindow;
-  std::vector<lp::ExprApi> windowExprs;
-  std::vector<size_t> columnOfWindow;
-  columnOfWindow.reserve(windowOrder.size());
-  for (const auto* exprPtr : windowOrder) {
-    const auto& windowExpr = windowExprPtrs.at(exprPtr);
-    auto [it, inserted] =
-        columnByWindow.emplace(windowExpr, windowExprs.size());
-    if (inserted) {
-      // Rewrite aggregate references in function arguments, partition keys,
-      // and order by keys.
-      windowExprs.push_back(
-          rewriteWindowExpr(lp::ExprApi(windowExpr), rewriteIExpr));
-    }
-    columnOfWindow.push_back(it->second);
-  }
-
-  builder_->with(windowExprs);
-
-  auto outputColumns =
-      builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
-
-  auto numInputColumns = outputColumns.size() - windowExprs.size();
-  for (size_t i = 0; i < windowOrder.size(); ++i) {
-    const auto& column = outputColumns.at(numInputColumns + columnOfWindow[i]);
-    keyInputs.emplace(windowExprPtrs.at(windowOrder[i]), column.toCol().expr());
-  }
-}
-
-std::vector<size_t> GroupByPlanner::resolveSortOrdinals(
-    const OrderByPtr& orderBy) {
+std::vector<size_t> GroupByPlanner::resolveSortOrdinals() {
   if (sortingKeyExprs_.empty()) {
     return {};
   }
 
-  VELOX_CHECK_EQ(orderBy->sortItems().size(), sortingKeyExprs_.size());
-  std::vector<size_t> preResolved(sortingKeyExprs_.size(), 0);
-  for (size_t i = 0; i < sortingKeyExprs_.size(); ++i) {
-    const auto& sortKey = orderBy->sortItems().at(i)->sortKey();
-    if (const auto position = LongLiteral::asSelectPosition(*sortKey)) {
-      preResolved.at(i) = position.value();
-    }
-  }
-
   return SortProjection::widenProjections(
-      sortingKeyExprs_, preResolved, projections_);
+      sortingKeyExprs_, sortKeyItems_, projections_);
 }
 
 bool GroupByPlanner::isIdentityProjection() const {
@@ -964,21 +932,18 @@ bool GroupByPlanner::isIdentityProjection() const {
 lp::ExprApi GroupByPlanner::resolveGroupingExpression(
     const ExpressionPtr& expr,
     const std::vector<lp::ExprApi>& selectExprs) {
-  if (const auto position = LongLiteral::asSelectPosition(*expr)) {
-    const auto n = position.value();
-    AXIOM_PRESTO_SEMANTIC_CHECK_GE(
-        n,
-        static_cast<int64_t>(1),
+  if (const auto position =
+          SelectProjection::position(*expr, selectExprs.size(), "GROUP BY")) {
+    const auto item = position.value() - 1;
+    AXIOM_PRESTO_SEMANTIC_CHECK(
+        !containsAggregateOrWindow(selectProjection_.inlineReferences(
+            selectExprs.at(item).expr(), selectExprs)),
         expr->location(),
-        std::to_string(n),
-        "GROUP BY position is not in select list");
-    AXIOM_PRESTO_SEMANTIC_CHECK_LE(
-        n,
-        static_cast<int64_t>(selectExprs.size()),
-        expr->location(),
-        std::to_string(n),
-        "GROUP BY position is not in select list");
-    return selectExprs.at(n - 1);
+        std::to_string(position.value()),
+        "GROUP BY clause cannot contain aggregations or window functions");
+    groupedItems_.insert(item);
+    return lp::ExprApi(
+        selectProjection_.reference(item), selectExprs.at(item).alias());
   }
   // Deferred so that a subquery written in both GROUP BY and SELECT is one
   // marker on both sides, and the SELECT occurrence therefore resolves to
@@ -1026,7 +991,15 @@ core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
   if (auto* call = asGroupingCall(expr)) {
     std::vector<int32_t> columnIndices;
     columnIndices.reserve(call->inputs().size());
-    for (const auto& input : call->inputs()) {
+    for (const auto& argument : call->inputs()) {
+      // An argument naming an output alias names the grouping key that item
+      // projects.
+      auto input = argument;
+      if (const auto item = selectProjection_.itemOf(argument)) {
+        input = itemValues_.at(item.value()) != nullptr
+            ? itemValues_.at(item.value())
+            : selectProjection_.inlineReferences(argument, projections_);
+      }
       VELOX_USER_CHECK(
           input->is(core::IExpr::Kind::kFieldAccess),
           "GROUPING() arguments must be column references");
@@ -1093,30 +1066,10 @@ core::ExprPtr GroupByPlanner::rewriteGroupingMarker(const core::ExprPtr& expr) {
         .expr();
   }
 
-  // A WindowCallExpr keeps its PARTITION BY and ORDER BY keys outside
-  // inputs(), so rewrite the whole window spec.
-  if (expr->is(core::IExpr::Kind::kWindow)) {
-    return rewriteWindowExpr(
-               lp::ExprApi(expr),
-               [this](const core::ExprPtr& input) {
-                 return rewriteGroupingMarker(input);
-               })
-        .expr();
-  }
-
-  std::vector<core::ExprPtr> newInputs;
-  bool changed = false;
-  for (const auto& input : expr->inputs()) {
-    auto resolved = rewriteGroupingMarker(input);
-    if (resolved != input) {
-      changed = true;
-    }
-    newInputs.push_back(std::move(resolved));
-  }
-  if (changed) {
-    return expr->replaceInputs(std::move(newInputs));
-  }
-  return expr;
+  return ExpressionPlanner::rewriteInputs(
+      expr, [this](const core::ExprPtr& input) {
+        return rewriteGroupingMarker(input);
+      });
 }
 
 void GroupByPlanner::resolveGroupingCalls(std::vector<lp::ExprApi>& exprs) {

@@ -41,6 +41,7 @@
 #include "axiom/sql/presto/ParserOptions.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/RecursiveCteValidator.h"
+#include "axiom/sql/presto/SelectProjection.h"
 #include "axiom/sql/presto/ShowStatsBuilder.h"
 #include "axiom/sql/presto/SortProjection.h"
 #include "axiom/sql/presto/VectorIndexRefresh.h"
@@ -137,28 +138,6 @@ std::pair<std::string, facebook::axiom::SchemaTableName> toConnectorTable(
       defaultConnectorId,
       defaultSchema,
       ParserOptions::kInformationSchemaConnectorIdDefault);
-}
-
-// Recursively replaces expression tree nodes per the replacement map.
-core::ExprPtr replaceInputs(
-    const core::ExprPtr& expr,
-    const std::unordered_map<const core::IExpr*, core::ExprPtr>& replacements) {
-  auto it = replacements.find(expr.get());
-  if (it != replacements.end()) {
-    return it->second;
-  }
-
-  std::vector<core::ExprPtr> newInputs;
-  bool changed = false;
-  for (const auto& input : expr->inputs()) {
-    auto newInput = replaceInputs(input, replacements);
-    if (newInput.get() != input.get()) {
-      changed = true;
-    }
-    newInputs.push_back(std::move(newInput));
-  }
-
-  return changed ? expr->replaceInputs(std::move(newInputs)) : expr;
 }
 
 lp::ExprResolver::SqlFunctionResolver makeSqlFunctionResolver(
@@ -1161,9 +1140,11 @@ class RelationPlanner : public AstVisitor {
   // Converts SELECT items to ExprApi projections. Expands AllColumns (*),
   // SelectColumns (COLUMNS(...)), EXCLUDE, and REPLACE. Returns std::nullopt
   // for a single plain SELECT * (no EXCLUDE/REPLACE). Window functions are
-  // embedded as WindowCallExpr in the IExpr tree.
+  // embedded as WindowCallExpr in the IExpr tree. A lateral column alias
+  // translates to a reference to its SELECT item; see SelectProjection.
   std::optional<std::vector<lp::ExprApi>> buildSelectProjections(
       const std::vector<SelectItemPtr>& selectItems,
+      SelectProjection& selectProjection,
       ExprOptions options = {}) {
     // Previous SELECT's display names must not leak into this scope.
     displayNames_.lastNames.clear();
@@ -1179,9 +1160,10 @@ class RelationPlanner : public AstVisitor {
       return std::nullopt;
     }
 
-    // Lateral column alias map: alias name → expression. When friendlySql is
-    // enabled, aliases defined in earlier SELECT items can be referenced in
-    // later items. Populated left-to-right as aliases are encountered.
+    // Lateral column alias map: alias name → reference to its SELECT item.
+    // When friendlySql is enabled, aliases defined in earlier SELECT items can
+    // be referenced in later items. Populated left-to-right as aliases are
+    // encountered.
     // Columns, including those of enclosing queries, take priority over
     // aliases (e.g., SELECT a AS b, b FROM t — second b is column b).
     folly::F14FastMap<std::string, core::ExprPtr> aliasExprs;
@@ -1268,7 +1250,7 @@ class RelationPlanner : public AstVisitor {
           // Normal SingleColumn handling.
           if (alias.has_value()) {
             if (options_.friendlySql) {
-              aliasExprs[*alias] = expr.expr();
+              aliasExprs[*alias] = selectProjection.reference(exprs.size());
             }
             expr = expr.as(*alias);
           }
@@ -1282,53 +1264,14 @@ class RelationPlanner : public AstVisitor {
     return exprs;
   }
 
-  // Extracts nested window functions from the projections. Called after
-  // buildSelectProjections for non-GROUP BY queries. GROUP BY queries
-  // handle window extraction after aggregate rewriting in GroupByPlanner.
-  // Only extracts windows that are nested inside non-window expressions
-  // (e.g., sum(a) / sum(sum(a)) OVER ()). Top-level window projections
-  // are handled by PlanBuilder::project via resolveWindowTypes.
-  void extractNestedWindows(std::vector<lp::ExprApi>& exprs) {
-    std::unordered_map<const core::IExpr*, core::ExprPtr> windowExprPtrs;
-    std::vector<const core::IExpr*> windowOrder;
-    ExpressionPlanner::findNestedWindowExprs(
-        exprs, windowExprPtrs, windowOrder);
-
-    if (windowOrder.empty()) {
-      return;
-    }
-
-    std::vector<lp::ExprApi> windowExprs;
-    windowExprs.reserve(windowOrder.size());
-    for (const auto* exprPtr : windowOrder) {
-      windowExprs.emplace_back(windowExprPtrs.at(exprPtr));
-    }
-
-    builder_->with(windowExprs);
-
-    auto outputNames =
-        builder_->findOrAssignOutputNames(/*includeHiddenColumns=*/false);
-    auto numInputColumns = outputNames.size() - windowOrder.size();
-
-    std::unordered_map<const core::IExpr*, core::ExprPtr> replacements;
-    for (size_t i = 0; i < windowOrder.size(); ++i) {
-      const auto& column = outputNames.at(numInputColumns + i);
-      replacements.emplace(windowOrder[i], column.toCol().expr());
-    }
-
-    for (auto& expr : exprs) {
-      expr =
-          lp::ExprApi(replaceInputs(expr.expr(), replacements), expr.alias());
-    }
-  }
-
   // Like buildSelectProjections, but always returns a result (expands single
-  // SELECT * instead of returning nullopt). Does NOT extract nested windows —
-  // the caller is responsible for that.
+  // SELECT * instead of returning nullopt).
   std::vector<lp::ExprApi> expandSelectExprs(
       const std::vector<SelectItemPtr>& selectItems,
+      SelectProjection& selectProjection,
       ExprOptions options = {}) {
-    auto result = buildSelectProjections(selectItems, options);
+    auto result =
+        buildSelectProjections(selectItems, selectProjection, options);
     if (result.has_value()) {
       return result.value();
     }
@@ -1340,12 +1283,11 @@ class RelationPlanner : public AstVisitor {
     return exprs;
   }
 
-  // Build sort key expressions. Ordinals are resolved to the corresponding
-  // SELECT projection expression so the sort key matches its SELECT item
-  // by expression identity. COLUMNS() calls are expanded to multiple sort
-  // keys. Returns the expanded sort key expressions, pre-resolved ordinals,
-  // and sort ordering info (since expansion may produce more keys than
-  // original sort items).
+  // Build sort key expressions. A position or an output alias resolves to the
+  // SELECT item it names, as a pre-resolved ordinal. COLUMNS() calls are
+  // expanded to multiple sort keys. Returns the expanded sort key expressions,
+  // pre-resolved ordinals, and sort ordering info (since expansion may produce
+  // more keys than original sort items).
   struct SortKeyExpansion {
     std::vector<lp::ExprApi> sortKeyExprs;
     std::vector<size_t> preResolved;
@@ -1359,87 +1301,71 @@ class RelationPlanner : public AstVisitor {
   SortKeyExpansion buildSortKeyExprs(
       const OrderByPtr& orderBy,
       const std::vector<lp::ExprApi>& projections,
+      SelectProjection& selectProjection,
       ExprOptions options) {
-    const size_t numSelectItems = projections.size();
-
-    ExpressionPlanner::OutputAliasScope aliasScope{exprPlanner_, projections};
+    ExpressionPlanner::OutputAliasScope aliasScope{
+        exprPlanner_, projections, selectProjection};
 
     SortKeyExpansion result;
     for (const auto& item : orderBy->sortItems()) {
-      const auto& sortExpr = item->sortKey();
-      if (const auto position = LongLiteral::asSelectPosition(*sortExpr)) {
-        const auto n = position.value();
-        AXIOM_PRESTO_SEMANTIC_CHECK_GE(
-            n,
-            static_cast<int64_t>(1),
-            sortExpr->location(),
-            std::to_string(n),
-            "ORDER BY position is not in the select list");
-        AXIOM_PRESTO_SEMANTIC_CHECK_LE(
-            n,
-            static_cast<int64_t>(numSelectItems),
-            sortExpr->location(),
-            std::to_string(n),
-            "ORDER BY position is not in the select list");
-        result.preResolved.push_back(n);
-        result.sortKeyExprs.emplace_back(projections.at(n - 1));
+      const auto append = [&](lp::ExprApi expr, size_t selectItem) {
+        result.preResolved.push_back(selectItem);
+        result.sortKeyExprs.push_back(std::move(expr));
         result.ascending.push_back(item->isAscending());
         result.nullsFirst.push_back(item->isNullsFirst());
-      } else {
-        auto expr = toExpr(sortExpr, options);
-        auto expanded =
-            ColumnsExpansion::expand(expr, *builder_, sortExpr->location());
-        if (!expanded.empty()) {
-          for (auto& expandedExpr : expanded) {
-            result.preResolved.push_back(0);
-            result.sortKeyExprs.push_back(std::move(expandedExpr));
-            result.ascending.push_back(item->isAscending());
-            result.nullsFirst.push_back(item->isNullsFirst());
-          }
-        } else {
-          result.preResolved.push_back(0);
-          result.sortKeyExprs.emplace_back(std::move(expr));
-          result.ascending.push_back(item->isAscending());
-          result.nullsFirst.push_back(item->isNullsFirst());
-        }
+      };
+
+      const auto& sortExpr = item->sortKey();
+      auto sortKey = selectProjection.resolveSortKey(
+          *sortExpr, projections, [&]() { return toExpr(sortExpr, options); });
+      if (sortKey.item != 0) {
+        append(projections.at(sortKey.item - 1), sortKey.item);
+        continue;
+      }
+
+      auto& expr = sortKey.expr.value();
+      auto expanded =
+          ColumnsExpansion::expand(expr, *builder_, sortExpr->location());
+      if (expanded.empty()) {
+        append(std::move(expr), 0);
+      }
+      for (auto& expandedExpr : expanded) {
+        append(std::move(expandedExpr), 0);
       }
     }
     return result;
   }
 
-  // Adds project and sort nodes. In order to provide sort with schema-level
-  // visibility, we project twice: once with the items in the SELECT list AND
-  // table columns referenced by the sort keys and once with just the items in
-  // the SELECT list. There are a few edge cases with unique behavior, however.
-  // If the projection list is null (SELECT *), we exit early without projecting
-  // and if there is no ORDER BY clause, we just project the SELECT list only.
+  // Adds project and sort nodes. Nested windows and items read through an
+  // alias are projected first. Then, to give the sort schema-level visibility,
+  // we project twice: once with the items in the SELECT list AND the sort keys
+  // they do not cover, and once with just the items in the SELECT list. If the
+  // projection list is null (SELECT *), we exit early without projecting, and
+  // if there is no ORDER BY clause, we project the SELECT list only.
   void addProjectAndOrderBy(
       const std::vector<SelectItemPtr>& selectItems,
-      const OrderByPtr& orderBy) {
-    auto projections = buildSelectProjections(selectItems);
+      const OrderByPtr& orderBy,
+      SelectProjection& selectProjection) {
+    auto projections = buildSelectProjections(selectItems, selectProjection);
     if (!projections.has_value()) {
       addOrderBy(orderBy);
       builder_->dropHiddenColumns();
       return;
     }
     if (orderBy == nullptr) {
-      extractNestedWindows(projections.value());
+      selectProjection.lower(*builder_, projections.value());
       builder_->project(projections.value());
       return;
     }
 
     const size_t numSelectItems = projections->size();
-    auto expansion = buildSortKeyExprs(orderBy, projections.value(), {});
+    auto expansion =
+        buildSortKeyExprs(orderBy, projections.value(), selectProjection, {});
+    selectProjection.lower(
+        *builder_, projections.value(), expansion.sortKeyExprs);
 
     auto ordinals = SortProjection::widenProjections(
         expansion.sortKeyExprs, expansion.preResolved, projections.value());
-    // Extract nested windows after widening. An ORDER BY expression that
-    // repeats a SELECT window (e.g. `x / SUM(x) OVER()`) is matched to its
-    // SELECT item by raw expression during widening, collapsing to an ordinal;
-    // extracting earlier would rewrite the SELECT item but not the sort key, so
-    // the two would no longer match and the sort key would be re-added as an
-    // unresolvable nested-window projection.
-    extractNestedWindows(projections.value());
     builder_->project(projections.value());
     SortProjection::sortAndTrim(
         *builder_,
@@ -1452,8 +1378,9 @@ class RelationPlanner : public AstVisitor {
   // Adds project, distinct, and sort nodes for a no-GROUP-BY SELECT DISTINCT.
   void addDistinctAndOrderBy(
       const std::vector<SelectItemPtr>& selectItems,
-      const OrderByPtr& orderBy) {
-    auto projections = buildSelectProjections(selectItems);
+      const OrderByPtr& orderBy,
+      SelectProjection& selectProjection) {
+    auto projections = buildSelectProjections(selectItems, selectProjection);
     if (!projections.has_value()) {
       builder_->dropHiddenColumns();
       builder_->distinct();
@@ -1461,24 +1388,22 @@ class RelationPlanner : public AstVisitor {
       return;
     }
 
-    // Match ORDER BY against the SELECT list before extractNestedWindows
-    // rewrites nested windows to column references; otherwise a sort key that
-    // repeats a SELECT window (e.g. `x / sum(x) OVER ()`) would not match its
-    // SELECT item. The matched ordinals index the projected output
-    // positionally.
-    auto selectExprs = projections.value();
-
     std::optional<SortKeyExpansion> sortKeys;
     if (orderBy != nullptr) {
-      sortKeys = buildSortKeyExprs(orderBy, selectExprs, {});
+      sortKeys =
+          buildSortKeyExprs(orderBy, projections.value(), selectProjection, {});
     }
-
-    extractNestedWindows(projections.value());
+    if (sortKeys.has_value()) {
+      selectProjection.lower(
+          *builder_, projections.value(), sortKeys->sortKeyExprs);
+    } else {
+      selectProjection.lower(*builder_, projections.value());
+    }
     builder_->project(projections.value());
 
     if (sortKeys.has_value()) {
       addDistinctAndSortOnProjection(
-          selectExprs, orderBy, std::move(sortKeys.value()));
+          projections.value(), orderBy, std::move(sortKeys.value()));
     } else {
       builder_->distinct();
     }
@@ -1516,23 +1441,9 @@ class RelationPlanner : public AstVisitor {
   }
 
   lp::ExprApi toSortingKey(const ExpressionPtr& expr, ExprOptions options) {
-    if (const auto position = LongLiteral::asSelectPosition(*expr)) {
-      const auto n = position.value();
-      AXIOM_PRESTO_SEMANTIC_CHECK_GE(
-          n,
-          static_cast<int64_t>(1),
-          expr->location(),
-          std::to_string(n),
-          "ORDER BY position is not in the select list");
-      AXIOM_PRESTO_SEMANTIC_CHECK_LE(
-          n,
-          static_cast<int64_t>(builder_->numOutput()),
-          expr->location(),
-          std::to_string(n),
-          "ORDER BY position is not in the select list");
-      const auto column = builder_->findOrAssignOutputNameAt(n - 1);
-
-      return column.toCol();
+    if (const auto position = SelectProjection::position(
+            *expr, builder_->numOutput(), "ORDER BY")) {
+      return builder_->findOrAssignOutputNameAt(position.value() - 1).toCol();
     }
 
     return toExpr(expr, options);
@@ -1819,9 +1730,13 @@ class RelationPlanner : public AstVisitor {
         {.allowGrouping = groupBy != nullptr,
          .deferSubqueries = groupBy != nullptr || hasAggregate}};
 
+    SelectProjection selectProjection{context_.nameAllocator};
+
     if (groupBy != nullptr) {
       auto selectExprs = expandSelectExprs(
-          selectItems, {.allowGrouping = true, .deferSubqueries = true});
+          selectItems,
+          selectProjection,
+          {.allowGrouping = true, .deferSubqueries = true});
 
       // Sort keys of a DISTINCT are built here, before GroupByPlanner
       // projects and aggregates: a qualified key like `t.a` names a column of
@@ -1831,13 +1746,14 @@ class RelationPlanner : public AstVisitor {
         sortKeys = buildSortKeyExprs(
             orderBy,
             selectExprs,
+            selectProjection,
             {.allowGrouping = true, .deferSubqueries = true});
       }
 
       // When DISTINCT is also present, skip ORDER BY in the GROUP BY
       // planner so the Sort lands ABOVE the DISTINCT aggregate.
       const OrderByPtr noOrderBy;
-      GroupByPlanner{builder_, exprPlanner_}.plan(
+      GroupByPlanner{builder_, exprPlanner_, selectProjection}.plan(
           groupBy->groupingElements(),
           groupBy->isDistinct(),
           selectExprs,
@@ -1856,14 +1772,15 @@ class RelationPlanner : public AstVisitor {
     } else {
       bool plannedGlobalAggregation{false};
       if (hasAggregate) {
-        const auto selectExprs =
-            expandSelectExprs(selectItems, {.deferSubqueries = true});
+        const auto selectExprs = expandSelectExprs(
+            selectItems, selectProjection, {.deferSubqueries = true});
         plannedGlobalAggregation =
-            GroupByPlanner{builder_, exprPlanner_}.tryPlanGlobalAgg(
-                selectExprs,
-                node->having(),
-                orderBy,
-                windows.definitionExprs());
+            GroupByPlanner{builder_, exprPlanner_, selectProjection}
+                .tryPlanGlobalAgg(
+                    selectExprs,
+                    node->having(),
+                    orderBy,
+                    windows.definitionExprs());
       }
 
       if (plannedGlobalAggregation) {
@@ -1877,11 +1794,11 @@ class RelationPlanner : public AstVisitor {
         addFilter(node->having());
 
         if (distinct) {
-          addDistinctAndOrderBy(selectItems, orderBy);
+          addDistinctAndOrderBy(selectItems, orderBy, selectProjection);
         } else {
           // Widen the projection to include any ORDER BY columns not in the
           // SELECT list, sort, then project again using only the SELECT list.
-          addProjectAndOrderBy(selectItems, orderBy);
+          addProjectAndOrderBy(selectItems, orderBy, selectProjection);
         }
       }
     }

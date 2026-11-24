@@ -138,6 +138,15 @@ TEST_F(SortParserTest, groupBy) {
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY b"),
       "Column must be an aggregate expression or appear in GROUP BY clause: b");
+
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT a, sum(b) FROM t GROUP BY a ORDER BY 3"),
+      "ORDER BY position is not in the select list: 3");
+
+  // An aggregate in ORDER BY reads the input, not the output columns.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT a AS b FROM t GROUP BY a ORDER BY sum(b)"),
+      "Invalid reference to output projection attribute from ORDER BY aggregation");
 }
 
 TEST_F(SortParserTest, nonSelectedColumn) {
@@ -399,6 +408,16 @@ TEST_F(SortParserTest, distinct) {
       matchScan().project({"a"}).aggregate({"z"}, {}).sort({"z"}).output(
           {"z"}));
 
+  // A sort key that reads an output alias matches the item with the same
+  // expression once the alias is expanded.
+  testSelect(
+      "SELECT DISTINCT a * 2 AS b, a * 2 + 1 AS c FROM t ORDER BY b + 1",
+      matchScan()
+          .project({"a * 2 as b", "a * 2 + 1 as c"})
+          .aggregate({"b", "c"}, {})
+          .sort({"c"})
+          .output({"b", "c"}));
+
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql(
           "SELECT DISTINCT a "
@@ -525,6 +544,9 @@ TEST_F(SortParserTest, differentExpressions) {
           .output({"ab_sum"}));
 }
 
+// An ORDER BY expression that names an output alias reads the SELECT item's
+// column. A computed item is projected below the sort key that reads it, so
+// it is evaluated once.
 TEST_F(SortParserTest, outputAliasInExpression) {
   connector_->addTable("t", ROW({"a"}, INTEGER()));
   connector_->addTable("t2", ROW({"a", "b"}, INTEGER()));
@@ -532,8 +554,9 @@ TEST_F(SortParserTest, outputAliasInExpression) {
   testSelect(
       "SELECT a * 2 AS b FROM t ORDER BY b * -1",
       matchScan()
-          .project({"a * 2 as b", "a * 2 * -1 as sortFun"})
-          .sort({"sortFun"})
+          .project({"a", "\"$row_id\"", "a * 2 as b"})
+          .project({"b", "b * -1 as key"})
+          .sort({"key"})
           .project({"b"})
           .output({"b"}));
 
@@ -541,29 +564,59 @@ TEST_F(SortParserTest, outputAliasInExpression) {
       "SELECT a * 2 AS b FROM t ORDER BY b",
       matchScan().project({"a * 2 as b"}).sort({"b"}).output({"b"}));
 
+  // The alias names its item even when another item has the same expression.
+  testSelect(
+      "SELECT random() AS x, random() AS y FROM t ORDER BY y",
+      matchScan()
+          .project({"rand() as x", "rand() as y"})
+          .sort({"y"})
+          .output({"x", "y"}));
+
   testSelect(
       "SELECT a * -2 AS a FROM t ORDER BY a * -1",
       matchScan()
-          .project({"a * -2 as selectFun", "a * -2 * -1 as sortFun"})
-          .sort({"sortFun"})
-          .project({"selectFun"})
+          .project({"a", "\"$row_id\"", "a * -2 as item"})
+          .project({"item as output", "item * -1 as key"})
+          .sort({"key"})
+          .project({"output"})
           .output({"a"}));
 
   testSelect(
       "SELECT a AS b, a * -2 AS c FROM t ORDER BY b + c",
       matchScan()
-          .project({"a as b", "a * -2 as c", "a + a * -2 as sortFun"})
-          .sort({"sortFun"})
+          .project({"a", "\"$row_id\"", "a * -2 as c"})
+          .project({"a as b", "c", "a + c as key"})
+          .sort({"key"})
           .project({"b", "c"})
           .output({"b", "c"}));
 
   testSelect(
       "SELECT 1 AS x FROM t ORDER BY x + 1",
       matchScan()
-          .project({"1 as x", "1 + 1 as sortFun"})
-          .sort({"sortFun"})
+          .project({"a", "\"$row_id\"", "1 as x"})
+          .project({"x", "x + 1 as key"})
+          .sort({"key"})
           .project({"x"})
           .output({"x"}));
+
+  testSelect(
+      "SELECT random() AS r FROM t ORDER BY r + 1",
+      matchScan()
+          .project({"a", "\"$row_id\"", "rand() as r"})
+          .project({"r", "r + 1::double as key"})
+          .sort({"key"})
+          .project({"r"})
+          .output({"r"}));
+
+  testSelect(
+      "SELECT a, random() AS r FROM t GROUP BY a ORDER BY r + 1",
+      matchScan()
+          .aggregate({"a"}, {})
+          .project({"a", "rand() as r"})
+          .project({"a", "r", "r + 1::double as key"})
+          .sort({"key"})
+          .project({"a", "r"})
+          .output({"a", "r"}));
 
   AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
       parseSql("SELECT 1 AS a, a FROM t2 ORDER BY a + 1"),
@@ -572,8 +625,8 @@ TEST_F(SortParserTest, outputAliasInExpression) {
   testSelect(
       "SELECT 1 AS a, a FROM t2 ORDER BY b + 1",
       matchScan()
-          .project({"1 as alias", "a as col", "b + 1 as sortFun"})
-          .sort({"sortFun"})
+          .project({"1 as alias", "a as col", "b + 1 as key"})
+          .sort({"key"})
           .project({"alias", "col"})
           .output({"a", "a"}));
 }

@@ -21,9 +21,12 @@
 #include "axiom/sql/presto/ExpressionPlanner.h"
 #include "axiom/sql/presto/ast/AstNodesAll.h"
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 #include "velox/parse/IExpr.h"
 
 namespace axiom::sql::presto {
+
+class SelectProjection;
 
 namespace lp = facebook::axiom::logical_plan;
 
@@ -35,10 +38,15 @@ class GroupByPlanner {
   /// nodes.
   static constexpr std::string_view kGroupingFunctionName = "grouping";
 
+  /// 'selectProjection' holds the references made to SELECT items through
+  /// their output aliases, and computes what the final projection reads.
   GroupByPlanner(
       std::shared_ptr<lp::PlanBuilder>& builder,
-      ExpressionPlanner& exprPlanner)
-      : builder_(builder), exprPlanner_(exprPlanner) {}
+      ExpressionPlanner& exprPlanner,
+      SelectProjection& selectProjection)
+      : builder_(builder),
+        exprPlanner_(exprPlanner),
+        selectProjection_(selectProjection) {}
 
   /// Plans a GROUP BY clause with optional HAVING and ORDER BY.
   /// When 'distinct' is true (GROUP BY DISTINCT), duplicate grouping sets
@@ -92,19 +100,11 @@ class GroupByPlanner {
   void rewritePostAggregateExprs(
       const std::vector<lp::ExprApi>& windowDefinitionExprs);
 
-  // Projects nested window functions (kWindow nodes inside non-window
-  // expressions) into a separate plan node via builder_->with(). Records
-  // replacement mappings in 'keyInputs' for the caller's projection rewrite.
-  void projectNestedWindows(
-      const std::function<facebook::velox::core::ExprPtr(
-          const facebook::velox::core::ExprPtr&)>& rewriteIExpr,
-      folly::F14FastMap<
-          facebook::velox::core::ExprPtr,
-          facebook::velox::core::ExprPtr,
-          facebook::velox::core::IExprHash,
-          facebook::velox::core::IExprEqual>& keyInputs);
+  // Replaces the references to SELECT items in the grouping keys and
+  // aggregates, which are evaluated below the aggregate.
+  void lowerBelowAggregate();
 
-  std::vector<size_t> resolveSortOrdinals(const OrderByPtr& orderBy);
+  std::vector<size_t> resolveSortOrdinals();
   bool isIdentityProjection() const;
 
   lp::ExprApi resolveGroupingExpression(
@@ -129,6 +129,7 @@ class GroupByPlanner {
   // Injected dependencies.
   std::shared_ptr<lp::PlanBuilder>& builder_;
   ExpressionPlanner& exprPlanner_;
+  SelectProjection& selectProjection_;
 
   // Shared state across phases.
   folly::F14FastMap<const Expression*, lp::ExprApi> exprCache_;
@@ -144,8 +145,21 @@ class GroupByPlanner {
   // AggregateCallExpr nodes within the IExpr tree.
   std::vector<lp::ExprApi> aggregates_;
 
+  // 'aggregates_' with the references to SELECT items replaced.
+  std::vector<lp::ExprApi> loweredAggregates_;
+
+  // What the grouping keys and aggregates read for each SELECT item; nullptr
+  // for an item they do not read. See SelectProjection::lowerBelowAggregate.
+  std::vector<facebook::velox::core::ExprPtr> itemValues_;
+
+  // SELECT items a GROUP BY position names.
+  folly::F14FastSet<size_t> groupedItems_;
+
   std::optional<lp::ExprApi> filter_;
   std::vector<lp::ExprApi> sortingKeyExprs_;
+  // 1-based SELECT item each sort key names by position or by output alias;
+  // 0 for a key that is an expression. Parallel to 'sortingKeyExprs_'.
+  std::vector<size_t> sortKeyItems_;
   // Names of the aggregate's output columns, in output order. A column whose
   // bare name is ambiguous is reachable only through its relation alias.
   std::vector<lp::PlanBuilder::OutputColumnName> outputColumns_;
