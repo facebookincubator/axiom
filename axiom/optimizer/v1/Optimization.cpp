@@ -304,9 +304,9 @@ void Optimization::applyFilteredStats(
   baseTable.filteredCardinality = stats->numRows * rejectedSelectivity;
 
   // Update column values with refined constraints from rejected filters.
-  for (const auto& [columnId, constrainedValue] : constraints) {
+  for (const auto& [expr, constrainedValue] : constraints) {
     for (auto* column : baseTable.columns) {
-      if (column->id() == columnId) {
+      if (column == expr) {
         auto& value = const_cast<Value&>(column->value());
         value.cardinality = constrainedValue.cardinality;
         value.min = constrainedValue.min;

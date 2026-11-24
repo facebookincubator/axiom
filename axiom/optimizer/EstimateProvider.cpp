@@ -71,7 +71,7 @@ Estimate remap(
   result.maxCardinality = estimate.maxCardinality;
   for (size_t i = 0; i < from.size(); ++i) {
     result.constraints.insert_or_assign(
-        to[i]->id(), value(estimate.constraints, from[i]));
+        to[i], value(estimate.constraints, from[i]));
   }
   return result;
 }
@@ -101,7 +101,7 @@ Estimate combineRounds(
     }
     Value combined = UnionConstraints::combine(values, cardinalities);
     combined.cardinality = largestNdv;
-    result.constraints.insert_or_assign(column->id(), std::move(combined));
+    result.constraints.insert_or_assign(column, std::move(combined));
   }
   return result;
 }
@@ -121,7 +121,7 @@ void capNdvAtCardinality(const ColumnVector& columns, Estimate& estimate) {
         *current.cardinality > *estimate.cardinality) {
       Value capped = current;
       capped.cardinality = *estimate.cardinality;
-      estimate.constraints.insert_or_assign(column->id(), std::move(capped));
+      estimate.constraints.insert_or_assign(column, std::move(capped));
     }
   }
 }
@@ -391,11 +391,11 @@ Estimate EstimateProvider::compute(NodeCP node) {
       for (size_t i = 0; i < outputColumns.size(); ++i) {
         if (i < groupingKeys.size()) {
           result.constraints.insert_or_assign(
-              outputColumns[i]->id(),
+              outputColumns[i],
               groupingKeyValue(value(expressions, groupingKeys[i]), numGroups));
         } else {
           result.constraints.insert_or_assign(
-              outputColumns[i]->id(),
+              outputColumns[i],
               estimator.estimateAggregate(
                   *aggregate->aggregates()[i - groupingKeys.size()],
                   numGroups));
@@ -443,7 +443,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
               unnested.nullFraction = std::nullopt;
             }
             result.constraints.insert_or_assign(
-                columns[j]->id(), std::move(unnested));
+                columns[j], std::move(unnested));
           }
         }
       }
@@ -489,7 +489,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
               estimate(inputs[j]).constraints, unionAll->legColumns()[j][i]));
         }
         result.constraints.insert_or_assign(
-            outputColumns[i]->id(),
+            outputColumns[i],
             UnionConstraints::combine(inputValues, cardinalities));
       }
       return result;
@@ -562,9 +562,9 @@ Estimate EstimateProvider::compute(NodeCP node) {
         if (output == source) {
           continue;
         }
-        if (const auto it = result.constraints.find(source->id());
+        if (const auto it = result.constraints.find(source);
             it != result.constraints.end()) {
-          result.constraints.insert_or_assign(output->id(), it->second);
+          result.constraints.insert_or_assign(output, it->second);
         }
       }
       return result;
@@ -720,7 +720,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
           }
         }
         result.constraints.insert_or_assign(
-            project->outputColumns()[i]->id(), std::move(output));
+            project->outputColumns()[i], std::move(output));
       }
       return result;
     }

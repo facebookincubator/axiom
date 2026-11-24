@@ -643,7 +643,7 @@ void DerivedTable::updateConstraints(const RelationOp& plan) {
   const auto& constraints = plan.constraints();
   VELOX_CHECK_EQ(outputColumns->size(), planColumns.size());
   for (size_t i = 0; i < outputColumns->size(); ++i) {
-    auto it = constraints.find(planColumns[i]->id());
+    auto it = constraints.find(planColumns[i]);
     VELOX_CHECK(
         it != constraints.end(),
         "Missing constraint for column: {}",

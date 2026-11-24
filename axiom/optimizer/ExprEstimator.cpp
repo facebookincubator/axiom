@@ -217,8 +217,7 @@ Value ExprEstimator::estimate(ExprCP expr, bool update) {
   const bool isLeaf =
       expr->is(PlanType::kLiteralExpr) || expr->is(PlanType::kColumnExpr);
   if (!update || isLeaf) {
-    if (const auto it = constraints_.find(expr->id());
-        it != constraints_.end()) {
+    if (const auto it = constraints_.find(expr); it != constraints_.end()) {
       return it->second;
     }
   }
@@ -236,7 +235,7 @@ Value ExprEstimator::estimate(ExprCP expr, bool update) {
   }
 
   result = clampCardinality(result);
-  constraints_.insert_or_assign(expr->id(), result);
+  constraints_.insert_or_assign(expr, result);
   return result;
 }
 

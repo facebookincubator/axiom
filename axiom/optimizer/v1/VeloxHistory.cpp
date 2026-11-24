@@ -36,9 +36,9 @@ namespace {
 // to prevent arbitrary mutations. However, constraint propagation legitimately
 // needs to update column values based on filter selectivity.
 void setBaseTableValues(const ConstraintMap& constraints, BaseTable& table) {
-  for (const auto& [columnId, constrainedValue] : constraints) {
+  for (const auto& [expr, constrainedValue] : constraints) {
     for (auto* column : table.columns) {
-      if (column->id() == columnId) {
+      if (column == expr) {
         auto& value = const_cast<Value&>(column->value());
         value.cardinality = constrainedValue.cardinality;
         value.min = constrainedValue.min;

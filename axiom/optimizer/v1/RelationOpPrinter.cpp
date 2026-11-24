@@ -112,7 +112,7 @@ class ToTextVisitor : public RelationOpVisitor {
                 << op.columns()[i]->toString()
                 << " := " << op.exprs()[i]->toString();
       if (myCtx.options.includeConstraints) {
-        myCtx.out << formatConstraint(op, op.columns()[i]->id());
+        myCtx.out << formatConstraint(op, op.columns()[i]);
       }
       myCtx.out << std::endl;
     }
@@ -179,8 +179,7 @@ class ToTextVisitor : public RelationOpVisitor {
                 << op.columns()[i + numGrouppingKeys]->toString()
                 << " := " << op.aggregates[i]->toString();
       if (myCtx.options.includeConstraints) {
-        myCtx.out << formatConstraint(
-            op, op.columns()[i + numGrouppingKeys]->id());
+        myCtx.out << formatConstraint(op, op.columns()[i + numGrouppingKeys]);
       }
       myCtx.out << std::endl;
     }
@@ -353,8 +352,8 @@ class ToTextVisitor : public RelationOpVisitor {
 
   // Formats constraint info for a column, e.g. " BIGINT (ndv=2.00 min=3
   // max=4)". Returns empty string if no constraint found.
-  static std::string formatConstraint(const RelationOp& op, int32_t columnId) {
-    auto it = op.constraints().find(columnId);
+  static std::string formatConstraint(const RelationOp& op, ExprCP expr) {
+    auto it = op.constraints().find(expr);
     if (it == op.constraints().end()) {
       return "";
     }
@@ -391,7 +390,7 @@ class ToTextVisitor : public RelationOpVisitor {
     }
     std::vector<std::string> lines;
     for (auto* column : op.columns()) {
-      auto constraint = formatConstraint(op, column->id());
+      auto constraint = formatConstraint(op, column);
       if (!constraint.empty()) {
         lines.push_back(column->toString() + constraint);
       }

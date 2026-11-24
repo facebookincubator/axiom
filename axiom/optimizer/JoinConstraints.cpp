@@ -89,11 +89,11 @@ void updateKeyInner(
       true,
       tempConstraints);
 
-  if (leftInOutput && tempConstraints.contains(left->id())) {
-    constraints.insert_or_assign(left->id(), tempConstraints.at(left->id()));
+  if (leftInOutput && tempConstraints.contains(left)) {
+    constraints.insert_or_assign(left, tempConstraints.at(left));
   }
-  if (rightInOutput && tempConstraints.contains(right->id())) {
-    constraints.insert_or_assign(right->id(), tempConstraints.at(right->id()));
+  if (rightInOutput && tempConstraints.contains(right)) {
+    constraints.insert_or_assign(right, tempConstraints.at(right));
   }
 }
 
@@ -161,17 +161,17 @@ void updateKeyOuter(
       true,
       tempConstraints);
 
-  if (leftOptional && leftInOutput && tempConstraints.contains(left->id())) {
-    Value constraint = tempConstraints.at(left->id());
+  if (leftOptional && leftInOutput && tempConstraints.contains(left)) {
+    Value constraint = tempConstraints.at(left);
     constraint.nullable = leftValue.nullable;
     constraint.nullFraction = leftValue.nullFraction;
-    constraints.insert_or_assign(left->id(), constraint);
+    constraints.insert_or_assign(left, constraint);
   }
-  if (rightOptional && rightInOutput && tempConstraints.contains(right->id())) {
-    Value constraint = tempConstraints.at(right->id());
+  if (rightOptional && rightInOutput && tempConstraints.contains(right)) {
+    Value constraint = tempConstraints.at(right);
     constraint.nullable = rightValue.nullable;
     constraint.nullFraction = rightValue.nullFraction;
-    constraints.insert_or_assign(right->id(), constraint);
+    constraints.insert_or_assign(right, constraint);
   }
 }
 
@@ -184,8 +184,8 @@ void updateKey(
     bool leftOptional,
     bool rightOptional,
     ConstraintMap& constraints) {
-  bool leftInOutput = constraints.contains(left->id());
-  bool rightInOutput = constraints.contains(right->id());
+  bool leftInOutput = constraints.contains(left);
+  bool rightInOutput = constraints.contains(right);
   if (!leftInOutput && !rightInOutput) {
     return;
   }
@@ -253,7 +253,7 @@ void JoinConstraints::refineInnerKeys(
   }
   for (const ExprVector* keys : {&left, &right}) {
     for (ExprCP key : *keys) {
-      constraints.try_emplace(key->id(), value(constraints, key));
+      constraints.try_emplace(key, value(constraints, key));
     }
   }
   updateKeys(
@@ -275,7 +275,7 @@ void JoinConstraints::updatePayload(
     if (keyIds.contains(column)) {
       continue;
     }
-    auto it = constraints.find(column->id());
+    auto it = constraints.find(column);
     if (it != constraints.end()) {
       it->second.nullable = true;
       it->second.nullFraction = nullFraction;
@@ -326,7 +326,7 @@ void JoinConstraints::addMark(
   markValue.nullable = false;
   markValue.nullFraction = 0;
 
-  constraints.emplace(markColumn->id(), markValue);
+  constraints.emplace(markColumn, markValue);
 }
 
 void JoinConstraints::scalePayloadCardinality(
@@ -345,7 +345,7 @@ void JoinConstraints::scalePayloadCardinality(
     if (keyIds.contains(column)) {
       continue;
     }
-    auto it = constraints.find(column->id());
+    auto it = constraints.find(column);
     if (it != constraints.end() && it->second.cardinality.has_value()) {
       it->second.cardinality = std::max(
           1.0f,
@@ -361,7 +361,7 @@ void JoinConstraints::updateAntiKeys(
     float antiSelectivity,
     ConstraintMap& constraints) {
   for (size_t i = 0; i < leftKeys.size(); ++i) {
-    auto it = constraints.find(leftKeys[i]->id());
+    auto it = constraints.find(leftKeys[i]);
     if (it != constraints.end()) {
       auto& value = it->second;
       const auto rightNdv = rightKeys[i]->value().cardinality;

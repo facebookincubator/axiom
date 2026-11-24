@@ -40,7 +40,7 @@ Selectivity conjunctsSelectivity(
 
 **Parameters:**
 
-- `constraints` — A map from expression ID to `Value` (min, max, cardinality,
+- `constraints` — A map from expression to `Value` (min, max, cardinality,
   nullFraction). May be empty on entry; the function populates it by seeding
   each column's `Value` from `expr->value()` via `exprConstraint`. Only columns
   referenced in the conjuncts are added — columns not mentioned in any filter
