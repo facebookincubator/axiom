@@ -115,7 +115,7 @@ std::optional<Selectivity> combineDisjuncts(
 }
 
 const Value& value(const ConstraintMap& constraints, ExprCP expr) {
-  auto it = constraints.find(expr->id());
+  auto it = constraints.find(expr);
   if (it != constraints.end()) {
     return it->second;
   }
@@ -231,7 +231,7 @@ struct ExprSelectivityPolicy {
   }
 
   void refine(ExprCP expr, const Value& value) const {
-    constraints.insert_or_assign(expr->id(), value);
+    constraints.insert_or_assign(expr, value);
   }
 };
 
@@ -272,15 +272,9 @@ std::optional<Selectivity> columnComparisonSelectivity(
 // Declared in namespace to allow calling from debugger.
 std::string constraintsString(const ConstraintMap& constraints) {
   std::stringstream out;
-  for (const auto& pair : constraints) {
-    out << pair.first;
-    if (queryCtx() != nullptr) {
-      auto* expr = queryCtx()->objectAt(pair.first);
-      if (expr != nullptr) {
-        out << " (" << expr->toString() << ")";
-      }
-    }
-    out << " = " << pair.second.toString() << "\n";
+  for (const auto& [expr, value] : constraints) {
+    out << expr->id() << " (" << expr->toString() << ") = " << value.toString()
+        << "\n";
   }
   return out.str();
 }

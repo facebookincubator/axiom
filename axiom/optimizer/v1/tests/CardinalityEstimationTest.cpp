@@ -96,7 +96,7 @@ class CardinalityEstimationTest : public test::QueryTestBase {
       SCOPED_TRACE(dt.columns[i]->toString());
       ASSERT_EQ(dt.columns[i]->id(), planColumns[i]->id());
 
-      auto it = constraints.find(planColumns[i]->id());
+      auto it = constraints.find(planColumns[i]);
       ASSERT_NE(it, constraints.end());
 
       const auto& dtValue = dt.columns[i]->value();
@@ -129,7 +129,7 @@ class CardinalityEstimationTest : public test::QueryTestBase {
   static std::optional<Value> findConstraint(
       const RelationOp& op,
       const Column* column) {
-    auto it = op.constraints().find(column->id());
+    auto it = op.constraints().find(column);
     if (it != op.constraints().end()) {
       return it->second;
     }

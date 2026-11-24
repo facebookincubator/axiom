@@ -165,7 +165,7 @@ TableScan::TableScan(
   // column values already reflect narrowed cardinality and min/max from filter
   // selectivity computation (see setBaseTableValues in VeloxHistory.cpp).
   for (auto* column : columns_) {
-    constraints_.emplace(column->id(), column->value());
+    constraints_.emplace(column, column->value());
   }
 
   if (!keys.empty()) {
@@ -395,7 +395,7 @@ Values::Values(const ValuesTable& valuesTable, ColumnVector columns)
 
   // Initialize constraints from column values.
   for (auto* column : columns_) {
-    constraints_.emplace(column->id(), column->value());
+    constraints_.emplace(column, column->value());
   }
 }
 
@@ -510,8 +510,8 @@ std::optional<float> Join::computeFilterSelectivity() const {
     return 1.0f;
   }
   ConstraintMap inputConstraints = input_->constraints();
-  for (const auto& [columnId, constraint] : right->constraints()) {
-    inputConstraints.emplace(columnId, constraint);
+  for (const auto& [expr, constraint] : right->constraints()) {
+    inputConstraints.emplace(expr, constraint);
   }
   const auto selectivity =
       conjunctsSelectivity(inputConstraints, filter, false);
@@ -526,15 +526,15 @@ void Join::initConstraints(
     std::optional<float> rlFanout,
     std::optional<float> filterSelectivity) {
   // Add constraints for output columns only.
-  auto outputColumnIds = PlanObjectSet::fromObjects(columns_);
-  for (const auto& [columnId, constraint] : input_->constraints()) {
-    if (outputColumnIds.contains(columnId)) {
-      constraints_.emplace(columnId, constraint);
+  auto outputColumns = PlanObjectSet::fromObjects(columns_);
+  for (const auto& [expr, constraint] : input_->constraints()) {
+    if (outputColumns.contains(expr)) {
+      constraints_.emplace(expr, constraint);
     }
   }
-  for (const auto& [columnId, constraint] : right->constraints()) {
-    if (outputColumnIds.contains(columnId)) {
-      constraints_.emplace(columnId, constraint);
+  for (const auto& [expr, constraint] : right->constraints()) {
+    if (outputColumns.contains(expr)) {
+      constraints_.emplace(expr, constraint);
     }
   }
 
@@ -807,9 +807,9 @@ void Unnest::initConstraints() {
   // Cardinality remains the same (same distinct values, just repeated).
   for (const auto& expr : replicateColumns) {
     auto* column = expr->as<Column>();
-    auto it = inputConstraints.find(column->id());
+    auto it = inputConstraints.find(column);
     if (it != inputConstraints.end()) {
-      constraints_.emplace(column->id(), it->second);
+      constraints_.emplace(column, it->second);
     }
   }
 
@@ -822,9 +822,9 @@ void Unnest::initConstraints() {
       // Unnest always sets a fanout.
       Value ordValue(column->value().type, cost_.fanout.value());
       ordValue.nullable = false;
-      constraints_.emplace(column->id(), ordValue);
+      constraints_.emplace(column, ordValue);
     } else {
-      constraints_.emplace(column->id(), column->value());
+      constraints_.emplace(column, column->value());
     }
   }
 }
@@ -889,7 +889,7 @@ void scaleCardinalities(
   if (!inputCardinality.has_value() || !fanout.has_value() || *fanout >= 1.0) {
     return;
   }
-  for (auto& [columnId, constraint] : constraints) {
+  for (auto& [expr, constraint] : constraints) {
     // Per-column NDV that is itself unknown stays unknown.
     if (constraint.cardinality.has_value()) {
       constraint.cardinality = std::max(
@@ -978,7 +978,7 @@ std::optional<double> maxGroups(
     if (keys.size() == 1) {
       // Single key per table: use min of key cardinality and table
       // cardinality.
-      const auto keyNdv = constraints.at(keys[0]->id()).cardinality;
+      const auto keyNdv = constraints.at(keys[0]).cardinality;
       if (!keyNdv.has_value()) {
         return std::nullopt;
       }
@@ -988,7 +988,7 @@ std::optional<double> maxGroups(
       std::vector<double> keyCardinalities;
       keyCardinalities.reserve(keys.size());
       for (auto key : keys) {
-        const auto keyNdv = constraints.at(key->id()).cardinality;
+        const auto keyNdv = constraints.at(key).cardinality;
         if (!keyNdv.has_value()) {
           return std::nullopt;
         }
@@ -1097,7 +1097,7 @@ void Aggregation::initConstraints() {
 
     Value constraint = [&]() {
       if (i < numKeys) {
-        auto it = input()->constraints().find(groupingKeys[i]->id());
+        auto it = input()->constraints().find(groupingKeys[i]);
         VELOX_DCHECK(
             it != input()->constraints().end(),
             "Missing constraint for grouping key: {}",
@@ -1115,7 +1115,7 @@ void Aggregation::initConstraints() {
           minOf(constraint.cardinality, *outputCardinality);
     }
 
-    constraints_.emplace(column->id(), constraint);
+    constraints_.emplace(column, constraint);
   }
 }
 
@@ -1384,7 +1384,7 @@ Project::Project(
   ConstraintMap inputConstraints = input_->constraints();
   for (size_t i = 0; i < exprs_.size(); ++i) {
     Value exprValue = ExprEstimator(inputConstraints).estimate(exprs_[i]);
-    constraints_.emplace(columns_[i]->id(), exprValue);
+    constraints_.emplace(columns_[i], exprValue);
   }
 
   cost_.inputCardinality = inputCardinality();
@@ -1581,7 +1581,7 @@ void UnionAll::initConstraints() {
     for (const auto& input : inputs) {
       VELOX_CHECK_LT(i, input->columns().size());
       const auto* column = input->columns()[i];
-      auto it = input->constraints().find(column->id());
+      auto it = input->constraints().find(column);
       VELOX_CHECK(
           it != input->constraints().end(),
           "Missing constraint for column: {}",
@@ -1589,7 +1589,7 @@ void UnionAll::initConstraints() {
       inputValues.push_back(&it->second);
     }
     constraints_.emplace(
-        outputColumns[i]->id(),
+        outputColumns[i],
         UnionConstraints::combine(inputValues, cardinalities));
   }
 }
@@ -1694,7 +1694,7 @@ AssignUniqueId::AssignUniqueId(RelationOpPtr input, ColumnCP uniqueIdColumn)
   // cardinality is unknown.
   Value uniqueIdValue(uniqueIdColumn_->value().type, resultCardinality());
   uniqueIdValue.nullable = false;
-  constraints_.emplace(uniqueIdColumn_->id(), uniqueIdValue);
+  constraints_.emplace(uniqueIdColumn_, uniqueIdValue);
 }
 
 void AssignUniqueId::accept(
@@ -1769,7 +1769,7 @@ void Window::initConstraints() {
   const auto numInputColumns = columns_.size() - windowFunctions.size();
   for (size_t i = numInputColumns; i < columns_.size(); ++i) {
     auto* column = columns_[i];
-    constraints_.emplace(column->id(), column->value());
+    constraints_.emplace(column, column->value());
   }
 }
 
@@ -1824,7 +1824,7 @@ RowNumber::RowNumber(
   // Pass through all input constraints and add a new column for the row number.
   constraints_ = input_->constraints();
   constraints_.emplace(
-      outputColumn->id(),
+      outputColumn,
       rankingColumnValue(outputColumn, cost_.inputCardinality, limit));
 }
 
@@ -1892,7 +1892,7 @@ TopNRowNumber::TopNRowNumber(
   // result.
   constraints_ = input_->constraints();
   constraints_.emplace(
-      outputColumn->id(),
+      outputColumn,
       rankingColumnValue(outputColumn, cost_.inputCardinality, limit));
 }
 
@@ -1993,7 +1993,7 @@ MarkDistinct::MarkDistinct(
 
   constraints_ = input->constraints();
   for (const auto* marker : markers_) {
-    constraints_.emplace(marker->id(), marker->value());
+    constraints_.emplace(marker, marker->value());
   }
 }
 
@@ -2073,10 +2073,10 @@ GroupId::GroupId(
     value.nullable = true;
     value.nullFraction = static_cast<float>(numSets - setsPerKey[keyIdx]) /
         static_cast<float>(numSets);
-    constraints_.emplace(groupingKeyColumns_[keyIdx]->id(), value);
+    constraints_.emplace(groupingKeyColumns_[keyIdx], value);
   }
 
-  constraints_.emplace(groupId_->id(), groupId_->value());
+  constraints_.emplace(groupId_, groupId_->value());
 }
 
 void GroupId::accept(

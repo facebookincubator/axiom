@@ -21,8 +21,8 @@
 
 namespace facebook::axiom::optimizer {
 
-/// Map from expression ID to constraint Value.
-using ConstraintMap = QGF14FastMap<int32_t, Value>;
+/// Map from expression to constraint Value.
+using ConstraintMap = QGF14FastMap<ExprCP, Value>;
 
 /// Represents the estimated selectivity of a filter expression.
 ///

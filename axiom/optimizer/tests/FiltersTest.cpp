@@ -153,7 +153,7 @@ class FiltersTest : public test::QueryTestBase {
     for (auto* expr : exprs) {
       expr->columns().forEach<Column>([&](auto* column) {
         if (auto* schemaColumn = column->schemaColumn()) {
-          constraints.emplace(column->id(), schemaColumn->value());
+          constraints.emplace(column, schemaColumn->value());
         }
       });
     }
@@ -194,7 +194,7 @@ class FiltersTest : public test::QueryTestBase {
     std::vector<velox::core::TypedExprPtr> typedFilters;
     folly::F14FastMap<std::string, connector::TypedColumnStatistics>
         columnStats;
-    folly::F14FastMap<std::string, int32_t> columnIdByName;
+    folly::F14FastMap<std::string, ExprCP> columnByName;
     for (auto* filter : filters) {
       typedFilters.push_back(emitter.toTypedExpr(filter));
       filter->columns().forEach<Column>([&](auto* column) {
@@ -204,7 +204,7 @@ class FiltersTest : public test::QueryTestBase {
               column->outputName(),
               connector::TypedColumnStatistics{
                   value.type, toColumnStatistics(value)});
-          columnIdByName.insert_or_assign(column->outputName(), column->id());
+          columnByName.insert_or_assign(column->outputName(), column);
         }
       });
     }
@@ -217,9 +217,9 @@ class FiltersTest : public test::QueryTestBase {
 
     // Refined per-column statistics must match the ExprCP constraints.
     for (const auto& [name, stats] : estimate.columnStats) {
-      auto idIt = columnIdByName.find(name);
-      ASSERT_NE(idIt, columnIdByName.end());
-      auto constraintIt = refinedConstraints.find(idIt->second);
+      auto columnIt = columnByName.find(name);
+      ASSERT_NE(columnIt, columnByName.end());
+      auto constraintIt = refinedConstraints.find(columnIt->second);
       ASSERT_NE(constraintIt, refinedConstraints.end());
       auto expected = toColumnStatistics(constraintIt->second);
 
@@ -258,26 +258,26 @@ class FiltersTest : public test::QueryTestBase {
           ASSERT_FALSE(allFilters.empty());
 
           auto constraints = makeSchemaConstraints(allFilters);
-          int32_t constraintId;
+          ExprCP constrained;
           std::optional<Value> inputValue;
           if constexpr (kNeedsInputValue) {
             const auto& columns = allFilters[0]->columns();
             ASSERT_EQ(columns.size(), 1);
-            constraintId = columns.onlyObject<Column>()->id();
+            constrained = columns.onlyObject<Column>();
 
-            auto it = constraints.find(constraintId);
+            auto it = constraints.find(constrained);
             ASSERT_NE(it, constraints.end());
             inputValue = it->second;
           } else {
             auto* call = allFilters[0]->as<Call>();
-            constraintId = call->args()[0]->id();
+            constrained = call->args()[0];
           }
 
           auto selectivity =
               conjunctsSelectivity(constraints, allFilters, true);
           ASSERT_TRUE(selectivity.has_value());
 
-          auto it = constraints.find(constraintId);
+          auto it = constraints.find(constrained);
           ASSERT_NE(it, constraints.end());
           if constexpr (kNeedsInputValue) {
             verify(*selectivity, it->second, *inputValue);

@@ -280,7 +280,7 @@ class RelationOp {
     return cost_;
   }
 
-  /// Returns constraints on output columns. Keys are column IDs. Leaf operators
+  /// Returns constraints on output columns, keyed by column. Leaf operators
   /// initialize constraints from schema/column values. Non-leaf operators
   /// compute constraints from input constraints.
   const ConstraintMap& constraints() const {
