@@ -381,11 +381,8 @@ class Decorrelator : public NodeRewriter<> {
     // input cols pass through; each Project output col is recomputed from its
     // original expr (per-kind handling below); cols already present in input
     // collapse to the same slot.
-    // Only columns the body produces are NULL on a pad row. A body
-    // output that is an outer column keeps its value there.
-    PlanObjectSet bodyColumns =
+    const PlanObjectSet bodyColumns =
         PlanObjectSet::fromObjects(newBody->outputColumns());
-    bodyColumns.eraseAll(input->outputColumns());
 
     ExprVector liftedExprs;
     liftedExprs.reserve(
