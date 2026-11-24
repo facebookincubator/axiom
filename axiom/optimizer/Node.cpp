@@ -3770,6 +3770,16 @@ Apply::Apply(Key key)
     if (isLeft) {
       VELOX_CHECK_NOT_NULL(
           includeMarker_, "kLeft Apply requires an includeMarker");
+      // An unmatched input row pads every body column with NULL, so no body
+      // column may also be an input column.
+      const auto inputColumns =
+          PlanObjectSet::fromObjects(inputs_[0]->outputColumns());
+      for (ColumnCP column : inputs_[1]->outputColumns()) {
+        VELOX_CHECK(
+            !inputColumns.contains(column),
+            "kLeft Apply body must not output an input column: {}",
+            column->toString());
+      }
       VELOX_CHECK_EQ(
           includeMarker_->value().type->kind(),
           velox::TypeKind::BOOLEAN,
