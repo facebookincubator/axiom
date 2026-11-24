@@ -189,7 +189,8 @@ TEST_F(DeleteTest, unsupportedPredicate) {
 
   VELOX_ASSERT_THROW(
       run("DELETE FROM t WHERE x = 1"),
-      "DELETE supports only filters on partition columns: x");
+      "DELETE must remove whole partitions: filter reads a non-partition "
+      "column: x");
 }
 
 } // namespace

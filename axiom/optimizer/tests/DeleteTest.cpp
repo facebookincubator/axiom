@@ -79,13 +79,29 @@ TEST_F(DeleteTest, partitionPredicates) {
 
   VELOX_ASSERT_USER_THROW(
       runDelete("DELETE FROM test WHERE n_nationkey = 1"),
-      "DELETE supports only filters on partition columns: n_nationkey");
+      "DELETE must remove whole partitions: filter reads a non-partition "
+      "column: n_nationkey");
 
   // A predicate the connector cannot reduce to a partition filter, even though
   // it reads only a partition column.
   VELOX_ASSERT_USER_THROW(
       runDelete("DELETE FROM test WHERE pk % 2 = 0"),
-      "DELETE supports only range filters on partition columns");
+      "DELETE must remove whole partitions: filter is not a range filter on "
+      "partition columns");
+
+  // A random filter keeps only some rows of a partition, so a delete that drops
+  // whole partitions fails and removes nothing.
+  for (const auto* sql : {
+           "DELETE FROM test WHERE rand() < 0.5",
+           "DELETE FROM test WHERE pk = 2 AND rand() < 0.5",
+       }) {
+    SCOPED_TRACE(sql);
+    VELOX_ASSERT_USER_THROW(
+        runDelete(sql),
+        "DELETE must remove whole partitions: scan reads a random sample of "
+        "rows");
+  }
+  EXPECT_EQ(17, runCount("FROM test"));
 
   // Deleting from a table other than the one scanned fails. SQL cannot express
   // this, so build the plan directly.

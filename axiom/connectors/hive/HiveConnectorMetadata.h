@@ -232,6 +232,13 @@ class HiveTableLayout : public TableLayout {
     return hivePartitionColumnsType_;
   }
 
+  /// Returns the filters of 'handle' if partition metadata alone determines
+  /// which rows it reads, or why it does not: 'handle' has a remaining filter,
+  /// a sample, or a filter on a column that is not a Hive partition column. A
+  /// sample keeps an unknown subset of the rows.
+  folly::Expected<velox::common::SubfieldFilters, std::string> partitionFilters(
+      const velox::connector::hive::HiveTableHandle& handle) const;
+
   /// Returns the columns stored in data files: rowType() without the Hive
   /// partition columns.
   velox::RowTypePtr dataColumns() const;
@@ -315,8 +322,7 @@ class HiveTableLayout : public TableLayout {
       const velox::connector::hive::HiveTableHandle& handle) const;
 
   // Returns true if partition metadata alone determines which rows 'handle'
-  // reads: it has no remaining filter, no sample, and subfield filters only on
-  // Hive partition columns. A sample keeps an unknown subset of the rows.
+  // reads (see partitionFilters).
   bool hasOnlyPartitionFilters(
       const velox::connector::hive::HiveTableHandle& handle) const;
 
