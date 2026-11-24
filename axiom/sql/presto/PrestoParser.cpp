@@ -1839,13 +1839,7 @@ class RelationPlanner : public AstVisitor {
       rows.emplace_back(std::move(values));
     }
 
-    std::vector<std::string> names;
-    names.reserve(numColumns);
-    for (auto i = 0; i < numColumns; ++i) {
-      names.emplace_back(fmt::format("c{}", i));
-    }
-
-    builder_->values(names, rows);
+    builder_->values(rows);
   }
 
   void visitExcept(Except* node) override {

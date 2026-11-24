@@ -148,7 +148,9 @@ class LogicalPlanMatcherBuilder {
   /// Matches a ValuesNode. Must be the first node in the chain (leaf).
   LogicalPlanMatcherBuilder& values(OnMatchCallback onMatch = nullptr);
 
-  /// Matches a ValuesNode with the specified output type.
+  /// Matches a ValuesNode whose columns have the types of 'outputType'. The
+  /// node's column names are generated: matchers above refer to a column by
+  /// its name in 'outputType'.
   LogicalPlanMatcherBuilder& values(
       velox::RowTypePtr outputType,
       OnMatchCallback onMatch = nullptr);

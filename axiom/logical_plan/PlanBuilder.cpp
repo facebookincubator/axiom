@@ -89,6 +89,9 @@ PlanBuilder& PlanBuilder::values(
 
 namespace {
 
+// Name hint for a column without a name.
+const std::string kExprHint{"expr"};
+
 ExprPtr makeInputRef(const velox::TypePtr& type, const std::string& name) {
   return std::make_shared<InputReferenceExpr>(type, name);
 }
@@ -127,8 +130,8 @@ std::vector<velox::TypePtr> toTypes(const std::vector<ExprPtr>& exprs) {
 }
 } // namespace
 
-PlanBuilder& PlanBuilder::values(
-    const std::vector<std::string>& names,
+PlanBuilder& PlanBuilder::addValues(
+    const std::vector<std::string>* names,
     const std::vector<std::vector<ExprApi>>& values) {
   VELOX_USER_CHECK_NULL(node_, "Values node must be the leaf node");
 
@@ -137,7 +140,8 @@ PlanBuilder& PlanBuilder::values(
     return *this;
   }
 
-  const auto numColumns = names.size();
+  const auto numColumns =
+      names != nullptr ? names->size() : values.front().size();
   const auto numRows = values.size();
 
   std::vector<std::vector<ExprPtr>> exprs;
@@ -159,11 +163,13 @@ PlanBuilder& PlanBuilder::values(
   outputMapping_ = std::make_shared<NameMappings>();
 
   std::vector<std::string> outputNames;
-  if (numColumns > 0) {
-    outputNames.reserve(numColumns);
-    for (const auto& name : names) {
-      outputNames.push_back(newName(name));
-      outputMapping_->add(name, outputNames.back());
+  outputNames.reserve(numColumns);
+  for (auto i = 0; i < numColumns; ++i) {
+    if (names != nullptr) {
+      outputNames.push_back(newName(names->at(i)));
+      outputMapping_->add(names->at(i), outputNames.back());
+    } else {
+      outputNames.push_back(newName(kExprHint));
     }
   }
 
@@ -638,9 +644,6 @@ void PlanBuilder::resolveProjections(
       nameTracker.track(fieldName);
     }
   }
-
-  // Default name hint for unnamed expressions.
-  static const std::string kExprHint = "expr";
 
   for (const auto& projection : projections) {
     ExprPtr expr;

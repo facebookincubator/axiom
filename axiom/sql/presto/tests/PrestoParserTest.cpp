@@ -1561,6 +1561,20 @@ TEST_F(PrestoParserTest, values) {
     testSelect("SELECT * FROM (VALUES (1, 2), ROW(3 AS a, 4 AS b))", matcher);
     testSelect("SELECT * FROM (VALUES ROW(1 AS a, 2 AS b), (3, 4))", matcher);
   }
+
+  // The columns of a VALUES without a column alias list have no names.
+  AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+      parseSql("SELECT c0 FROM (VALUES 1)"), "Cannot resolve column: c0");
+
+  // So c0 in a subquery over such a VALUES reads the outer column.
+  testSelect(
+      "SELECT * FROM (VALUES 'a') AS t(c0) "
+      "CROSS JOIN LATERAL (SELECT c0 AS d FROM (VALUES 1))",
+      matchValues(ROW("a", VARCHAR()))
+          .project({"a AS c0"})
+          .lateralJoin(
+              matchValues(ROW("b", INTEGER())).project({"c0 AS d"}).build())
+          .output({"c0", "d"}));
 }
 
 // Every VALUES row must contribute as many columns as the first.

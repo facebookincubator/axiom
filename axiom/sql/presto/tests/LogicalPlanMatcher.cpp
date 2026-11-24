@@ -318,16 +318,24 @@ class ValuesMatcher : public LogicalPlanMatcherImpl<ValuesNode> {
  private:
   MatchResult matchDetails(
       const ValuesNode& plan,
-      const std::unordered_map<std::string, std::string>& symbols)
+      const std::unordered_map<std::string, std::string>& /*symbols*/)
       const override {
     const auto& outputType = plan.outputType();
 
     EXPECT_EQ(velox::TypeKind::ROW, outputType->kind());
     EXPECT_EQ(outputType_->size(), outputType->size());
-    EXPECT_TRUE(*outputType_ == *outputType)
-        << "Expected " << outputType_->toString() << ", but got "
-        << outputType->toString();
-    AXIOM_RETURN_RESULT(symbols)
+    AXIOM_RETURN_IF_FAILURE;
+
+    // Binds each expected column name to the generated one, so a matcher
+    // above can refer to the column by the expected name.
+    std::unordered_map<std::string, std::string> newSymbols;
+    for (auto i = 0; i < outputType->size(); ++i) {
+      EXPECT_TRUE(*outputType_->childAt(i) == *outputType->childAt(i))
+          << "Expected " << outputType_->toString() << ", but got "
+          << outputType->toString();
+      newSymbols[outputType_->nameOf(i)] = outputType->nameOf(i);
+    }
+    AXIOM_RETURN_RESULT(newSymbols)
   }
 
   const velox::RowTypePtr outputType_;

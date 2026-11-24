@@ -338,9 +338,7 @@ TEST_P(UnionAllTest, groupByOverTwoDistincts) {
 }
 
 // GROUP BY over two single-task legs. Union stays kSingle; the GROUP BY runs
-// in the same kSingle fragment. The query alias 'AS x(k)' doesn't propagate
-// to the agg's grouping key (which uses internal name 'c0'); a Project on
-// top renames 'c0' to 'k'.
+// in the same kSingle fragment.
 TEST_P(UnionAllTest, groupByOverTwoValues) {
   auto logicalPlan = parseSelect(
       "SELECT k, COUNT(*) FROM ("
@@ -348,9 +346,9 @@ TEST_P(UnionAllTest, groupByOverTwoValues) {
       ") AS x(k) GROUP BY k");
 
   {
-    auto matcher = matchValues()
+    auto matcher = matchValues(ROW("k", INTEGER()))
                        .localPartition(matchValues().projectIf(!useV2_))
-                       .singleAggregation({"c0"}, {"count(*)"})
+                       .singleAggregation({"k"}, {"count(*)"})
                        .project()
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
@@ -361,14 +359,14 @@ TEST_P(UnionAllTest, groupByOverTwoValues) {
     // in that fragment with no remote shuffle. v2 does a local two-stage
     // aggregation (partial → local HASH → final) to pre-aggregate before the
     // intra-fragment exchange; v1 does a single aggregation after the hash.
-    auto builder =
-        matchValues().localPartition(matchValues().projectIf(!useV2_));
+    auto builder = matchValues(ROW("k", INTEGER()))
+                       .localPartition(matchValues().projectIf(!useV2_));
     if (useV2_) {
-      builder.partialAggregation({"c0"}, {"count(*)"})
-          .localPartition({"c0"})
+      builder.partialAggregation({"k"}, {"count(*)"})
+          .localPartition({"k"})
           .finalAggregation();
     } else {
-      builder.localPartition({"c0"}).singleAggregation({"c0"}, {"count(*)"});
+      builder.localPartition({"k"}).singleAggregation({"k"}, {"count(*)"});
     }
     auto matcher =
         builder.project().output(velox::core::StageType::kSingle).build();
@@ -560,18 +558,18 @@ TEST_P(UnionAllTest, orderByOverTwoValues) {
       parseSelect("SELECT * FROM (VALUES 1 UNION ALL VALUES 2) ORDER BY 1");
 
   {
-    auto matcher = matchValues()
+    auto matcher = matchValues(ROW("a", INTEGER()))
                        .localPartition(matchValues().projectIf(!useV2_))
-                       .orderBy({"c0 ASC NULLS LAST"})
+                       .orderBy({"a ASC NULLS LAST"})
                        .build();
     AXIOM_ASSERT_PLAN(toSingleNodePlan(logicalPlan), matcher);
   }
 
   {
     // The union is kSingle, so the sort runs in that fragment: no gather.
-    auto matcher = matchValues()
+    auto matcher = matchValues(ROW("a", INTEGER()))
                        .localPartition(matchValues().projectIf(!useV2_))
-                       .orderBy({"c0 ASC NULLS LAST"})
+                       .orderBy({"a ASC NULLS LAST"})
                        .localMerge()
                        .output(velox::core::StageType::kSingle)
                        .build();
