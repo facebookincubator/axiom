@@ -616,17 +616,36 @@ std::vector<const Column*> HiveTableLayout::nonPartitionFilterColumns(
   return filterColumns;
 }
 
-bool HiveTableLayout::hasOnlyPartitionFilters(
+folly::Expected<velox::common::SubfieldFilters, std::string>
+HiveTableLayout::partitionFilters(
     const velox::connector::hive::HiveTableHandle& handle) const {
-  if (handle.remainingFilter() != nullptr || handle.sampleRate() < 1.0) {
-    return false;
+  if (handle.remainingFilter() != nullptr) {
+    return folly::makeUnexpected(
+        fmt::format(
+            "filter is not a range filter on partition columns: {}",
+            handle.remainingFilter()->toString()));
   }
+  if (handle.sampleRate() < 1.0) {
+    return folly::makeUnexpected(
+        fmt::format(
+            "scan reads a random sample of rows: sample rate {}",
+            handle.sampleRate()));
+  }
+  velox::common::SubfieldFilters filters;
   for (const auto& [subfield, filter] : handle.subfieldFilters()) {
     if (!hivePartitionColumnsType_->containsChild(subfield.baseName())) {
-      return false;
+      return folly::makeUnexpected(
+          fmt::format(
+              "filter reads a non-partition column: {}", subfield.baseName()));
     }
+    filters.emplace(subfield.clone(), filter->clone());
   }
-  return true;
+  return filters;
+}
+
+bool HiveTableLayout::hasOnlyPartitionFilters(
+    const velox::connector::hive::HiveTableHandle& handle) const {
+  return partitionFilters(handle).hasValue();
 }
 
 std::vector<std::string> HiveTableLayout::withFilterColumns(
@@ -802,41 +821,15 @@ std::shared_ptr<velox::connector::hive::LocationHandle> makeLocationHandle(
 
 // Returns the filters selecting the partitions to remove, or why the rows the
 // scan selects are not whole partitions. The partitions are resolved at commit
-// by matching the scan's range filters against partition values, so every
-// pushed-down filter must be a range filter on a partition column.
+// by matching the scan's range filters against partition values.
 // TODO: Support a remaining filter over partition columns alone, which also
 // selects whole partitions but cannot be matched this way.
 folly::Expected<velox::common::SubfieldFilters, std::string>
 partitionDeleteFilters(
-    const HiveTableLayout& layout,
+    const Table& table,
     const velox::connector::ConnectorTableHandlePtr& scanHandle) {
-  const auto* hiveScan =
-      scanHandle->asChecked<velox::connector::hive::HiveTableHandle>();
-
-  if (hiveScan->remainingFilter() != nullptr) {
-    return folly::makeUnexpected(
-        fmt::format(
-            "DELETE supports only range filters on partition columns: {}",
-            hiveScan->remainingFilter()->toString()));
-  }
-
-  folly::F14FastSet<std::string_view> partitionColumns;
-  for (const auto* column : layout.hivePartitionColumns()) {
-    partitionColumns.insert(column->name());
-  }
-
-  velox::common::SubfieldFilters filters;
-  for (const auto& [subfield, filter] : hiveScan->subfieldFilters()) {
-    if (!partitionColumns.contains(subfield.baseName())) {
-      return folly::makeUnexpected(
-          fmt::format(
-              "DELETE supports only filters on partition columns: {}",
-              subfield.baseName()));
-    }
-    filters.emplace(subfield.clone(), filter->clone());
-  }
-
-  return filters;
+  return table.primaryLayout()->asChecked<HiveTableLayout>()->partitionFilters(
+      *scanHandle->asChecked<velox::connector::hive::HiveTableHandle>());
 }
 
 } // namespace
@@ -863,8 +856,7 @@ DeleteLayout HiveConnectorMetadata::deleteLayout(
   auto table = tableFromScanHandle(scanHandle);
   VELOX_CHECK_NOT_NULL(table, "DELETE scan identifies an unknown table");
   checkTableWritable(*table);
-  const auto* hiveLayout = table->primaryLayout()->asChecked<HiveTableLayout>();
-  auto filters = partitionDeleteFilters(*hiveLayout, scanHandle);
+  auto filters = partitionDeleteFilters(*table, scanHandle);
   if (exact && filters.hasValue()) {
     return DeleteLayout::metadata();
   }
@@ -874,7 +866,7 @@ DeleteLayout HiveConnectorMetadata::deleteLayout(
     }
   }
   if (exact && filters.hasError()) {
-    VELOX_USER_FAIL("{}", filters.error());
+    VELOX_USER_FAIL("DELETE must remove whole partitions: {}", filters.error());
   }
   VELOX_USER_FAIL("DELETE requires row-level support from the connector");
 }
@@ -888,9 +880,7 @@ ConnectorDeleteHandlePtr HiveConnectorMetadata::beginDelete(
   auto table = tableFromScanHandle(scanHandle);
   VELOX_CHECK_NOT_NULL(table, "DELETE scan identifies an unknown table");
   if (!layout.hasWriter()) {
-    const auto* hiveLayout =
-        table->primaryLayout()->asChecked<HiveTableLayout>();
-    auto filters = partitionDeleteFilters(*hiveLayout, scanHandle);
+    auto filters = partitionDeleteFilters(*table, scanHandle);
     VELOX_CHECK(filters.hasValue());
     return makeDeleteWriteHandle(table, std::move(filters.value()));
   }
