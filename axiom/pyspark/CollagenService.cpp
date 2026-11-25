@@ -44,6 +44,85 @@ std::vector<facebook::velox::RowVectorPtr> getDummyRowVector(
   return response;
 }
 
+// Returns the Spark type for a Velox type. Velox types carry no nullability,
+// so every field, element and map value is nullable.
+spark::connect::DataType toSparkType(const facebook::velox::TypePtr& type) {
+  spark::connect::DataType result;
+  if (type->isDate()) {
+    result.mutable_date();
+    return result;
+  }
+  if (type->isDecimal()) {
+    const auto [precision, scale] =
+        facebook::velox::getDecimalPrecisionScale(*type);
+    result.mutable_decimal()->set_precision(precision);
+    result.mutable_decimal()->set_scale(scale);
+    return result;
+  }
+  switch (type->kind()) {
+    case facebook::velox::TypeKind::UNKNOWN:
+      result.mutable_null();
+      break;
+    case facebook::velox::TypeKind::BOOLEAN:
+      result.mutable_boolean();
+      break;
+    case facebook::velox::TypeKind::TINYINT:
+      result.mutable_byte();
+      break;
+    case facebook::velox::TypeKind::SMALLINT:
+      result.mutable_short_();
+      break;
+    case facebook::velox::TypeKind::INTEGER:
+      result.mutable_integer();
+      break;
+    case facebook::velox::TypeKind::BIGINT:
+      result.mutable_long_();
+      break;
+    case facebook::velox::TypeKind::REAL:
+      result.mutable_float_();
+      break;
+    case facebook::velox::TypeKind::DOUBLE:
+      result.mutable_double_();
+      break;
+    case facebook::velox::TypeKind::VARCHAR:
+      result.mutable_string();
+      break;
+    case facebook::velox::TypeKind::VARBINARY:
+      result.mutable_binary();
+      break;
+    case facebook::velox::TypeKind::TIMESTAMP:
+      result.mutable_timestamp();
+      break;
+    case facebook::velox::TypeKind::ARRAY: {
+      auto* array = result.mutable_array();
+      *array->mutable_element_type() = toSparkType(type->childAt(0));
+      array->set_contains_null(true);
+      break;
+    }
+    case facebook::velox::TypeKind::MAP: {
+      auto* map = result.mutable_map();
+      *map->mutable_key_type() = toSparkType(type->childAt(0));
+      *map->mutable_value_type() = toSparkType(type->childAt(1));
+      map->set_value_contains_null(true);
+      break;
+    }
+    case facebook::velox::TypeKind::ROW: {
+      const auto& rowType = type->asRow();
+      auto* fields = result.mutable_struct_();
+      for (uint32_t i = 0; i < rowType.size(); ++i) {
+        auto* field = fields->add_fields();
+        field->set_name(rowType.nameOf(i));
+        *field->mutable_data_type() = toSparkType(rowType.childAt(i));
+        field->set_nullable(true);
+      }
+      break;
+    }
+    default:
+      COLLAGEN_NYI("Type is not supported in a schema: {}", type->toString());
+  }
+  return result;
+}
+
 } // namespace
 
 namespace axiom::collagen {
@@ -173,6 +252,16 @@ grpc::Status CollagenService::AnalyzePlan(
 
   PlanAndStats veloxPlanStats;
   try {
+    if (request->analyze_case() ==
+        spark::connect::AnalyzePlanRequest::kSchema) {
+      SparkToAxiom converter(catalog_, schema_, pool_.get());
+      SparkPlanVisitorContext context;
+      converter.visit(request->schema().plan(), context);
+      *response->mutable_schema()->mutable_schema() =
+          toSparkType(converter.planNode()->outputType());
+      return grpc::Status::OK;
+    }
+
     std::string logicalPlanStr;
     switch (request->analyze_case()) {
       case spark::connect::AnalyzePlanRequest::kExplain:
