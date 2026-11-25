@@ -18,20 +18,25 @@ dataframe_cases.py for the file format."""
 from __future__ import annotations
 
 import importlib
-import os
 import pkgutil
-import sys
-import tempfile
 import unittest
 from types import ModuleType
-from typing import Any
 
 from parameterized import parameterized
-from pyspark.sql import SparkSession
 
 from . import cases as case_files
 from .collagen_test_base import CollagenTest
-from .dataframe_cases import Case, catalog, compares_with_spark, Outcome, run_cases
+from .dataframe_cases import (
+    Case,
+    catalog,
+    comparable_rows,
+    compares_with_spark,
+    get_local_spark,
+    matches,
+    Outcome,
+    run_cases,
+    stop_local_spark,
+)
 
 
 def _case_file_names() -> list[str]:
@@ -42,37 +47,12 @@ def _case_file(name: str) -> ModuleType:
     return importlib.import_module(f"{case_files.__name__}.{name}")
 
 
-_local_spark: SparkSession | None = None
-
-
-def _get_local_spark() -> SparkSession:
-    global _local_spark
-    if _local_spark is None:
-        # Spark's Python workers must run the same interpreter, with the same
-        # modules, as this test.
-        os.environ["PYSPARK_PYTHON"] = sys.executable
-        os.environ["PYTHONPATH"] = os.pathsep.join(sys.path)
-        _local_spark = (
-            SparkSession.builder.master("local[1]")
-            .config("spark.ui.enabled", "false")
-            .config("spark.sql.shuffle.partitions", "1")
-            .config("spark.sql.warehouse.dir", tempfile.mkdtemp())
-            .getOrCreate()
-        )
-    return _local_spark
-
-
-def _comparable_rows(outcome: Outcome, ordered: bool) -> list[Any]:
-    return outcome.rows if ordered else sorted(outcome.rows, key=repr)
-
-
 def _check_gap(
     test: unittest.TestCase,
     gap: str,
     collagen: Outcome,
     spark: Outcome,
-    collagen_rows: list[Any],
-    spark_rows: list[Any],
+    ordered: bool,
 ) -> None:
     """Checks that Collagen still shows the kind of gap Gaps.md records: a GF
     gap fails where Spark runs, a GC gap returns a different answer."""
@@ -87,9 +67,8 @@ def _check_gap(
     test.assertIsNone(
         collagen.error, f"{gap} records a different answer, but Collagen failed"
     )
-    test.assertNotEqual(
-        (collagen.columns, collagen_rows),
-        (spark.columns, spark_rows),
+    test.assertFalse(
+        matches(collagen, spark, ordered),
         f"{gap} is fixed: remove the '# gap' annotation and the entry in "
         "axiom/spark_connect/docs/Gaps.md",
     )
@@ -112,15 +91,16 @@ def _check(test: unittest.TestCase, case: Case) -> None:
 
     assert spark is not None, "A case not compared with Spark needs '# count'"
     test.assertIsNone(spark.error, f"Spark failed: {spark.error}")
-    collagen_rows = _comparable_rows(collagen, annotations.ordered)
-    spark_rows = _comparable_rows(spark, annotations.ordered)
     if annotations.gap is not None:
-        _check_gap(test, annotations.gap, collagen, spark, collagen_rows, spark_rows)
+        _check_gap(test, annotations.gap, collagen, spark, annotations.ordered)
         return
 
     test.assertIsNone(collagen.error, f"Collagen failed: {collagen.error}")
     test.assertEqual(collagen.columns, spark.columns)
-    test.assertEqual(collagen_rows, spark_rows)
+    test.assertEqual(
+        comparable_rows(collagen, annotations.ordered),
+        comparable_rows(spark, annotations.ordered),
+    )
 
 
 class DataFrameCasesTest(CollagenTest):
@@ -137,12 +117,11 @@ class DataFrameCasesTest(CollagenTest):
     )
     def test(self, name: str) -> None:
         module = _case_file(name)
-        spark = _get_local_spark() if compares_with_spark(module) else None
+        spark = get_local_spark() if compares_with_spark(module) else None
         for case in run_cases(module, self._spark, spark):
             with self.subTest(f"{name}.py:{case.line}"):
                 _check(self, case)
 
 
 def tearDownModule() -> None:
-    if _local_spark is not None:
-        _local_spark.stop()
+    stop_local_spark()
