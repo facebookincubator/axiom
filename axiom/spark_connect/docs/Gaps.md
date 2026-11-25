@@ -19,7 +19,6 @@ runs. A new gap takes the next number.
 
 | ID | Gap |
 | --- | --- |
-| GC1 | `countDistinct` and `sumDistinct` count every row |
 | GC2 | `*` is supported only in `count(*)` |
 | GC3 | Implicit type coercion follows Presto's rules |
 | GC4 | Aggregate and window functions are a mix of Spark's and Presto's |
@@ -33,18 +32,11 @@ runs. A new gap takes the next number.
 | GF12 | A query that returns no rows fails |
 | GC13 | TIMESTAMP values come back in UTC |
 | GF14 | A map lookup that returns an array fails |
+| GC15 | Division of integers returns DECIMAL |
+| GC16 | A generator's columns come last in a select |
+| GC17 | `range` with 2^31 or more rows returns too few rows |
 
 ## Details
-
-### GC1: `countDistinct` and `sumDistinct` count every row
-
-```python
-df.groupBy("k").agg(F.countDistinct("v"))
-```
-
-Collagen returns `count(v)`, the number of non-NULL values with duplicates.
-Spark returns the number of distinct values. Collagen drops the distinct flag of
-an aggregate call.
 
 ### GC2: `*` is supported only in `count(*)`
 
@@ -174,3 +166,31 @@ df.select(df.m["k"])  # m is MAP<STRING, ARRAY<INT>>
 The server fails with
 `Invalid: Expected 1 children for imported format '+l', ArrowArray struct has 0`
 while it converts the result to Arrow. A lookup that returns a scalar works.
+
+### GC15: Division of integers returns DECIMAL
+
+```python
+spark.range(5, 6).select(F.col("id") / 2)
+```
+
+Collagen returns DECIMAL(30, 11). Spark casts both sides to DOUBLE and returns
+DOUBLE. Collagen coerces the arguments with Presto's rules (GC3) and picks
+Spark's DECIMAL signature of divide.
+
+### GC16: A generator's columns come last in a select
+
+```python
+df.select(F.explode("arr"), "id")
+```
+
+Collagen returns the columns as (id, col). Spark keeps the order of the select
+list and returns (col, id).
+
+### GC17: `range` with 2^31 or more rows returns too few rows
+
+```python
+spark.range(2**31).count()
+```
+
+Collagen returns 0. Spark returns 2147483648. Collagen counts the rows of a
+range in a 32-bit integer and builds the whole range in memory as one vector.

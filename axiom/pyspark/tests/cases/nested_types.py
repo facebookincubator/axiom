@@ -58,31 +58,6 @@ def setup(spark: SparkSession) -> dict[str, DataFrame]:
                 ]
             ),
         ),
-        "traits": spark.createDataFrame(
-            [(1, {7: [1, 2, 3, 4, 5, 6]}), (2, {7: [10, 20, 30]})],
-            StructType(
-                [
-                    StructField("id", LongType(), False),
-                    StructField("t", MapType(LongType(), ArrayType(LongType()))),
-                ]
-            ),
-        ),
-        "structs": spark.createDataFrame(
-            [((1, "x"),), ((2, "y"),)],
-            StructType(
-                [
-                    StructField(
-                        "s",
-                        StructType(
-                            [
-                                StructField("a", IntegerType()),
-                                StructField("b", StringType()),
-                            ]
-                        ),
-                    )
-                ]
-            ),
-        ),
         "mixed": spark.createDataFrame([(1, [10, 20], {"k": 5})], ["id", "arr", "m"]),
     }
 
@@ -90,9 +65,8 @@ def setup(spark: SparkSession) -> dict[str, DataFrame]:
 def cases(
     arrays: DataFrame,
     maps: DataFrame,
-    traits: DataFrame,
-    structs: DataFrame,
     mixed: DataFrame,
+    spark: SparkSession,
 ) -> None:
     a = arrays
 
@@ -118,8 +92,7 @@ def cases(
 
     case(a.select("id", F.forall("a", lambda x: x % 2 == 0).alias("all_even")))
 
-    # GF5 in axiom/spark_connect/docs/Gaps.md.
-    # error: Function name cannot match special form name: exists
+    # gap: GF5
     case(a.select("id", F.exists("a", lambda x: x > 25).alias("has_large")))
 
     case(maps.select("id", maps.m["math"].alias("math")))
@@ -136,10 +109,37 @@ def cases(
         )
     )
 
+    traits = spark.createDataFrame(
+        [(1, {7: [1, 2, 3, 4, 5, 6]}), (2, {7: [10, 20, 30]})],
+        StructType(
+            [
+                StructField("id", LongType(), False),
+                StructField("t", MapType(LongType(), ArrayType(LongType()))),
+            ]
+        ),
+    )
+
     case(
         traits.select(
             "id", F.transform_values("t", lambda k, v: F.slice(v, 2, 3)).alias("t")
         )
+    )
+
+    structs = spark.createDataFrame(
+        [((1, "x"),), ((2, "y"),)],
+        StructType(
+            [
+                StructField(
+                    "s",
+                    StructType(
+                        [
+                            StructField("a", IntegerType()),
+                            StructField("b", StringType()),
+                        ]
+                    ),
+                )
+            ]
+        ),
     )
 
     case(structs.filter(structs.s["a"] > 1).select(structs.s.b.alias("b")))
@@ -157,13 +157,14 @@ def cases(
 
     case(mixed.select(F.explode("m").alias("k", "v")))
 
-    # GC11 in axiom/spark_connect/docs/Gaps.md.
-    # count 2
+    # gap: GC11
     case(mixed.select(F.posexplode("arr")))
 
-    # GF8 in axiom/spark_connect/docs/Gaps.md.
-    # error: explode_outer is not supported yet
+    # gap: GF8
     case(mixed.select(F.explode_outer("arr")))
 
     # error: Only one generator allowed per select clause
     case(mixed.select(F.explode("arr"), F.explode("m")))
+
+    # gap: GC16
+    case(mixed.select(F.explode("arr"), "id"))

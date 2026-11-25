@@ -32,8 +32,7 @@ def cases(spark: SparkSession) -> None:
 
     case(spark.range(0, 100, 25))
 
-    # GF12 in axiom/spark_connect/docs/Gaps.md.
-    # error: Tried reading schema message, was null or length 0
+    # gap: GF12
     case(spark.range(5, 5))
 
     case(spark.range(1, 2))

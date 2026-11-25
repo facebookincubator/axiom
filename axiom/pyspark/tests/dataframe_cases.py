@@ -28,7 +28,9 @@ A case file is a Python module with two functions:
         case(t.select("c"))
 
 setup() returns the DataFrames the cases use, by name. cases() takes them as
-parameters of the same names, and the session as a parameter named 'spark'. Its body is a sequence of statements: each
+parameters of the same names, and the session as a parameter named 'spark'.
+setup() holds the tables several cases share. A table that one case uses is
+created in cases(), next to the case. Its body is a sequence of statements: each
 case(...) call is a case, and other statements, such as assignments, run in
 order. A case(...) call must be its own statement in the body of cases().
 
@@ -51,6 +53,10 @@ Comment lines directly above a case annotate it:
   - '# error: <message>': Collagen fails with an error containing <message>.
   - '# ordered': row order is part of the result.
   - '# count N': Collagen returns N rows; their values are not compared.
+  - '# gap: <ID>': Collagen shows gap <ID> from axiom/spark_connect/docs/Gaps.md.
+    For a GF gap, Collagen fails where Spark runs; for a GC gap, Collagen runs
+    and returns a different answer than Spark. The case fails once Collagen
+    matches Spark, so a fix also updates the case and Gaps.md.
 Other comment lines are prose.
 """
 
@@ -76,6 +82,7 @@ class Annotations:
     error: str | None = None
     ordered: bool = False
     count: int | None = None
+    gap: str | None = None
 
 
 @dataclasses.dataclass
@@ -135,6 +142,8 @@ def _annotations(lines: list[str], line: int, file: str) -> Annotations:
             annotations.ordered = True
         elif text.startswith("count "):
             annotations.count = int(text[len("count ") :])
+        elif text.startswith("gap:"):
+            annotations.gap = text[len("gap:") :].strip()
         index -= 1
     return annotations
 

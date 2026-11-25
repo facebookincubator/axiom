@@ -71,3 +71,22 @@ def cases(employees: DataFrame) -> None:
 
     # toDF renames the columns by position.
     case(e.select("id", "name").toDF("x", "y"))
+
+    case(
+        e.withColumnRenamed("name", "first_name").withColumnRenamed(
+            "first_name", "full_name"
+        )
+    )
+
+    case(e.select("name", "age").withColumnRenamed("name", "person"))
+
+    case(e.withColumn("bonus", F.lit(True)))
+
+    # withColumn replaces a column of the same name, whatever its type.
+    case(e.withColumn("age", F.lit("x")))
+
+    case(e.withColumn("doubled", F.col("age") * 2).withColumn("flag", F.lit(1)))
+
+    case(e.select("id", "name").toDF("name", "id"))
+
+    case(e.withColumns({"c": F.lit(1), "b": F.lit(2), "a": F.lit(3)}))
