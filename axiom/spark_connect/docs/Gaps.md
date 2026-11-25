@@ -35,6 +35,7 @@ runs. A new gap takes the next number.
 | GC15 | Division of integers returns DECIMAL |
 | GC16 | A generator's columns come last in a select |
 | GC17 | `range` with 2^31 or more rows returns too few rows |
+| GF18 | `DataFrame.show()` fails |
 
 ## Details
 
@@ -194,3 +195,14 @@ spark.range(2**31).count()
 
 Collagen returns 0. Spark returns 2147483648. Collagen counts the rows of a
 range in a 32-bit integer and builds the whole range in memory as one vector.
+
+### GF18: `DataFrame.show()` fails
+
+```python
+df.show()
+```
+
+The client fails with `KeyError: 'show_string'`. Spark returns one row with one
+column, `show_string`, holding the formatted table. Collagen translates a
+`ShowString` relation as its input, so it returns the input's rows instead.
+`collect()` and `toPandas()` work.
