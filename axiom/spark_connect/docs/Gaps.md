@@ -29,6 +29,10 @@ runs. A new gap takes the next number.
 | GF8 | `explode_outer` and `posexplode_outer` fail |
 | GF9 | A join on USING columns fails |
 | GF10 | Writes support only append and error-if-exists |
+| GC11 | `posexplode` returns the position as BIGINT |
+| GF12 | A query that returns no rows fails |
+| GC13 | TIMESTAMP values come back in UTC |
+| GF14 | A map lookup that returns an array fails |
 
 ## Details
 
@@ -128,3 +132,45 @@ Collagen fails as not implemented for:
 - the overwrite and ignore modes;
 - writes to a path;
 - schema-qualified table names.
+
+### GC11: `posexplode` returns the position as BIGINT
+
+```python
+df.select(F.posexplode("arr"))
+```
+
+Collagen returns `pos` as BIGINT, the type of the Axiom unnest's ordinality
+column. Spark returns INT.
+
+### GF12: A query that returns no rows fails
+
+```python
+spark.range(5, 5)
+```
+
+The client fails with `Tried reading schema message, was null or length 0`.
+Collagen sends an empty Arrow stream when execution produces no batches, and
+the client needs the schema even for zero rows.
+
+### GC13: TIMESTAMP values come back in UTC
+
+```python
+spark.createDataFrame(
+    [(datetime.datetime(2025, 1, 1, 16, 0),)],
+    StructType([StructField("t", TimestampType())]),
+)
+```
+
+In the America/Los_Angeles session time zone, Collagen returns
+2025-01-02 00:00, the UTC value. Spark returns 2025-01-01 16:00, the value in
+the session time zone.
+
+### GF14: A map lookup that returns an array fails
+
+```python
+df.select(df.m["k"])  # m is MAP<STRING, ARRAY<INT>>
+```
+
+The server fails with
+`Invalid: Expected 1 children for imported format '+l', ArrowArray struct has 0`
+while it converts the result to Arrow. A lookup that returns a scalar works.
