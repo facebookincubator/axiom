@@ -18,7 +18,13 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_spark_connect ArrowIpc.cpp SparkToAxiom.cpp SparkVeloxConverter.cpp)
+add_library(
+  axiom_spark_connect
+  ArrowIpc.cpp
+  ShowStringFormatter.cpp
+  SparkToAxiom.cpp
+  SparkVeloxConverter.cpp
+)
 
 target_link_libraries(
   axiom_spark_connect
@@ -32,5 +38,6 @@ target_link_libraries(
   velox_type
   velox_vector
   arrow
+  fmt::fmt
   Folly::folly
 )
