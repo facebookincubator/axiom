@@ -26,6 +26,8 @@
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/spark_connect/ArrowIpc.h"
 #include "axiom/spark_connect/SparkVeloxConverter.h"
+#include "axiom/sql/spark/SparkFunctions.h"
+#include "axiom/sql/spark/SparkSqlParser.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/coercion/PrestoCoercions.h"
 #include "velox/vector/FlatVector.h"
@@ -80,26 +82,6 @@ lp::ExprPtr resolveSubscript(
     }
   }
   VELOX_USER_FAIL("Struct field not found: {}", field);
-}
-
-// Returns the Velox function for a Spark operator, or 'name' for a function,
-// which Velox registers under its Spark name.
-std::string toFunctionName(const std::string& name) {
-  static const folly::F14FastMap<std::string, std::string> kOperators = {
-      {"+", "add"},
-      {"-", "subtract"},
-      {"*", "multiply"},
-      {"/", "divide"},
-      {"%", "remainder"},
-      {"==", "equalto"},
-      {"<=>", "equalnullsafe"},
-      {">", "greaterthan"},
-      {"<", "lessthan"},
-      {">=", "greaterthanorequal"},
-      {"<=", "lessthanorequal"},
-  };
-  auto it = kOperators.find(name);
-  return it == kOperators.end() ? name : it->second;
 }
 
 bool isGeneratorFunction(const std::string& functionName) {
@@ -951,22 +933,7 @@ void SparkToAxiom::visit(
     args.push_back(toExpr(argument, context));
   }
 
-  // Spark's analyzer passes size() its legacy flag: a NULL has size -1.
-  if (functionName == "size" && args.size() == 1) {
-    args.push_back(lp::Lit(true));
-  }
-
-  // when(c1, v1, c2, v2, ..., else) with more than one condition is a switch.
-  if (functionName == "if" || functionName == "when") {
-    VELOX_USER_CHECK_GE(
-        args.size(),
-        2,
-        "if/when requires at least 2 arguments (condition, then_value)");
-    expr_ = lp::Call(args.size() > 3 ? "switch" : "if", args);
-    return;
-  }
-
-  auto call = lp::Call(toFunctionName(functionName), args);
+  auto call = sql::spark::SparkFunctions::call(functionName, std::move(args));
   expr_ = unresolvedFunction.is_distinct() ? call.distinct() : call;
 }
 
@@ -1008,24 +975,7 @@ void SparkToAxiom::visit(
   if (cast.has_type()) {
     targetType = SparkVeloxConverter::toVeloxType(cast.type());
   } else if (cast.has_type_str()) {
-    static const folly::F14FastMap<std::string, velox::TypePtr> kTypes = {
-        {"long", velox::BIGINT()},         {"bigint", velox::BIGINT()},
-        {"int", velox::INTEGER()},         {"integer", velox::INTEGER()},
-        {"short", velox::SMALLINT()},      {"smallint", velox::SMALLINT()},
-        {"byte", velox::TINYINT()},        {"tinyint", velox::TINYINT()},
-        {"double", velox::DOUBLE()},       {"float", velox::REAL()},
-        {"real", velox::REAL()},           {"string", velox::VARCHAR()},
-        {"varchar", velox::VARCHAR()},     {"boolean", velox::BOOLEAN()},
-        {"bool", velox::BOOLEAN()},        {"binary", velox::VARBINARY()},
-        {"varbinary", velox::VARBINARY()}, {"date", velox::DATE()},
-        {"timestamp", velox::TIMESTAMP()},
-    };
-    auto it = kTypes.find(cast.type_str());
-    VELOX_NYI_CHECK(
-        it != kTypes.end(),
-        "Cast type string not supported: '{}'",
-        cast.type_str());
-    targetType = it->second;
+    targetType = sql::spark::SparkSqlParser::parseDataType(cast.type_str());
   } else {
     VELOX_FAIL("Cast expression must have either type or type_str set");
   }

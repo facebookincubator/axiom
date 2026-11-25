@@ -20,28 +20,26 @@
 
 #include <antlr4-runtime.h>
 
-namespace axiom::sql::presto {
-/**
- * ANTLRInputStream wrapper that case-folds ASCII letters so the lexer
- * matches keywords case-insensitively. Presto's keyword and unquoted-
- * identifier grammar is ASCII-only; non-ASCII codepoints pass through
- * unchanged.
- */
+namespace axiom::sql {
+/// ANTLRInputStream wrapper that case-folds ASCII letters so the lexer matches
+/// keywords case-insensitively. The Presto and Spark keyword and
+/// unquoted-identifier grammars are ASCII-only; non-ASCII code points pass
+/// through unchanged. Token text keeps its original spelling: only LA() folds.
 class UpperCaseInputStream final : public antlr4::ANTLRInputStream {
  public:
   explicit UpperCaseInputStream(std::string_view input)
       : antlr4::ANTLRInputStream(input) {}
 
   size_t LA(ssize_t i) override {
-    size_t c = antlr4::ANTLRInputStream::LA(i);
-    if (c - 'a' < kNumAsciiLowerLetters) {
-      return c - ('a' - 'A');
+    const size_t character = antlr4::ANTLRInputStream::LA(i);
+    if (character - 'a' < kNumAsciiLowerLetters) {
+      return character - ('a' - 'A');
     }
-    return c;
+    return character;
   }
 
  private:
   static constexpr size_t kNumAsciiLowerLetters = 'z' - 'a' + 1;
 };
 
-} // namespace axiom::sql::presto
+} // namespace axiom::sql

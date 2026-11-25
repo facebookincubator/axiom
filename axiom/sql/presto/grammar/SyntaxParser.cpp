@@ -16,99 +16,26 @@
 
 #include "axiom/sql/presto/grammar/SyntaxParser.h"
 
+#include "axiom/sql/DepthLimitListener.h"
+#include "axiom/sql/SyntaxErrorListener.h"
+#include "axiom/sql/UpperCaseInputStream.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
 #include "axiom/sql/presto/grammar/PrestoSqlLexer.h"
-#include "axiom/sql/presto/grammar/UpperCaseInputStream.h"
 
 namespace axiom::sql::presto {
 
 namespace {
 
-// Captures the first syntax error reported by the lexer or the parser.
-class SyntaxErrorListener : public antlr4::BaseErrorListener {
- public:
-  void reset() {
-    firstError_.reset();
-  }
-
-  const std::string& firstError() const {
-    return firstError_.value();
-  }
-
-  size_t line() const {
-    return line_;
-  }
-
-  size_t column() const {
-    return column_;
-  }
-
-  const std::string& token() const {
-    return token_;
-  }
-
-  void syntaxError(
-      antlr4::Recognizer* /*recognizer*/,
-      antlr4::Token* offendingSymbol,
-      size_t line,
-      size_t charPositionInLine,
-      const std::string& msg,
-      std::exception_ptr /*e*/) override {
-    if (firstError_.has_value()) {
-      return; // only capture first error
-    }
-
-    line_ = line - 1; // 0-based
-    column_ = charPositionInLine; // 0-based
-    firstError_ = msg;
-    token_ =
-        offendingSymbol != nullptr ? offendingSymbol->getText() : std::string();
-  }
-
- private:
-  std::optional<std::string> firstError_;
-  size_t line_{};
-  size_t column_{};
-  std::string token_;
-};
-
-// Bounds grammar-rule nesting to prevent a parser-stack overflow.
-class DepthLimitListener : public antlr4::tree::ParseTreeListener {
- public:
-  explicit DepthLimitListener(uint32_t maxDepth) : maxDepth_{maxDepth} {}
-
-  void enterEveryRule(antlr4::ParserRuleContext* ctx) override {
-    if (++depth_ > maxDepth_) {
-      static const std::string kMessage{
-          "Expression exceeds maximum nesting depth"};
-      auto* token = ctx->getStart();
-      throw PrestoSqlError(
-          kMessage,
-          token->getLine() - 1, // 0-based
-          token->getCharPositionInLine(),
-          /*token=*/std::nullopt,
-          PrestoSqlErrorKind::kSemantic,
-          kMessage);
-    }
-  }
-
-  void exitEveryRule(antlr4::ParserRuleContext* /*ctx*/) override {
-    if (depth_ > 0) {
-      --depth_;
-    }
-  }
-
-  void visitTerminal(antlr4::tree::TerminalNode* /*node*/) override {}
-  void visitErrorNode(antlr4::tree::ErrorNode* /*node*/) override {}
-
-  void reset() {
-    depth_ = 0;
-  }
-
- private:
-  uint32_t maxDepth_;
-  uint32_t depth_{0};
-};
+[[noreturn]] void failDepthLimit(const antlr4::Token& start) {
+  static const std::string kMessage{"Expression exceeds maximum nesting depth"};
+  throw PrestoSqlError(
+      kMessage,
+      start.getLine() - 1, // 0-based
+      start.getCharPositionInLine(),
+      /*token=*/std::nullopt,
+      PrestoSqlErrorKind::kSemantic,
+      kMessage);
+}
 
 } // namespace
 
@@ -118,7 +45,7 @@ struct SyntaxParser::Impl {
         lexer{&input},
         tokens{&lexer},
         parser{&tokens},
-        depthListener{maxDepth} {
+        depthListener{maxDepth, failDepthLimit} {
     lexer.removeErrorListeners();
     lexer.addErrorListener(&errorListener);
 

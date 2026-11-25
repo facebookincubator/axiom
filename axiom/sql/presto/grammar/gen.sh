@@ -108,7 +108,7 @@ print_success "All expected files found in Buck output directory"
 
 # Step 4: Apply license headers
 print_step "Step 4: Applying license headers to generated files"
-if python3 axiom/sql/presto/grammar/add_license_headers.py "$BUCK_OUT_DIR"; then
+if python3 axiom/sql/add_license_headers.py "$BUCK_OUT_DIR"; then
   print_success "License headers applied successfully"
 else
   print_error "Failed to apply license headers"
