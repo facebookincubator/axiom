@@ -36,7 +36,6 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionName.h"
 #include "velox/expression/Expr.h"
 
