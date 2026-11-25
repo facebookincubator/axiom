@@ -31,6 +31,8 @@ using namespace facebook;
 namespace axiom::collagen::test {
 namespace {
 
+namespace lp = facebook::axiom::logical_plan;
+
 std::shared_ptr<facebook::axiom::connector::TestConnector>
 registerTestConnector(const std::string& connectorId) {
   auto connector =
@@ -74,27 +76,37 @@ class SparkToAxiomSetOperationTest : public ::testing::Test {
 TEST_F(SparkToAxiomSetOperationTest, toAxiomSetOperationConversion) {
   // Test UNION without ALL flag
   EXPECT_EQ(
-      facebook::axiom::logical_plan::SetOperation::kUnion,
+      lp::SetOperation::kUnion,
       toAxiomSetOperation(
           spark::connect::SetOperation::SET_OP_TYPE_UNION, false));
 
   // Test UNION with ALL flag
   EXPECT_EQ(
-      facebook::axiom::logical_plan::SetOperation::kUnionAll,
+      lp::SetOperation::kUnionAll,
       toAxiomSetOperation(
           spark::connect::SetOperation::SET_OP_TYPE_UNION, true));
 
   // Test INTERSECT
   EXPECT_EQ(
-      facebook::axiom::logical_plan::SetOperation::kIntersect,
+      lp::SetOperation::kIntersect,
       toAxiomSetOperation(
           spark::connect::SetOperation::SET_OP_TYPE_INTERSECT, false));
 
   // Test EXCEPT
   EXPECT_EQ(
-      facebook::axiom::logical_plan::SetOperation::kExcept,
+      lp::SetOperation::kExcept,
       toAxiomSetOperation(
           spark::connect::SetOperation::SET_OP_TYPE_EXCEPT, false));
+
+  // INTERSECT ALL and EXCEPT ALL keep duplicates.
+  EXPECT_EQ(
+      lp::SetOperation::kIntersectAll,
+      toAxiomSetOperation(
+          spark::connect::SetOperation::SET_OP_TYPE_INTERSECT, true));
+  EXPECT_EQ(
+      lp::SetOperation::kExceptAll,
+      toAxiomSetOperation(
+          spark::connect::SetOperation::SET_OP_TYPE_EXCEPT, true));
 }
 
 // Helper function to create a simple table relation for testing
@@ -151,13 +163,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationUnion) {
   // Verify the result
   auto planNode = converter.planNode();
   ASSERT_NE(planNode, nullptr);
-  EXPECT_EQ(planNode->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(planNode->kind(), lp::NodeKind::kSet);
 
-  auto setNode = planNode->as<facebook::axiom::logical_plan::SetNode>();
+  auto setNode = planNode->as<lp::SetNode>();
   ASSERT_NE(setNode, nullptr);
-  EXPECT_EQ(
-      setNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kUnion);
+  EXPECT_EQ(setNode->operation(), lp::SetOperation::kUnion);
   EXPECT_EQ(setNode->inputs().size(), 2);
 }
 
@@ -182,13 +192,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationUnionAll) {
   // Verify the result
   auto planNode = converter.planNode();
   ASSERT_NE(planNode, nullptr);
-  EXPECT_EQ(planNode->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(planNode->kind(), lp::NodeKind::kSet);
 
-  auto setNode = planNode->as<facebook::axiom::logical_plan::SetNode>();
+  auto setNode = planNode->as<lp::SetNode>();
   ASSERT_NE(setNode, nullptr);
-  EXPECT_EQ(
-      setNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kUnionAll);
+  EXPECT_EQ(setNode->operation(), lp::SetOperation::kUnionAll);
   EXPECT_EQ(setNode->inputs().size(), 2);
 }
 
@@ -213,13 +221,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationIntersect) {
   // Verify the result
   auto planNode = converter.planNode();
   ASSERT_NE(planNode, nullptr);
-  EXPECT_EQ(planNode->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(planNode->kind(), lp::NodeKind::kSet);
 
-  auto setNode = planNode->as<facebook::axiom::logical_plan::SetNode>();
+  auto setNode = planNode->as<lp::SetNode>();
   ASSERT_NE(setNode, nullptr);
-  EXPECT_EQ(
-      setNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kIntersect);
+  EXPECT_EQ(setNode->operation(), lp::SetOperation::kIntersect);
   EXPECT_EQ(setNode->inputs().size(), 2);
 }
 
@@ -244,13 +250,11 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationExcept) {
   // Verify the result
   auto planNode = converter.planNode();
   ASSERT_NE(planNode, nullptr);
-  EXPECT_EQ(planNode->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(planNode->kind(), lp::NodeKind::kSet);
 
-  auto setNode = planNode->as<facebook::axiom::logical_plan::SetNode>();
+  auto setNode = planNode->as<lp::SetNode>();
   ASSERT_NE(setNode, nullptr);
-  EXPECT_EQ(
-      setNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kExcept);
+  EXPECT_EQ(setNode->operation(), lp::SetOperation::kExcept);
   EXPECT_EQ(setNode->inputs().size(), 2);
 }
 
@@ -288,29 +292,24 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationWithComplexInputs) {
   // Verify the result
   auto planNode = converter.planNode();
   ASSERT_NE(planNode, nullptr);
-  EXPECT_EQ(planNode->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(planNode->kind(), lp::NodeKind::kSet);
 
-  auto setNode = planNode->as<facebook::axiom::logical_plan::SetNode>();
+  auto setNode = planNode->as<lp::SetNode>();
   ASSERT_NE(setNode, nullptr);
-  EXPECT_EQ(
-      setNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kIntersect);
+  EXPECT_EQ(setNode->operation(), lp::SetOperation::kIntersect);
   EXPECT_EQ(setNode->inputs().size(), 2);
 
   // Verify the left input is also a set operation
   auto leftInput = setNode->inputs()[0];
-  EXPECT_EQ(leftInput->kind(), facebook::axiom::logical_plan::NodeKind::kSet);
+  EXPECT_EQ(leftInput->kind(), lp::NodeKind::kSet);
 
-  auto leftSetNode = leftInput->as<facebook::axiom::logical_plan::SetNode>();
+  auto leftSetNode = leftInput->as<lp::SetNode>();
   ASSERT_NE(leftSetNode, nullptr);
-  EXPECT_EQ(
-      leftSetNode->operation(),
-      facebook::axiom::logical_plan::SetOperation::kUnion);
+  EXPECT_EQ(leftSetNode->operation(), lp::SetOperation::kUnion);
 
   // Verify the right input is a table scan
   auto rightInput = setNode->inputs()[1];
-  EXPECT_EQ(
-      rightInput->kind(), facebook::axiom::logical_plan::NodeKind::kTableScan);
+  EXPECT_EQ(rightInput->kind(), lp::NodeKind::kTableScan);
 }
 
 } // namespace
