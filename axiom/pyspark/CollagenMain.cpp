@@ -24,7 +24,7 @@
 #include "axiom/connectors/hive/LocalHiveConnectorMetadata.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/connectors/tpch/TpchConnectorMetadata.h"
-#include "axiom/functions/prestosql/PrestoFunctions.h"
+#include "axiom/functions/sparksql/SparkFunctions.h"
 #include "axiom/pyspark/runners/LocalRunner.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -36,7 +36,10 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/functions/axiom/Register.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/registration/Register.h"
+#include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 DEFINE_string(
@@ -86,7 +89,7 @@ void CollagenMain::init() {
 
   std::string serverAddress(fmt::format("0.0.0.0:{}", port_));
   auto functionRegistry =
-      facebook::axiom::functions::prestosql::PrestoFunctions::makeRegistry();
+      facebook::axiom::functions::sparksql::SparkFunctions::makeRegistry();
   functionRegistry->registerInternalPrefix("axiom_");
   service_ = std::make_unique<CollagenService>(
       runnerId_, catalog_, schema_, std::move(functionRegistry));
@@ -207,8 +210,15 @@ void CollagenMain::registerConnector() {
 }
 
 void CollagenMain::registerFunctions() {
-  facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  // Velox's Spark aggregate and window functions lack count, bool_or, lead,
+  // lag and others. The Presto ones provide them, and the Spark ones override
+  // the rest.
+  facebook::velox::functions::sparksql::registerFunctions("");
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+  facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
+      "");
+  facebook::velox::window::prestosql::registerAllWindowFunctions();
+  facebook::velox::functions::window::sparksql::registerWindowFunctions("");
   facebook::velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
   facebook::velox::functions::axiom::registerFunctions("axiom_");
 }
