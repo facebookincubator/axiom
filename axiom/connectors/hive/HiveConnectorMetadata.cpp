@@ -31,11 +31,11 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::axiom::connector::hive {
 
@@ -550,7 +550,7 @@ velox::connector::ConnectorTableHandlePtr HiveTableLayout::createTableHandle(
   velox::common::SubfieldFilters subfieldFilters;
   double sampleRate = 1.0;
   for (auto& typedExpr : filters) {
-    auto remaining = velox::connector::extractFiltersFromRemainingFilter(
+    auto remaining = velox::exec::ExprToSubfieldFilterParser::extractFilters(
         typedExpr, &evaluator, subfieldFilters, sampleRate);
 
     if (remaining != nullptr) {
