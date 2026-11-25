@@ -13,7 +13,7 @@
 # limitations under the License.
 
 set(
-  COLLAGEN_PROTO_SRCS
+  SPARK_CONNECT_PROTO_SRCS
   base.proto
   catalog.proto
   commands.proto
@@ -24,23 +24,31 @@ set(
 )
 
 # Generate C++ sources from .proto files.
-set(COLLAGEN_PROTO_CXX_SRCS)
-set(COLLAGEN_PROTO_CXX_HDRS)
-set(COLLAGEN_GRPC_CXX_SRCS)
-set(COLLAGEN_GRPC_CXX_HDRS)
+set(SPARK_CONNECT_PROTO_CXX_SRCS)
+set(SPARK_CONNECT_PROTO_CXX_HDRS)
+set(SPARK_CONNECT_GRPC_CXX_SRCS)
+set(SPARK_CONNECT_GRPC_CXX_HDRS)
 
-set(COLLAGEN_PROTO_PATHS)
+set(SPARK_CONNECT_PROTO_PATHS)
 
-foreach(PROTO_FILE ${COLLAGEN_PROTO_SRCS})
+foreach(PROTO_FILE ${SPARK_CONNECT_PROTO_SRCS})
   file(RELATIVE_PATH PROTO_PATH ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/${PROTO_FILE})
   get_filename_component(PROTO_DIR ${PROTO_PATH} DIRECTORY)
   get_filename_component(PROTO_NAME ${PROTO_PATH} NAME_WE)
-  list(APPEND COLLAGEN_PROTO_PATHS ${PROTO_PATH})
+  list(APPEND SPARK_CONNECT_PROTO_PATHS ${PROTO_PATH})
 
-  list(APPEND COLLAGEN_PROTO_CXX_SRCS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.pb.cc")
-  list(APPEND COLLAGEN_PROTO_CXX_HDRS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.pb.h")
-  list(APPEND COLLAGEN_GRPC_CXX_SRCS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.grpc.pb.cc")
-  list(APPEND COLLAGEN_GRPC_CXX_HDRS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.grpc.pb.h")
+  list(APPEND SPARK_CONNECT_PROTO_CXX_SRCS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.pb.cc")
+  list(APPEND SPARK_CONNECT_PROTO_CXX_HDRS "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.pb.h")
+  list(
+    APPEND
+    SPARK_CONNECT_GRPC_CXX_SRCS
+    "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.grpc.pb.cc"
+  )
+  list(
+    APPEND
+    SPARK_CONNECT_GRPC_CXX_HDRS
+    "${PROJECT_BINARY_DIR}/${PROTO_DIR}/${PROTO_NAME}.grpc.pb.h"
+  )
 endforeach()
 
 find_program(PROTOC_EXECUTABLE protoc REQUIRED)
@@ -48,21 +56,25 @@ find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
 
 add_custom_command(
   OUTPUT
-    ${COLLAGEN_PROTO_CXX_SRCS}
-    ${COLLAGEN_PROTO_CXX_HDRS}
-    ${COLLAGEN_GRPC_CXX_SRCS}
-    ${COLLAGEN_GRPC_CXX_HDRS}
+    ${SPARK_CONNECT_PROTO_CXX_SRCS}
+    ${SPARK_CONNECT_PROTO_CXX_HDRS}
+    ${SPARK_CONNECT_GRPC_CXX_SRCS}
+    ${SPARK_CONNECT_GRPC_CXX_HDRS}
   COMMAND
     ${PROTOC_EXECUTABLE} --proto_path=${PROJECT_SOURCE_DIR} --cpp_out=${PROJECT_BINARY_DIR}
     --grpc_out=${PROJECT_BINARY_DIR} --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
-    ${COLLAGEN_PROTO_PATHS}
+    ${SPARK_CONNECT_PROTO_PATHS}
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  DEPENDS ${COLLAGEN_PROTO_SRCS}
-  COMMENT "Generating Collagen protobuf/gRPC C++ sources"
+  DEPENDS ${SPARK_CONNECT_PROTO_SRCS}
+  COMMENT "Generating Spark Connect protobuf/gRPC C++ sources"
 )
 
-add_library(collagen_proto ${COLLAGEN_PROTO_CXX_SRCS} ${COLLAGEN_GRPC_CXX_SRCS})
+add_library(
+  axiom_spark_connect_proto
+  ${SPARK_CONNECT_PROTO_CXX_SRCS}
+  ${SPARK_CONNECT_GRPC_CXX_SRCS}
+)
 
-target_include_directories(collagen_proto PUBLIC ${PROJECT_BINARY_DIR})
+target_include_directories(axiom_spark_connect_proto PUBLIC ${PROJECT_BINARY_DIR})
 
-target_link_libraries(collagen_proto protobuf::libprotobuf gRPC::grpc++)
+target_link_libraries(axiom_spark_connect_proto protobuf::libprotobuf gRPC::grpc++)

@@ -18,8 +18,8 @@
 syntax = 'proto3';
 
 import "google/protobuf/any.proto";
-import "axiom/pyspark/third-party/protos/expressions.proto";
-import "axiom/pyspark/third-party/protos/relations.proto";
+import "axiom/spark_connect/third-party/protos/expressions.proto";
+import "axiom/spark_connect/third-party/protos/relations.proto";
 
 package spark.connect;
 

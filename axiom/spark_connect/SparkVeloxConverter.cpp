@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/spark_connect/SparkVeloxConverter.h"
 #include <folly/String.h>
 #include <folly/json.h>
 #include <string>
@@ -22,7 +22,7 @@
 
 using namespace facebook;
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 facebook::axiom::logical_plan::JoinType toAxiomJoinType(
     const spark::connect::Join::JoinType& joinType) {
@@ -269,4 +269,4 @@ velox::TypePtr jsonToVeloxType(std::string_view jsonInput) {
   }
 }
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

@@ -12,46 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(third-party/protos)
 add_subdirectory(runners)
 
-if(AXIOM_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
-
-add_library(collagen_arrow ArrowIpcLib.cpp)
-
-target_link_libraries(collagen_arrow velox_arrow_bridge velox_vector velox_memory arrow)
-
-add_library(collagen_spark_velox_converter SparkVeloxConverter.cpp)
+add_library(collagen_optimizer Optimizer.cpp)
 
 target_link_libraries(
-  collagen_spark_velox_converter
-  axiom_logical_plan
-  collagen_proto
-  velox_type
-  Folly::folly
-)
-
-add_library(collagen_converter Optimizer.cpp SparkToAxiom.cpp)
-
-target_link_libraries(
-  collagen_converter
-  collagen_arrow
-  collagen_spark_velox_converter
-  collagen_proto
+  collagen_optimizer
   axiom_common
   axiom_connectors
   axiom_logical_plan
   axiom_optimizer_core
   axiom_optimizer
-  velox_presto_coercions
-  velox_exec
-  velox_expression
-  velox_function_registry
   velox_memory
-  velox_type
-  velox_vector
   Folly::folly
 )
 
@@ -59,9 +31,9 @@ add_library(collagen_service CollagenService.cpp)
 
 target_link_libraries(
   collagen_service
-  collagen_arrow
-  collagen_converter
-  collagen_proto
+  collagen_optimizer
+  axiom_spark_connect
+  axiom_spark_connect_proto
   collagen_runners
   axiom_optimizer_core
   velox_memory
