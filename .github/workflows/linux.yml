@@ -80,6 +80,7 @@ jobs:
         env:
           MAKEFLAGS: NUM_THREADS=4 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
           CPU_TARGET: "avx"
+          EXTRA_CMAKE_FLAGS: -DAXIOM_ENABLE_COLLAGEN=ON
         run: |
           make ${{ matrix.build_type }}
 
@@ -106,6 +107,22 @@ jobs:
       - name: Run Tests
         run: |
           ctest --test-dir _build/${{ matrix.build_type }} -j 8 --output-on-failure --no-tests=error
+
+      # The PySpark tests compare Collagen with a local Spark session. They
+      # run with PySpark 3.4, the client Collagen supports, which needs Java
+      # and Python 3.10 or 3.11; the image's python3 is 3.9.
+      - name: Run PySpark Tests
+        if: matrix.build_type == 'release'
+        run: |
+          dnf install -y -q java-17-openjdk-headless
+          uv venv -q --python 3.11 /tmp/pyspark-venv
+          source /tmp/pyspark-venv/bin/activate
+          uv pip install -q "pyspark[connect]==3.4.*" "pandas<2" "numpy<2" "pyarrow<15" \
+            psutil parameterized
+          export COLLAGEN_SERVER="$GITHUB_WORKSPACE/_build/release/axiom/pyspark/collagen_server"
+          python -m unittest -v \
+            axiom.pyspark.tests.test_dataframe_cases \
+            axiom.pyspark.tests.test_explain
 
       # The Makefile always configures AXIOM_BUILD_TESTING=ON, so the run above
       # never exercises what a consumer gets. Configure the other combination

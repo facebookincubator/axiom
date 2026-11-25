@@ -16,6 +16,8 @@
 
 #include "axiom/pyspark/CollagenMain.h"
 
+#include <folly/executors/GlobalExecutor.h>
+#include <folly/executors/IOExecutor.h>
 #include <folly/io/async/EventBase.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -102,8 +104,9 @@ void CollagenMain::init() {
 }
 
 void CollagenMain::run() {
-  auto eventBaseKeepAlive = folly::getEventBaseKeepAlive();
-  CollagenSignalHandler handler(eventBaseKeepAlive.get(), server_.get());
+  auto eventBase =
+      folly::getKeepAliveToken(folly::getGlobalIOExecutor()->getEventBase());
+  CollagenSignalHandler handler(eventBase.get(), server_.get());
   server_->Wait();
 }
 

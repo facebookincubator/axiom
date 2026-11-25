@@ -38,7 +38,7 @@ from prompt_toolkit.history import FileHistory
 from pyspark.sql import DataFrame
 
 from . import cases as case_files
-from .collagen_test_base import CollagenServer
+from .collagen_test_base import CollagenServer, use_test_time_zone
 from .dataframe_cases import (
     catalog,
     evaluate,
@@ -136,6 +136,7 @@ def main() -> int:
         help="Line to run instead of reading lines interactively. Repeatable.",
     )
     args = parser.parse_args()
+    use_test_time_zone()
 
     module = importlib.import_module(f"{case_files.__name__}.{args.cases}")
     server = None
