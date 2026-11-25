@@ -70,8 +70,6 @@ std::shared_ptr<arrow::Buffer> toArrowIpc(
         auto arrowBatch, arrow::ImportRecordBatch(&arrowArray, schema));
     COLLAGEN_ARROW_CHECK(arrowWriter->WriteRecordBatch(*arrowBatch));
 
-    // Update rowCount with the number of rows in the current vector
-    LOG(INFO) << "Vector size: " << vector->size();
     rowCount += vector->size();
   }
 
