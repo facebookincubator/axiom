@@ -15,7 +15,7 @@
  */
 
 #include "axiom/pyspark/runners/Runner.h"
-#include "axiom/pyspark/Exception.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace axiom::collagen::runner {
 namespace {
@@ -36,13 +36,13 @@ Runner::Runner(
       plan_(std::move(plan)),
       finishWrite_(std::move(finishWrite)),
       rootPool_(std::move(pool)) {
-  COLLAGEN_CHECK_NOT_NULL(rootPool_, "Memory pool cannot be null");
-  COLLAGEN_CHECK_NOT_NULL(plan_, "Plan cannot be null");
+  VELOX_CHECK_NOT_NULL(rootPool_, "Memory pool cannot be null");
+  VELOX_CHECK_NOT_NULL(plan_, "Plan cannot be null");
 }
 
 void registerRunnerFactory(const std::string runnerId, TRunnerFactory factory) {
   bool status = runnerFactories().insert({runnerId, factory}).second;
-  COLLAGEN_CHECK(
+  VELOX_CHECK(
       status, "RunnerFactory with name '{}' is already registered.", runnerId);
 }
 

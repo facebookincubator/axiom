@@ -20,10 +20,10 @@
 
 #include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
-#include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/Optimizer.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/runners/Runner.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryPool.h"
 
 using namespace ::facebook;
@@ -40,6 +40,27 @@ std::vector<facebook::velox::RowVectorPtr> getDummyRowVector(
   static auto response = {
       facebook::velox::RowVector::createEmpty(responseType, pool)};
   return response;
+}
+
+// Returns the gRPC status for a failed request. A Velox error carries whether
+// the request was wrong, asked for something unsupported, or hit a bug.
+grpc::Status toStatus(const std::exception& e) {
+  const auto* veloxError =
+      dynamic_cast<const facebook::velox::VeloxException*>(&e);
+  if (veloxError == nullptr) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+  }
+  const auto& code = veloxError->errorCode();
+  if (code == facebook::velox::error_code::kNotImplemented ||
+      code == facebook::velox::error_code::kUnsupported) {
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, veloxError->message());
+  }
+  if (veloxError->exceptionType() ==
+      facebook::velox::VeloxException::Type::kUser) {
+    return grpc::Status(
+        grpc::StatusCode::INVALID_ARGUMENT, veloxError->message());
+  }
+  return grpc::Status(grpc::StatusCode::INTERNAL, veloxError->message());
 }
 
 // Returns the Spark type for a Velox type. Velox types carry no nullability,
@@ -116,7 +137,7 @@ spark::connect::DataType toSparkType(const facebook::velox::TypePtr& type) {
       break;
     }
     default:
-      COLLAGEN_NYI("Type is not supported in a schema: {}", type->toString());
+      VELOX_NYI("Type is not supported in a schema: {}", type->toString());
   }
   return result;
 }
@@ -173,10 +194,8 @@ grpc::Status CollagenService::ExecutePlan(
           grpc::StatusCode::INTERNAL,
           "Failed to generate Velox plan from Spark Connect plan.");
     }
-  } catch (const CollagenException& e) {
-    return e.status();
   } catch (const std::exception& e) {
-    return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
+    return toStatus(e);
   }
 
   auto runner = runner::buildRunner(
@@ -207,10 +226,8 @@ grpc::Status CollagenService::ExecutePlan(
     arrowBatch->set_row_count(rowCount);
     writer->Write(planResponse);
     return grpc::Status::OK;
-  } catch (const CollagenException& e) {
-    return e.status();
   } catch (const std::exception& e) {
-    return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
+    return toStatus(e);
   }
 }
 
@@ -263,12 +280,8 @@ grpc::Status CollagenService::AnalyzePlan(
 
     explain->set_explain_string(fullExplainStr);
     return grpc::Status::OK;
-  } catch (const CollagenException& e) {
-    veloxPlanStats.plan = nullptr;
-    return e.status();
   } catch (const std::exception& e) {
-    veloxPlanStats.plan = nullptr;
-    return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
+    return toStatus(e);
   }
 }
 
