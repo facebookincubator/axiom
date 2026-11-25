@@ -16,31 +16,39 @@
 
 #pragma once
 
-#include "axiom/logical_plan/LogicalPlanNode.h"
+#include <folly/container/F14Map.h>
+#include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/pyspark/SparkPlanVisitor.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace axiom::collagen {
 
-/// Converts a Spark Connect json type representation into a Velox type.
-facebook::velox::TypePtr jsonToVeloxType(const std::string& jsonInput);
-
-/// Spark visitor implementation that converts the input protobuf Spark Connect
-/// plan into a axiom/logical_plan structure which can serve as an input to the
-/// Axiom optimizer.
+/// Converts a Spark Connect plan into an Axiom logical plan.
+///
+/// Builds the plan with a PlanBuilder that resolves columns by ID, and binds
+/// Spark column references to column IDs itself:
+///  - col("x") names a column of the current input.
+///  - df["x"] carries the plan ID of 'df'. It names the column 'df' output as
+///    'x', which must still be in the current input.
+///  - col("t.x") names the column 't' output as 'x', where 't' is a
+///    DataFrame alias or a table name.
+///
+/// Usage:
+///
+///   SparkToAxiom converter(catalog, schema, pool);
+///   SparkPlanVisitorContext context;
+///   converter.visit(plan, context);
+///   auto logicalPlan = converter.planNode();
 class SparkToAxiom : public SparkPlanVisitor {
  public:
   using LogicalPlanNodePtr =
       ::facebook::axiom::logical_plan::LogicalPlanNodePtr;
-  using ExprPtr = ::facebook::axiom::logical_plan::ExprPtr;
-  using PlanNodeIdGenerator = ::facebook::velox::core::PlanNodeIdGenerator;
   using MemoryPool = ::facebook::velox::memory::MemoryPool;
 
-  SparkToAxiom(std::string catalog, std::string schema, MemoryPool* pool)
-      : catalog_(std::move(catalog)), schema_(std::move(schema)), pool_(pool) {}
-
-  virtual ~SparkToAxiom() = default;
+  /// @param catalog Connector to read and write tables in.
+  /// @param schema Schema to read and write tables in.
+  /// @param pool Memory pool for local relation and range data.
+  SparkToAxiom(std::string catalog, std::string schema, MemoryPool* pool);
 
   void visit(
       const spark::connect::Read_NamedTable& namedTable,
@@ -61,7 +69,7 @@ class SparkToAxiom : public SparkPlanVisitor {
       const spark::connect::Filter& filter,
       SparkPlanVisitorContext& context) override;
 
-  virtual void visit(
+  void visit(
       const spark::connect::Aggregate& aggregate,
       SparkPlanVisitorContext& context) override;
 
@@ -108,7 +116,7 @@ class SparkToAxiom : public SparkPlanVisitor {
     SparkPlanVisitor::visit(relation, context);
   }
 
-  virtual void visit(
+  void visit(
       const spark::connect::Expression::Literal& literal,
       SparkPlanVisitorContext& context) override;
 
@@ -159,91 +167,100 @@ class SparkToAxiom : public SparkPlanVisitor {
       const spark::connect::WithColumns& withColumns,
       SparkPlanVisitorContext& context) override;
 
-  const LogicalPlanNodePtr& planNode() const {
-    return planNode_;
-  }
+  /// Returns the logical plan of the visited relation or command. A query plan
+  /// ends in an OutputNode carrying the user-visible column names.
+  LogicalPlanNodePtr planNode();
 
-  const ExprPtr& expr() const {
-    return expr_;
-  }
-
-  const std::string& exprName() const {
-    return exprName_;
-  }
-
+  /// Returns the text of planNode(), or "<empty>" before a visit.
   std::string toString();
 
  private:
-  std::string nextId() {
-    return planNodeIdGenerator_->next();
-  }
+  using PlanBuilder = ::facebook::axiom::logical_plan::PlanBuilder;
+  using ExprApi = ::facebook::axiom::logical_plan::ExprApi;
 
-  void setPlanNode(const LogicalPlanNodePtr& planNode, int64_t planId);
+  // An output column: the user-visible name, the column ID and the type.
+  struct Column {
+    std::string name;
+    std::string id;
+    facebook::velox::TypePtr type;
+  };
 
-  // Catalog to use for table resolution.
-  const std::string catalog_;
+  using Columns = std::vector<Column>;
 
-  // Namespace to use for table resolution and creation.
-  const std::string schema_;
+  // Returns a builder with no plan that shares IDs and names with the others.
+  PlanBuilder newBuilder() const;
 
-  // Current plan node and expr objects being constructed when traversing the
-  // tree.
-  LogicalPlanNodePtr planNode_;
-  ExprPtr expr_;
-  std::string exprName_;
+  // Makes the output of 'builder_' the scope of later expressions, and records
+  // it as the output of the relation with the context's plan ID.
+  void finishRelation(const SparkPlanVisitorContext& context);
 
-  std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_{
-      std::make_shared<PlanNodeIdGenerator>()};
+  // Returns a reference to 'column'. The reference carries the column's name,
+  // which PlanBuilder reads as a reference rather than a rename.
+  static ExprApi toCol(const Column& column);
 
-  MemoryPool* pool_;
+  // Returns the output columns of 'builder', without hidden columns.
+  static Columns columnsOf(const PlanBuilder& builder);
 
-  /// Maintain mappings between the Spark Connect plan id and aliases to the
-  /// Axiom logical plan created as the plan tree is traversed.
-  std::unordered_map<int64_t, LogicalPlanNodePtr> sparkPlanIdToPlanNode_;
-  std::unordered_map<std::string, LogicalPlanNodePtr> sparkAliasToPlanNode_;
+  // Visits 'relation' and returns the builder holding its plan.
+  PlanBuilder visitInput(
+      const spark::connect::Relation& relation,
+      SparkPlanVisitorContext& context);
 
-  /// Helper method for processing higher-order functions that take lambdas.
-  /// Handles type inference for lambda parameters based on the array/collection
-  /// type before visiting the lambda expression.
-  void visitHigherOrderFunction(
-      const spark::connect::Expression::UnresolvedFunction& unresolvedFunction,
-      SparkPlanVisitorContext& context,
-      std::vector<ExprPtr>& params,
-      std::vector<facebook::velox::TypePtr>& paramTypes);
+  // Visits 'expression' and returns it with the name it was given, if any.
+  ExprApi toExpr(
+      const spark::connect::Expression& expression,
+      SparkPlanVisitorContext& context);
 
-  /// Translates a Spark Connect Project containing a generator function
-  /// (explode, posexplode) into the equivalent Axiom logical plan.
-  ///
-  /// A generator like posexplode(arr) does not fit the ProjectNode shape
-  /// because it emits multiple rows per input row. The translation produces
-  /// two nodes:
-  ///   1. UnnestNode  - flattens the generator's array or map argument,
-  ///      emitting one row per element, optionally with a 1-based
-  ///      ordinality column.
-  ///   2. ProjectNode (wrapping) - drops input columns that are not in the
-  ///      SELECT list (Spark's select(explode(...)) keeps only the unnested
-  ///      columns), converts posexplode's 1-based ordinality to Spark's
-  ///      0-based position via (pos - 1), and applies user-supplied aliases.
-  ///
-  /// Spark allows at most one generator per SELECT clause and this is
-  /// enforced with COLLAGEN_CHECK. The _outer variants are not yet
-  /// supported and raise COLLAGEN_NYI until Axiom's UnnestNode exposes
-  /// outer-unnest semantics.
+  // Returns the column of 'scope_' with the given name.
+  ExprApi bindColumn(std::string_view name) const;
+
+  // Returns the column of 'scope_' that one of 'outputs' named 'name'.
+  // 'reference' describes the reference in error messages.
+  ExprApi bindColumn(
+      std::string_view name,
+      const std::vector<Columns>& outputs,
+      std::string_view reference) const;
+
+  // Translates a Project that has a generator (explode, posexplode) into an
+  // Unnest followed by a Project. Spark allows one generator per Project. The
+  // Project outputs the non-generator expressions, then for posexplode the
+  // 0-based position, named 'pos' unless aliased, then the unnested columns,
+  // named 'col' (array) or 'key' and 'value' (map) unless aliased.
   void visitProjectWithGenerator(
       const spark::connect::Project& project,
       SparkPlanVisitorContext& context);
 
-  /// Builds the wrapping ProjectNode for visitProjectWithGenerator. Selects
-  /// only the columns that should appear in the Project's output: any
-  /// pass-through columns from 'nonGeneratorExprs' followed by the unnested
-  /// columns (and the converted 0-based position for posexplode). Also sets
-  /// planNode_ to 'unnestNode' so non-generator expressions can be resolved
-  /// against its output schema.
-  LogicalPlanNodePtr buildProjectAroundUnnest(
-      std::shared_ptr<facebook::axiom::logical_plan::UnnestNode> unnestNode,
-      const std::vector<const spark::connect::Expression*>& nonGeneratorExprs,
-      bool isPosExplode,
-      SparkPlanVisitorContext& context);
+  const std::string catalog_;
+  const std::string schema_;
+  MemoryPool* const pool_;
+
+  // Shared by all builders, so column IDs are unique across the plan.
+  PlanBuilder::Context builderContext_;
+
+  // Plan of the relation being translated.
+  std::optional<PlanBuilder> builder_;
+
+  // Columns that expressions being translated can reference.
+  Columns scope_;
+
+  // Translated expression, set by the expression visit methods.
+  std::optional<ExprApi> expr_;
+
+  // Output columns of each relation with a plan ID. A plan ID appears more
+  // than once when the client reuses a DataFrame, as in a self-join.
+  folly::F14FastMap<int64_t, std::vector<Columns>> planIdOutputs_;
+
+  // Output columns of each DataFrame alias and table name.
+  folly::F14FastMap<std::string, std::vector<Columns>> aliasOutputs_;
+
+  // Lambda variables in scope, innermost last.
+  std::vector<std::string> lambdaVariables_;
+
+  // True if the plan is a table write, which has no OutputNode.
+  bool isWrite_{false};
+
+  // Plan returned by planNode(), built on first use.
+  LogicalPlanNodePtr plan_;
 };
 
 } // namespace axiom::collagen

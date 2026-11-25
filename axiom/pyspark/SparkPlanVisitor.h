@@ -18,9 +18,6 @@
 
 #include <glog/logging.h>
 #include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/third-party/protos/base.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
@@ -35,15 +32,8 @@ class SparkPlanVisitorContext {
  public:
   virtual ~SparkPlanVisitorContext() = default;
 
+  /// Plan ID of the relation being visited, or -1 if it has none.
   int64_t planId{-1};
-
-  // Spark UnresovedFunction may resolve to either scalar or aggregate function.
-  // This flag is used to track if the current function is aggregate function.
-  bool isAggregate{false};
-
-  /// Lambda variable name to type mapping for resolving lambda body references.
-  /// Managed via LambdaScope RAII to support proper scoping for nested lambdas.
-  std::unordered_map<std::string, facebook::velox::TypePtr> lambdaVariables;
 };
 
 class SparkPlanVisitor {
@@ -217,50 +207,12 @@ class SparkPlanVisitor {
     const int64_t parentPlanId_;
   };
 
-  // RAII abstraction to manage lambda variable scoping during lambda body
-  // translation. Supports proper shadowing for nested lambdas by
-  // saving/restoring any pre-existing variable bindings on scope exit.
-  struct LambdaScope {
-    LambdaScope(
-        SparkPlanVisitorContext& context,
-        const std::vector<std::pair<std::string, facebook::velox::TypePtr>>&
-            variables)
-        : context_(context) {
-      for (const auto& [name, type] : variables) {
-        auto it = context_.lambdaVariables.find(name);
-        if (it != context_.lambdaVariables.end()) {
-          savedVariables_.emplace_back(name, it->second);
-          it->second = type;
-        } else {
-          newVariables_.push_back(name);
-          context_.lambdaVariables[name] = type;
-        }
-      }
-    }
-
-    ~LambdaScope() {
-      for (const auto& name : newVariables_) {
-        context_.lambdaVariables.erase(name);
-      }
-      for (const auto& [name, type] : savedVariables_) {
-        context_.lambdaVariables[name] = type;
-      }
-    }
-
-    LambdaScope(const LambdaScope&) = delete;
-    LambdaScope& operator=(const LambdaScope&) = delete;
-
-   private:
-    SparkPlanVisitorContext& context_;
-    std::vector<std::pair<std::string, facebook::velox::TypePtr>>
-        savedVariables_;
-    std::vector<std::string> newVariables_;
-  };
-
   virtual void visit(
       const spark::connect::Relation& relation,
       SparkPlanVisitorContext& context) {
-    RelationScope scope{context, relation.common().plan_id()};
+    RelationScope scope{
+        context,
+        relation.common().has_plan_id() ? relation.common().plan_id() : -1};
 
     switch (relation.rel_type_case()) {
       case spark::connect::Relation::kRead:

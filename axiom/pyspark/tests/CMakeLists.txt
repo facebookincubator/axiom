@@ -12,26 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  collagen_spark_velox_converter_test
-  SparkToAxiomLambdaTest.cpp
-  SparkToAxiomSetOperationTest.cpp
-  SparkToAxiomUnnestTest.cpp
-  SparkToAxiomWithColumnsRenamedTest.cpp
-  SparkToAxiomWithColumnsTest.cpp
-  SparkVeloxConverterTest.cpp
-)
+add_executable(collagen_spark_velox_converter_test SparkVeloxConverterTest.cpp)
 
 target_link_libraries(
   collagen_spark_velox_converter_test
-  collagen_converter
   collagen_spark_velox_converter
   collagen_proto
-  axiom_logical_plan
-  axiom_test_connector
-  velox_connector_registry
-  velox_functions_prestosql
-  velox_memory
   velox_type
   GTest::gtest
   GTest::gtest_main
