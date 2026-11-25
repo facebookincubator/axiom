@@ -16,43 +16,39 @@
 
 #pragma once
 
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <memory>
+#include <string_view>
 
-#include "axiom/logical_plan/LogicalPlanNode.h"
-#include "axiom/spark_connect/third-party/protos/commands.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
-#include "axiom/spark_connect/third-party/protos/expressions.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
-#include "axiom/spark_connect/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/expressions.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/types.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
 namespace axiom::spark_connect {
 
-/// A series of conversion utilities between Spark Connect protobuf structures
-/// and Axiom/Velox.
+/// Converts types and values between Spark Connect and Velox.
+class SparkVeloxConverter {
+ public:
+  /// Returns the Velox type for a Spark data type.
+  static facebook::velox::TypePtr toVeloxType(
+      const spark::connect::DataType& type);
 
-/// Convert Spark join types to Axiom join types
-facebook::axiom::logical_plan::JoinType toAxiomJoinType(
-    const spark::connect::Join::JoinType& joinType);
+  /// Returns the Velox type of a Spark literal.
+  static facebook::velox::TypePtr toVeloxType(
+      const spark::connect::Expression::Literal& literal);
 
-/// Convert Spark set operation types to Axiom set operation types
-facebook::axiom::logical_plan::SetOperation toAxiomSetOperation(
-    const spark::connect::SetOperation::SetOpType& setOpType,
-    bool isAll = false);
+  /// Returns the value of a Spark literal.
+  static std::shared_ptr<facebook::velox::Variant> toVariant(
+      const spark::connect::Expression::Literal& literal);
 
-/// Returns the Velox type for a particular Spark data type.
-facebook::velox::TypePtr toVeloxType(const spark::connect::DataType& sparkType);
+  /// Returns the Velox type for the JSON form of a Spark data type, the form a
+  /// local relation's schema takes.
+  static facebook::velox::TypePtr parseJsonType(std::string_view json);
 
-/// Returns the Velox type for a particular Spark literal.
-facebook::velox::TypePtr toVeloxType(
-    const spark::connect::Expression::Literal& literal);
-
-/// Convert Spark literals to Velox variants
-std::shared_ptr<facebook::velox::Variant> toVeloxVariant(
-    const spark::connect::Expression::Literal& literal);
-
-/// Convert JSON string type representation to Velox type
-facebook::velox::TypePtr jsonToVeloxType(std::string_view jsonInput);
+  /// Returns the Spark type for a Velox type. Velox types carry no
+  /// nullability, so every field, element and map value is nullable.
+  static spark::connect::DataType toSparkType(
+      const facebook::velox::TypePtr& type);
+};
 
 } // namespace axiom::spark_connect

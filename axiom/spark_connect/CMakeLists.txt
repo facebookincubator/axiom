@@ -18,7 +18,7 @@ if(AXIOM_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(axiom_spark_connect ArrowIpcLib.cpp SparkToAxiom.cpp SparkVeloxConverter.cpp)
+add_library(axiom_spark_connect ArrowIpc.cpp SparkToAxiom.cpp SparkVeloxConverter.cpp)
 
 target_link_libraries(
   axiom_spark_connect
