@@ -508,6 +508,26 @@ void SparkToAxiom::visit(
 }
 
 void SparkToAxiom::visit(
+    const spark::connect::ShowString& showString,
+    SparkPlanVisitorContext& context) {
+  SparkPlanVisitor::visit(showString.input(), context);
+
+  std::vector<ExprApi> projections;
+  projections.reserve(scope_.size());
+  for (const auto& column : scope_) {
+    auto value = lp::Col(column.id);
+    if (!column.type->isVarbinary()) {
+      value = lp::Cast(velox::VARCHAR(), value);
+    }
+    projections.push_back(value.as(column.name));
+  }
+
+  builder_->project(projections);
+  builder_->limit(std::max<int64_t>(showString.num_rows(), 0) + 1);
+  finishRelation(context);
+}
+
+void SparkToAxiom::visit(
     const spark::connect::SubqueryAlias& subqueryAlias,
     SparkPlanVisitorContext& context) {
   SparkPlanVisitor::visit(subqueryAlias.input(), context);

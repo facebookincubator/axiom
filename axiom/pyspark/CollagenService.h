@@ -24,6 +24,7 @@
 #include "axiom/spark_connect/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/type/Type.h"
 
 namespace facebook::axiom::optimizer {
 struct PlanAndStats;
@@ -71,9 +72,12 @@ class CollagenService final
  private:
   using PlanAndStats = facebook::axiom::optimizer::PlanAndStats;
 
+  // Translates and optimizes 'plan'. Sets 'logicalPlanStr' to the logical
+  // plan's text and 'outputType' to its columns.
   PlanAndStats plan(
       const spark::connect::Plan& plan,
-      std::string& logicalPlanStr);
+      std::string& logicalPlanStr,
+      facebook::velox::RowTypePtr& outputType);
 
   // Runner id (e.g., "local").
   const std::string runnerId_;

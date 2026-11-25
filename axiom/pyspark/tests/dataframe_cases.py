@@ -53,6 +53,9 @@ Comment lines directly above a case annotate it:
   - '# error: <message>': Collagen fails with an error containing <message>.
   - '# ordered': row order is part of the result.
   - '# count N': Collagen returns N rows; their values are not compared.
+  - '# show [N] [truncate=K] [vertical]': compares the text
+    DataFrame.show(N, truncate=K, vertical) prints, instead of the rows. N is 20
+    and K is 20 by default.
   - '# gap: <ID>': Collagen shows gap <ID> from axiom/spark_connect/docs/Gaps.md.
     For a GF gap, Collagen fails where Spark runs; for a GC gap, Collagen runs
     and returns a different answer than Spark. The case fails once Collagen
@@ -78,11 +81,19 @@ def case(df: DataFrame) -> None:
 
 
 @dataclasses.dataclass
+class ShowOptions:
+    num_rows: int = 20
+    truncate: int = 20
+    vertical: bool = False
+
+
+@dataclasses.dataclass
 class Annotations:
     error: str | None = None
     ordered: bool = False
     count: int | None = None
     gap: str | None = None
+    show: ShowOptions | None = None
 
 
 @dataclasses.dataclass
@@ -144,8 +155,30 @@ def _annotations(lines: list[str], line: int, file: str) -> Annotations:
             annotations.count = int(text[len("count ") :])
         elif text.startswith("gap:"):
             annotations.gap = text[len("gap:") :].strip()
+        elif text == "show" or text.startswith("show "):
+            annotations.show = _show_options(text.split()[1:])
         index -= 1
     return annotations
+
+
+def _show_options(words: list[str]) -> ShowOptions:
+    options = ShowOptions()
+    for word in words:
+        if word == "vertical":
+            options.vertical = True
+        elif word.startswith("truncate="):
+            options.truncate = int(word[len("truncate=") :])
+        else:
+            options.num_rows = int(word)
+    return options
+
+
+def _show_string(df: Any, show: ShowOptions) -> str:
+    # The text DataFrame.show() prints. A Spark Connect DataFrame computes it
+    # in _show_string; a classic one asks the JVM.
+    if hasattr(df, "_show_string"):
+        return df._show_string(show.num_rows, show.truncate, show.vertical)
+    return df._jdf.showString(show.num_rows, show.truncate, show.vertical)
 
 
 def _to_python(value: Any) -> Any:
@@ -158,9 +191,18 @@ def _to_python(value: Any) -> Any:
     return value
 
 
-def _evaluate(expression: ast.expr, namespace: dict[str, Any], file: str) -> Outcome:
+def _evaluate(
+    expression: ast.expr,
+    namespace: dict[str, Any],
+    file: str,
+    show: ShowOptions | None,
+) -> Outcome:
     try:
         df = eval(compile(ast.Expression(expression), file, "eval"), namespace)
+        if show is not None:
+            return Outcome(
+                columns=[("show_string", "string")], rows=[(_show_string(df, show),)]
+            )
         columns = [(f.name, f.dataType.simpleString()) for f in df.schema.fields]
         rows = [_to_python(row) for row in df.collect()]
         return Outcome(columns=columns, rows=rows)
@@ -169,7 +211,11 @@ def _evaluate(expression: ast.expr, namespace: dict[str, Any], file: str) -> Out
 
 
 def _run(
-    module: ModuleType, function: ast.FunctionDef, spark: SparkSession, file: str
+    module: ModuleType,
+    function: ast.FunctionDef,
+    spark: SparkSession,
+    file: str,
+    annotations: dict[int, Annotations],
 ) -> dict[int, Outcome]:
     tables = module.setup(spark)
     namespace = dict(vars(module))
@@ -187,7 +233,9 @@ def _run(
             assert isinstance(statement, ast.Expr)
             call = statement.value
             assert isinstance(call, ast.Call)
-            outcomes[statement.lineno] = _evaluate(call.args[0], namespace, file)
+            outcomes[statement.lineno] = _evaluate(
+                call.args[0], namespace, file, annotations[statement.lineno].show
+            )
         else:
             exec(
                 compile(ast.Module(body=[statement], type_ignores=[]), file, "exec"),
@@ -214,13 +262,18 @@ def run_cases(
     file = inspect.getsourcefile(module) or module.__name__
     lines = source.splitlines()
     function = _cases_function(ast.parse(source), file)
+    annotations = {
+        statement.lineno: _annotations(lines, statement.lineno, file)
+        for statement in function.body
+        if _is_case(statement)
+    }
 
-    collagen_outcomes = _run(module, function, collagen, file)
-    spark_outcomes = _run(module, function, spark, file) if spark else None
+    collagen_outcomes = _run(module, function, collagen, file, annotations)
+    spark_outcomes = _run(module, function, spark, file, annotations) if spark else None
     return [
         Case(
             line=line,
-            annotations=_annotations(lines, line, file),
+            annotations=annotations[line],
             collagen=collagen_outcomes[line],
             spark=spark_outcomes[line] if spark_outcomes else None,
         )
