@@ -33,7 +33,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(collagen_converter Optimizer.cpp SparkPlanPrinter.cpp SparkToAxiom.cpp)
+add_library(collagen_converter Optimizer.cpp SparkToAxiom.cpp)
 
 target_link_libraries(
   collagen_converter

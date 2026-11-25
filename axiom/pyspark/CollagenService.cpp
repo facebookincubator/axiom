@@ -17,13 +17,11 @@
 #include "axiom/pyspark/CollagenService.h"
 
 #include <folly/json.h>
-#include <glog/logging.h>
 
 #include "axiom/optimizer/PlanAndStats.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
 #include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/Optimizer.h"
-#include "axiom/pyspark/SparkPlanPrinter.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "velox/common/memory/MemoryPool.h"
@@ -146,41 +144,20 @@ CollagenService::CollagenService(
 PlanAndStats CollagenService::plan(
     const spark::connect::Plan& plan,
     std::string& logicalPlanStr) {
-  auto startTime = std::chrono::high_resolution_clock::now();
-
-  // TODO: just for debugging for now.
-  LOG(INFO) << "Spark Connect logical plan:\n" << printSparkPlan(plan);
-
-  LOG(INFO) << "Converting to Axiom plan:";
   SparkToAxiom converter(catalog_, schema_, pool_.get());
   SparkPlanVisitorContext axiomContext;
   converter.visit(plan, axiomContext);
 
   logicalPlanStr = converter.toString();
-  LOG(INFO) << "Axiom logical input:\n" << logicalPlanStr;
 
-  // Optimize it into a Velox physical plan.
-  auto veloxPlanAndStats =
-      optimize(converter.planNode(), catalog_, pool_.get(), functionRegistry_);
-
-  LOG(INFO) << "Generated Velox physical plan with "
-            << veloxPlanAndStats.plan->stages().size() << " fragments:\n"
-            << veloxPlanAndStats.plan->toString();
-
-  LOG(INFO) << "Plan generation took "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::high_resolution_clock::now() - startTime)
-                   .count()
-            << "ms";
-  return veloxPlanAndStats;
+  return optimize(
+      converter.planNode(), catalog_, pool_.get(), functionRegistry_);
 }
 
 grpc::Status CollagenService::ExecutePlan(
     grpc::ServerContext* context,
     const spark::connect::ExecutePlanRequest* request,
     grpc::ServerWriter<spark::connect::ExecutePlanResponse>* writer) {
-  LOG(INFO) << "Got execute plan request (session_id=" << request->session_id()
-            << ").";
   // Set execute plan response structure.
   spark::connect::ExecutePlanResponse planResponse;
   planResponse.set_session_id(request->session_id());
@@ -197,10 +174,8 @@ grpc::Status CollagenService::ExecutePlan(
           "Failed to generate Velox plan from Spark Connect plan.");
     }
   } catch (const CollagenException& e) {
-    LOG(WARNING) << "Request failed:\n" << e.what();
     return e.status();
   } catch (const std::exception& e) {
-    LOG(WARNING) << "Unexpected exception: " << e.what();
     return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
   }
 
@@ -231,13 +206,10 @@ grpc::Status CollagenService::ExecutePlan(
     arrowBatch->set_data(outputBuffer->data(), outputBuffer->size());
     arrowBatch->set_row_count(rowCount);
     writer->Write(planResponse);
-    LOG(INFO) << "Executed successfully got " << rowCount << " rows.";
     return grpc::Status::OK;
   } catch (const CollagenException& e) {
-    LOG(WARNING) << "Request failed:\n" << e.what();
     return e.status();
   } catch (const std::exception& e) {
-    LOG(WARNING) << "Unexpected exception: " << e.what();
     return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
   }
 }
@@ -246,8 +218,6 @@ grpc::Status CollagenService::AnalyzePlan(
     grpc::ServerContext* context,
     const spark::connect::AnalyzePlanRequest* request,
     spark::connect::AnalyzePlanResponse* response) {
-  LOG(INFO) << "Got analyze plan request (session_id=" << request->session_id()
-            << ").";
   response->set_session_id(request->session_id());
 
   PlanAndStats veloxPlanStats;
@@ -295,11 +265,9 @@ grpc::Status CollagenService::AnalyzePlan(
     return grpc::Status::OK;
   } catch (const CollagenException& e) {
     veloxPlanStats.plan = nullptr;
-    LOG(WARNING) << "Request failed:\n" << e.what();
     return e.status();
   } catch (const std::exception& e) {
     veloxPlanStats.plan = nullptr;
-    LOG(WARNING) << "Unexpected exception: " << e.what();
     return grpc::Status(grpc::StatusCode::UNKNOWN, e.what());
   }
 }
@@ -308,8 +276,6 @@ grpc::Status CollagenService::Config(
     grpc::ServerContext* context,
     const spark::connect::ConfigRequest* request,
     spark::connect::ConfigResponse* response) {
-  LOG(INFO) << "Got config request (session_id=" << request->session_id()
-            << ").";
   return grpc::Status(
       grpc::StatusCode::UNIMPLEMENTED, "Config() method not implemented yet.");
 }
@@ -318,7 +284,6 @@ grpc::Status CollagenService::AddArtifacts(
     grpc::ServerContext* context,
     grpc::ServerReader<spark::connect::AddArtifactsRequest>* request,
     spark::connect::AddArtifactsResponse* response) {
-  LOG(INFO) << "Got add artifacts request.";
   return grpc::Status(
       grpc::StatusCode::UNIMPLEMENTED,
       "AddArtifacts() method not implemented yet.");
