@@ -71,12 +71,15 @@ import inspect
 import os
 import sys
 import tempfile
+import warnings
 from types import ModuleType
 from typing import Any, TypeGuard
 
 from pyspark.sql import DataFrame, functions, Row, SparkSession
 from pyspark.sql.connect import functions as connect_functions
 from pyspark.sql.connect.session import SparkSession as ConnectSparkSession
+
+from .collagen_test_base import TIME_ZONE
 
 
 # A classic or a Spark Connect session.
@@ -262,6 +265,7 @@ def get_local_spark() -> SparkSession:
             .config("spark.ui.showConsoleProgress", "false")
             .config("spark.sql.shuffle.partitions", "1")
             .config("spark.sql.warehouse.dir", tempfile.mkdtemp())
+            .config("spark.sql.session.timeZone", TIME_ZONE)
             .getOrCreate()
         )
     return _local_spark
@@ -322,7 +326,13 @@ def run_cases(
     }
 
     collagen_outcomes = _run(module, function, collagen, file, annotations)
-    spark_outcomes = _run(module, function, spark, file, annotations) if spark else None
+    spark_outcomes = None
+    if spark:
+        # A classic session's collect() leaves its socket to the JVM for the
+        # garbage collector, and unittest reports each one as a ResourceWarning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            spark_outcomes = _run(module, function, spark, file, annotations)
     return [
         Case(
             line=line,
