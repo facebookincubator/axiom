@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/pyspark/ArrowIpcLib.h"
+#include "axiom/spark_connect/ArrowIpcLib.h"
 #include "arrow/api.h"
 #include "arrow/c/bridge.h"
 #include "arrow/io/api.h"
@@ -25,7 +25,7 @@
 
 using namespace facebook;
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 namespace {
 
@@ -118,4 +118,4 @@ std::vector<velox::RowVectorPtr> fromArrowIpc(
   return outputVectors;
 }
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

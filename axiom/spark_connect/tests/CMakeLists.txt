@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(collagen_spark_velox_converter_test SparkVeloxConverterTest.cpp)
+add_executable(axiom_spark_velox_converter_test SparkVeloxConverterTest.cpp)
 
 target_link_libraries(
-  collagen_spark_velox_converter_test
-  collagen_spark_velox_converter
-  collagen_proto
+  axiom_spark_velox_converter_test
+  axiom_spark_connect
   velox_type
   GTest::gtest
   GTest::gtest_main
 )
 
-add_test(NAME collagen_spark_velox_converter_test COMMAND collagen_spark_velox_converter_test)
+add_test(NAME axiom_spark_velox_converter_test COMMAND axiom_spark_velox_converter_test)

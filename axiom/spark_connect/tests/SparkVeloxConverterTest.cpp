@@ -16,12 +16,12 @@
 
 #include <gtest/gtest.h>
 
-#include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/spark_connect/SparkVeloxConverter.h"
 #include "velox/type/Type.h"
 
 using namespace facebook;
 
-namespace axiom::collagen::test {
+namespace axiom::spark_connect::test {
 namespace {
 
 class SparkVeloxConverterTest : public ::testing::Test {};
@@ -177,4 +177,4 @@ TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
 }
 
 } // namespace
-} // namespace axiom::collagen::test
+} // namespace axiom::spark_connect::test

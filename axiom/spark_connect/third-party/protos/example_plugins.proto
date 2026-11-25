@@ -17,8 +17,8 @@
 
 syntax = 'proto3';
 
-import "axiom/pyspark/third-party/protos/relations.proto";
-import "axiom/pyspark/third-party/protos/expressions.proto";
+import "axiom/spark_connect/third-party/protos/relations.proto";
+import "axiom/spark_connect/third-party/protos/expressions.proto";
 
 package spark.connect;
 

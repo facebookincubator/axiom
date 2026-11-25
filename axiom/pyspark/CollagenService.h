@@ -21,7 +21,7 @@
 #include <signal.h>
 #include <string>
 
-#include "axiom/pyspark/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/spark_connect/third-party/protos/base.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryPool.h"
 

@@ -19,14 +19,14 @@
 #include <glog/logging.h>
 #include <string>
 
-#include "axiom/pyspark/third-party/protos/base.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "axiom/pyspark/third-party/protos/commands.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "axiom/pyspark/third-party/protos/expressions.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "axiom/pyspark/third-party/protos/relations.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/spark_connect/third-party/protos/base.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/commands.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/expressions.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/relations.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 class SparkPlanVisitorContext {
  public:
@@ -452,4 +452,4 @@ class SparkPlanVisitor {
   }
 };
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

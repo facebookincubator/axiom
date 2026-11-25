@@ -211,6 +211,7 @@ add_subdirectory(axiom/graphviz)
 add_subdirectory(axiom/cli)
 if(AXIOM_ENABLE_COLLAGEN)
   add_subdirectory(axiom/functions/sparksql)
+  add_subdirectory(axiom/spark_connect)
   add_subdirectory(axiom/pyspark)
 endif()
 
