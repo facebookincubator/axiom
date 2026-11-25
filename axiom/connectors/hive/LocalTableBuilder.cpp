@@ -230,7 +230,7 @@ void LocalTableBuilder::build(const std::string& tablePath) {
 
     auto input = std::make_unique<velox::dwio::common::BufferedInput>(
         std::make_shared<velox::LocalReadFile>(info->path),
-        readerOptions.memoryPool());
+        velox::FileIoContext{.pool = &readerOptions.memoryPool()});
     std::unique_ptr<velox::dwio::common::Reader> reader =
         velox::dwio::common::getReaderFactory(readerOptions.fileFormat())
             ->createReader(std::move(input), readerOptions);

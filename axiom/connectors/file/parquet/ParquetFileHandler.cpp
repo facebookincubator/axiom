@@ -123,8 +123,8 @@ std::unique_ptr<parquet::ParquetReader> openFile(
       "Not a Parquet file (missing PAR1 magic): {}",
       filePath);
 
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(std::move(readFile), *pool);
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::move(readFile), FileIoContext{.pool = pool});
   return std::make_unique<parquet::ParquetReader>(
       std::move(input), readerOptions);
 }
