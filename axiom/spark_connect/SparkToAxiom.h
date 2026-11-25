@@ -18,10 +18,10 @@
 
 #include <folly/container/F14Map.h>
 #include "axiom/logical_plan/PlanBuilder.h"
-#include "axiom/pyspark/SparkPlanVisitor.h"
-#include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/spark_connect/SparkPlanVisitor.h"
+#include "axiom/spark_connect/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 /// Converts a Spark Connect plan into an Axiom logical plan.
 ///
@@ -263,4 +263,4 @@ class SparkToAxiom : public SparkPlanVisitor {
   LogicalPlanNodePtr plan_;
 };
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

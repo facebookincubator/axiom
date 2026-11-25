@@ -19,10 +19,10 @@
 #include <folly/json.h>
 
 #include "axiom/optimizer/PlanAndStats.h"
-#include "axiom/pyspark/ArrowIpcLib.h"
 #include "axiom/pyspark/Optimizer.h"
-#include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/runners/Runner.h"
+#include "axiom/spark_connect/ArrowIpcLib.h"
+#include "axiom/spark_connect/SparkToAxiom.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryPool.h"
 
@@ -165,8 +165,8 @@ CollagenService::CollagenService(
 PlanAndStats CollagenService::plan(
     const spark::connect::Plan& plan,
     std::string& logicalPlanStr) {
-  SparkToAxiom converter(catalog_, schema_, pool_.get());
-  SparkPlanVisitorContext axiomContext;
+  spark_connect::SparkToAxiom converter(catalog_, schema_, pool_.get());
+  spark_connect::SparkPlanVisitorContext axiomContext;
   converter.visit(plan, axiomContext);
 
   logicalPlanStr = converter.toString();
@@ -221,7 +221,7 @@ grpc::Status CollagenService::ExecutePlan(
 
     auto* arrowBatch = planResponse.mutable_arrow_batch();
     uint64_t rowCount;
-    auto outputBuffer = toArrowIpc(results, rowCount);
+    auto outputBuffer = spark_connect::toArrowIpc(results, rowCount);
     arrowBatch->set_data(outputBuffer->data(), outputBuffer->size());
     arrowBatch->set_row_count(rowCount);
     writer->Write(planResponse);
@@ -241,8 +241,8 @@ grpc::Status CollagenService::AnalyzePlan(
   try {
     if (request->analyze_case() ==
         spark::connect::AnalyzePlanRequest::kSchema) {
-      SparkToAxiom converter(catalog_, schema_, pool_.get());
-      SparkPlanVisitorContext context;
+      spark_connect::SparkToAxiom converter(catalog_, schema_, pool_.get());
+      spark_connect::SparkPlanVisitorContext context;
       converter.visit(request->schema().plan(), context);
       *response->mutable_schema()->mutable_schema() =
           toSparkType(converter.planNode()->outputType());

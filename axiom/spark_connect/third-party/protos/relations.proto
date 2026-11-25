@@ -20,9 +20,9 @@ syntax = 'proto3';
 package spark.connect;
 
 import "google/protobuf/any.proto";
-import "axiom/pyspark/third-party/protos/expressions.proto";
-import "axiom/pyspark/third-party/protos/types.proto";
-import "axiom/pyspark/third-party/protos/catalog.proto";
+import "axiom/spark_connect/third-party/protos/expressions.proto";
+import "axiom/spark_connect/third-party/protos/types.proto";
+import "axiom/spark_connect/third-party/protos/catalog.proto";
 
 option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";

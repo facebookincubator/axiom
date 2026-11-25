@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/pyspark/SparkToAxiom.h"
+#include "axiom/spark_connect/SparkToAxiom.h"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <folly/String.h>
@@ -24,15 +24,15 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/logical_plan/PlanPrinter.h"
-#include "axiom/pyspark/ArrowIpcLib.h"
-#include "axiom/pyspark/SparkVeloxConverter.h"
+#include "axiom/spark_connect/ArrowIpcLib.h"
+#include "axiom/spark_connect/SparkVeloxConverter.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/coercion/PrestoCoercions.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook;
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 namespace lp = facebook::axiom::logical_plan;
 
@@ -970,4 +970,4 @@ void SparkToAxiom::visit(
   expr_ = lp::Col(name);
 }
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

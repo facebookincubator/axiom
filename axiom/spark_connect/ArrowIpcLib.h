@@ -21,7 +21,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 /// Converts a vector of Velox RowVector into an Arrow Array and serializes it
 /// using Arrow IPC.
@@ -39,4 +39,4 @@ std::vector<facebook::velox::RowVectorPtr> fromArrowIpc(
     const std::shared_ptr<arrow::Buffer>& buffer,
     facebook::velox::memory::MemoryPool* pool);
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

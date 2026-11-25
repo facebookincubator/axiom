@@ -21,13 +21,13 @@
 #include <vector>
 
 #include "axiom/logical_plan/LogicalPlanNode.h"
-#include "axiom/pyspark/third-party/protos/commands.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "axiom/pyspark/third-party/protos/expressions.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
-#include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "axiom/spark_connect/third-party/protos/commands.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/expressions.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
+#include "axiom/spark_connect/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/spark_connect/third-party/protos:spark_connect_proto-cpp
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
-namespace axiom::collagen {
+namespace axiom::spark_connect {
 
 /// A series of conversion utilities between Spark Connect protobuf structures
 /// and Axiom/Velox.
@@ -55,4 +55,4 @@ std::shared_ptr<facebook::velox::Variant> toVeloxVariant(
 /// Convert JSON string type representation to Velox type
 facebook::velox::TypePtr jsonToVeloxType(std::string_view jsonInput);
 
-} // namespace axiom::collagen
+} // namespace axiom::spark_connect

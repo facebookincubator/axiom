@@ -19,7 +19,7 @@ syntax = 'proto3';
 
 package spark.connect;
 
-import "axiom/pyspark/third-party/protos/types.proto";
+import "axiom/spark_connect/third-party/protos/types.proto";
 
 option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";
