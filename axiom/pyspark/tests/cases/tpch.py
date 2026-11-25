@@ -47,6 +47,7 @@ def cases(
     supplier: DataFrame,
     part: DataFrame,
     partsupp: DataFrame,
+    spark: SparkSession,
 ) -> None:
     # count 25
     case(nation)
@@ -141,3 +142,24 @@ def cases(
 
     # count 100
     case(orders.join(customer, orders.o_custkey == customer.c_custkey).limit(100))
+
+    # A table name may name its schema, and its catalog.
+    # count 25
+    case(spark.read.table("tiny.nation"))
+
+    # count 25
+    case(spark.read.table("`tiny`.`nation`"))
+
+    # count 25
+    case(spark.read.table("tpch.tiny.nation"))
+
+    # A doubled backtick in a quoted part is a literal backtick.
+    # error: Table not found: "tiny"."na`tion"
+    case(spark.read.table("tiny.`na``tion`"))
+
+    # A column reference may qualify a column by the table's name.
+    # count 25
+    case(spark.read.table("sf1.nation").select(F.col("nation.n_name")))
+
+    # error: Catalog not found: other
+    case(spark.read.table("other.tiny.nation"))

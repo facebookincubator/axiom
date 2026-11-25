@@ -288,26 +288,59 @@ std::string SparkToAxiom::toString() {
   return lp::PlanPrinter::toText(*planNode());
 }
 
+namespace {
+
+// Splits a Spark table name, such as "t", "schema.t" or
+// "`catalog`.`schema`.`t`", into its parts. A part in backticks may contain
+// dots, and a doubled backtick in it is a literal backtick.
+std::vector<std::string> splitTableName(std::string_view name) {
+  std::vector<std::string> parts(1);
+  bool quoted = false;
+  for (size_t i = 0; i < name.size(); ++i) {
+    const char c = name[i];
+    if (c == '`' && quoted && i + 1 < name.size() && name[i + 1] == '`') {
+      parts.back() += '`';
+      ++i;
+    } else if (c == '`') {
+      quoted = !quoted;
+    } else if (c == '.' && !quoted) {
+      parts.emplace_back();
+    } else {
+      parts.back() += c;
+    }
+  }
+  VELOX_USER_CHECK(
+      !quoted, "Table name has an unterminated backtick: {}", name);
+  for (const auto& part : parts) {
+    VELOX_USER_CHECK(!part.empty(), "Table name has an empty part: {}", name);
+  }
+  VELOX_USER_CHECK_LE(
+      parts.size(), 3, "Table name must have at most 3 parts: {}", name);
+  return parts;
+}
+
+} // namespace
+
 void SparkToAxiom::visit(
     const spark::connect::Read_NamedTable& namedTable,
     SparkPlanVisitorContext& context) {
   const auto& identifier = namedTable.unparsed_identifier();
-  VELOX_NYI_CHECK(
-      identifier.find('.') == std::string::npos,
-      "Schema-qualified table names are not supported: {}",
-      identifier);
+  const auto parts = splitTableName(identifier);
+  const auto& table = parts.back();
+  const auto& schema = parts.size() > 1 ? parts[parts.size() - 2] : schema_;
+  const auto& catalog = parts.size() > 2 ? parts[0] : catalog_;
 
   const auto metadata =
-      facebook::axiom::connector::ConnectorMetadataRegistry::global().get(
-          catalog_);
+      facebook::axiom::connector::ConnectorMetadataRegistry::tryGet(catalog);
+  VELOX_USER_CHECK_NOT_NULL(metadata, "Catalog not found: {}", catalog);
 
   builder_.emplace(newBuilder());
   builder_->tableScan(
-      catalog_,
-      metadata->normalizeIdentifier(schema_),
-      metadata->normalizeIdentifier(identifier));
+      catalog,
+      metadata->normalizeIdentifier(schema),
+      metadata->normalizeIdentifier(table));
   finishRelation(context);
-  aliasOutputs_[identifier].push_back(scope_);
+  aliasOutputs_[table].push_back(scope_);
 }
 
 void SparkToAxiom::visit(
