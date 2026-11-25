@@ -23,20 +23,21 @@
 
 namespace axiom::spark_connect {
 
-/// Converts a vector of Velox RowVector into an Arrow Array and serializes it
-/// using Arrow IPC.
-///
-/// Returns the Arrow Buffer containing the serialized IPC payload.
-std::shared_ptr<arrow::Buffer> toArrowIpc(
-    const std::vector<facebook::velox::RowVectorPtr>& vectors,
-    uint64_t& rowCount);
+/// Converts between Velox vectors and Arrow IPC, the format Spark Connect uses
+/// for data in plans and in results.
+class ArrowIpc {
+ public:
+  /// Serializes 'vectors', which share a type, as an Arrow IPC stream. Sets
+  /// 'rowCount' to the number of rows.
+  static std::shared_ptr<arrow::Buffer> serialize(
+      const std::vector<facebook::velox::RowVectorPtr>& vectors,
+      uint64_t& rowCount);
 
-/// Convert an Arrow IPC payload into Velox Vectors.
-///
-/// This is meant to be used for literals embedded into query plans, not large
-/// datasets.
-std::vector<facebook::velox::RowVectorPtr> fromArrowIpc(
-    const std::shared_ptr<arrow::Buffer>& buffer,
-    facebook::velox::memory::MemoryPool* pool);
+  /// Deserializes an Arrow IPC stream into Velox vectors. Meant for data
+  /// embedded in plans, not large datasets.
+  static std::vector<facebook::velox::RowVectorPtr> deserialize(
+      const std::shared_ptr<arrow::Buffer>& buffer,
+      facebook::velox::memory::MemoryPool* pool);
+};
 
 } // namespace axiom::spark_connect

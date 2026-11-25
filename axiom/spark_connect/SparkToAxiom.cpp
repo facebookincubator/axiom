@@ -24,7 +24,7 @@
 #include "axiom/logical_plan/Expr.h"
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/logical_plan/PlanPrinter.h"
-#include "axiom/spark_connect/ArrowIpcLib.h"
+#include "axiom/spark_connect/ArrowIpc.h"
 #include "axiom/spark_connect/SparkVeloxConverter.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/coercion/PrestoCoercions.h"
@@ -126,6 +126,68 @@ std::string findGeneratorFunction(
     return expression.alias().expr().unresolved_function().function_name();
   }
   return "";
+}
+
+// Returns the Axiom write kind for a Spark save mode.
+lp::WriteKind toWriteKind(spark::connect::WriteOperation::SaveMode mode) {
+  switch (mode) {
+    case spark::connect::WriteOperation::SAVE_MODE_APPEND:
+      return lp::WriteKind::kInsert;
+    case spark::connect::WriteOperation::SAVE_MODE_ERROR_IF_EXISTS:
+      return lp::WriteKind::kCreate;
+    case spark::connect::WriteOperation::SAVE_MODE_OVERWRITE:
+      VELOX_NYI("SAVE_MODE_OVERWRITE is not yet supported for table writes");
+    case spark::connect::WriteOperation::SAVE_MODE_IGNORE:
+      VELOX_NYI("SAVE_MODE_IGNORE is not yet supported for table writes");
+    default:
+      VELOX_NYI(
+          "Unknown save mode: {}",
+          spark::connect::WriteOperation::SaveMode_Name(mode));
+  }
+}
+
+// Returns the Axiom join type for a Spark join type.
+lp::JoinType toJoinType(spark::connect::Join::JoinType joinType) {
+  switch (joinType) {
+    case spark::connect::Join::JOIN_TYPE_INNER:
+      return lp::JoinType::kInner;
+
+    case spark::connect::Join::JOIN_TYPE_LEFT_OUTER:
+      return lp::JoinType::kLeft;
+
+    case spark::connect::Join::JOIN_TYPE_RIGHT_OUTER:
+      return lp::JoinType::kRight;
+
+    case spark::connect::Join::JOIN_TYPE_FULL_OUTER:
+      return lp::JoinType::kFull;
+
+    default:
+      VELOX_NYI(
+          "Unable to convert join type: {}",
+          spark::connect::Join::JoinType_Name(joinType));
+  }
+}
+
+// Returns the Axiom set operation for a Spark one. 'isAll' keeps duplicates.
+lp::SetOperation toSetOperation(
+    spark::connect::SetOperation::SetOpType setOpType,
+    bool isAll) {
+  switch (setOpType) {
+    case spark::connect::SetOperation::SET_OP_TYPE_UNION:
+      return isAll ? lp::SetOperation::kUnionAll : lp::SetOperation::kUnion;
+
+    case spark::connect::SetOperation::SET_OP_TYPE_INTERSECT:
+      return isAll ? lp::SetOperation::kIntersectAll
+                   : lp::SetOperation::kIntersect;
+
+    case spark::connect::SetOperation::SET_OP_TYPE_EXCEPT:
+      return isAll ? lp::SetOperation::kExceptAll : lp::SetOperation::kExcept;
+
+    default:
+      VELOX_NYI(
+          "Unable to convert set operation type: {}",
+          spark::connect::SetOperation::SetOpType_Name(setOpType));
+  }
 }
 
 } // namespace
@@ -252,12 +314,12 @@ void SparkToAxiom::visit(
     const spark::connect::LocalRelation& localRelation,
     SparkPlanVisitorContext& context) {
   auto type = velox::asRowType(
-      jsonToVeloxType(std::string_view(localRelation.schema())));
+      SparkVeloxConverter::parseJsonType(localRelation.schema()));
   VELOX_USER_CHECK_NOT_NULL(type, "Top-level type must be a of type 'struct'");
 
   auto arrowBuffer = arrow::Buffer::Wrap(
       localRelation.data().data(), localRelation.data().size());
-  auto vectors = fromArrowIpc(arrowBuffer, pool_);
+  auto vectors = ArrowIpc::deserialize(arrowBuffer, pool_);
 
   // An empty relation still carries its type.
   if (vectors.empty()) {
@@ -323,7 +385,7 @@ void SparkToAxiom::visit(
     condition = toExpr(join.join_condition(), context);
   }
 
-  builder_->join(right, condition, toAxiomJoinType(join.join_type()));
+  builder_->join(right, condition, toJoinType(join.join_type()));
   finishRelation(context);
 }
 
@@ -436,23 +498,7 @@ void SparkToAxiom::visit(
       "Schema-qualified table names are not supported: {}",
       rawTableName);
 
-  lp::WriteKind writeKind;
-  switch (writeOperation.mode()) {
-    case spark::connect::WriteOperation::SAVE_MODE_APPEND:
-      writeKind = lp::WriteKind::kInsert;
-      break;
-    case spark::connect::WriteOperation::SAVE_MODE_ERROR_IF_EXISTS:
-      writeKind = lp::WriteKind::kCreate;
-      break;
-    case spark::connect::WriteOperation::SAVE_MODE_OVERWRITE:
-      VELOX_NYI("SAVE_MODE_OVERWRITE is not yet supported for table writes");
-    case spark::connect::WriteOperation::SAVE_MODE_IGNORE:
-      VELOX_NYI("SAVE_MODE_IGNORE is not yet supported for table writes");
-    default:
-      VELOX_NYI(
-          "Unknown save mode: {}",
-          spark::connect::WriteOperation::SaveMode_Name(writeOperation.mode()));
-  }
+  const auto writeKind = toWriteKind(writeOperation.mode());
 
   const auto metadata =
       facebook::axiom::connector::ConnectorMetadataRegistry::global().get(
@@ -637,7 +683,7 @@ void SparkToAxiom::visit(
   const bool isAll = setOperation.has_is_all() && setOperation.is_all();
   builder_.emplace(std::move(left));
   builder_->setOperation(
-      toAxiomSetOperation(setOperation.set_op_type(), isAll), right);
+      toSetOperation(setOperation.set_op_type(), isAll), right);
   finishRelation(context);
 }
 
@@ -745,7 +791,9 @@ void SparkToAxiom::visitProjectWithGenerator(
 void SparkToAxiom::visit(
     const spark::connect::Expression::Literal& literal,
     SparkPlanVisitorContext& /*context*/) {
-  expr_ = lp::Lit(*toVeloxVariant(literal), toVeloxType(literal));
+  expr_ = lp::Lit(
+      *SparkVeloxConverter::toVariant(literal),
+      SparkVeloxConverter::toVeloxType(literal));
 }
 
 namespace {
@@ -904,7 +952,7 @@ void SparkToAxiom::visit(
 
   velox::TypePtr targetType;
   if (cast.has_type()) {
-    targetType = toVeloxType(cast.type());
+    targetType = SparkVeloxConverter::toVeloxType(cast.type());
   } else if (cast.has_type_str()) {
     static const folly::F14FastMap<std::string, velox::TypePtr> kTypes = {
         {"long", velox::BIGINT()},         {"bigint", velox::BIGINT()},

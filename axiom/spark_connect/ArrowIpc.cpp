@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "axiom/spark_connect/ArrowIpcLib.h"
+#include "axiom/spark_connect/ArrowIpc.h"
 #include "arrow/api.h"
 #include "arrow/c/bridge.h"
 #include "arrow/io/api.h"
@@ -41,7 +41,8 @@ T valueOrThrow(arrow::Result<T> result) {
 
 } // namespace
 
-std::shared_ptr<arrow::Buffer> toArrowIpc(
+// static
+std::shared_ptr<arrow::Buffer> ArrowIpc::serialize(
     const std::vector<velox::RowVectorPtr>& vectors,
     uint64_t& rowCount) {
   rowCount = 0; // Initialize rowCount to zero
@@ -85,7 +86,8 @@ std::shared_ptr<arrow::Buffer> toArrowIpc(
   return valueOrThrow(sink->Finish());
 }
 
-std::vector<velox::RowVectorPtr> fromArrowIpc(
+// static
+std::vector<velox::RowVectorPtr> ArrowIpc::deserialize(
     const std::shared_ptr<arrow::Buffer>& buffer,
     velox::memory::MemoryPool* pool) {
   if (buffer->size() == 0) {

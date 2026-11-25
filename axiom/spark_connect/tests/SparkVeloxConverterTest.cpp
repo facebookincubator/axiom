@@ -31,105 +31,116 @@ TEST_F(SparkVeloxConverterTest, toVeloxTypeFromDataType) {
   spark::connect::DataType dataType;
 
   dataType.mutable_boolean();
-  EXPECT_EQ(velox::BOOLEAN(), toVeloxType(dataType));
+  EXPECT_EQ(velox::BOOLEAN(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_byte();
-  EXPECT_EQ(velox::TINYINT(), toVeloxType(dataType));
+  EXPECT_EQ(velox::TINYINT(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_short_();
-  EXPECT_EQ(velox::SMALLINT(), toVeloxType(dataType));
+  EXPECT_EQ(velox::SMALLINT(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_integer();
-  EXPECT_EQ(velox::INTEGER(), toVeloxType(dataType));
+  EXPECT_EQ(velox::INTEGER(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_long_();
-  EXPECT_EQ(velox::BIGINT(), toVeloxType(dataType));
+  EXPECT_EQ(velox::BIGINT(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_double_();
-  EXPECT_EQ(velox::DOUBLE(), toVeloxType(dataType));
+  EXPECT_EQ(velox::DOUBLE(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_float_();
-  EXPECT_EQ(velox::REAL(), toVeloxType(dataType));
+  EXPECT_EQ(velox::REAL(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_string();
-  EXPECT_EQ(velox::VARCHAR(), toVeloxType(dataType));
+  EXPECT_EQ(velox::VARCHAR(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_date();
-  EXPECT_EQ(velox::DATE(), toVeloxType(dataType));
+  EXPECT_EQ(velox::DATE(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_timestamp();
-  EXPECT_EQ(velox::TIMESTAMP(), toVeloxType(dataType));
+  EXPECT_EQ(velox::TIMESTAMP(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_binary();
-  EXPECT_EQ(velox::VARBINARY(), toVeloxType(dataType));
+  EXPECT_EQ(velox::VARBINARY(), SparkVeloxConverter::toVeloxType(dataType));
 
   dataType.mutable_null();
-  EXPECT_EQ(velox::UNKNOWN(), toVeloxType(dataType));
+  EXPECT_EQ(velox::UNKNOWN(), SparkVeloxConverter::toVeloxType(dataType));
 }
 
 TEST_F(SparkVeloxConverterTest, toVeloxTypeFromLiteral) {
   // Test boolean literal
   spark::connect::Expression::Literal boolLiteral;
   boolLiteral.set_boolean(true);
-  EXPECT_EQ(velox::BOOLEAN(), toVeloxType(boolLiteral));
+  EXPECT_EQ(velox::BOOLEAN(), SparkVeloxConverter::toVeloxType(boolLiteral));
 
   // Test integer literal
   spark::connect::Expression::Literal intLiteral;
   intLiteral.set_integer(42);
-  EXPECT_EQ(velox::INTEGER(), toVeloxType(intLiteral));
+  EXPECT_EQ(velox::INTEGER(), SparkVeloxConverter::toVeloxType(intLiteral));
 
   // Test long literal
   spark::connect::Expression::Literal longLiteral;
   longLiteral.set_long_(42L);
-  EXPECT_EQ(velox::BIGINT(), toVeloxType(longLiteral));
+  EXPECT_EQ(velox::BIGINT(), SparkVeloxConverter::toVeloxType(longLiteral));
 
   // Test double literal
   spark::connect::Expression::Literal doubleLiteral;
   doubleLiteral.set_double_(3.14);
-  EXPECT_EQ(velox::DOUBLE(), toVeloxType(doubleLiteral));
+  EXPECT_EQ(velox::DOUBLE(), SparkVeloxConverter::toVeloxType(doubleLiteral));
 
   // Test string literal
   spark::connect::Expression::Literal stringLiteral;
   stringLiteral.set_string("hello");
-  EXPECT_EQ(velox::VARCHAR(), toVeloxType(stringLiteral));
+  EXPECT_EQ(velox::VARCHAR(), SparkVeloxConverter::toVeloxType(stringLiteral));
 
   // Test binary literal
   spark::connect::Expression::Literal binaryLiteral;
   binaryLiteral.set_binary("binary data");
-  EXPECT_EQ(velox::VARBINARY(), toVeloxType(binaryLiteral));
+  EXPECT_EQ(
+      velox::VARBINARY(), SparkVeloxConverter::toVeloxType(binaryLiteral));
 
   // Test null literal
   spark::connect::Expression::Literal nullLiteral;
   nullLiteral.mutable_null();
-  EXPECT_EQ(velox::UNKNOWN(), toVeloxType(nullLiteral));
+  EXPECT_EQ(velox::UNKNOWN(), SparkVeloxConverter::toVeloxType(nullLiteral));
 }
 
-TEST_F(SparkVeloxConverterTest, toVeloxVariant) {
+TEST_F(SparkVeloxConverterTest, toVariant) {
   spark::connect::Expression::Literal literal;
 
   literal.set_boolean(true);
-  EXPECT_EQ(toVeloxVariant(literal)->kind(), velox::TypeKind::BOOLEAN);
+  EXPECT_EQ(
+      SparkVeloxConverter::toVariant(literal)->kind(),
+      velox::TypeKind::BOOLEAN);
 
   literal.set_integer(42);
-  EXPECT_EQ(toVeloxVariant(literal)->kind(), velox::TypeKind::INTEGER);
+  EXPECT_EQ(
+      SparkVeloxConverter::toVariant(literal)->kind(),
+      velox::TypeKind::INTEGER);
 
   literal.set_float_(0.99);
-  EXPECT_EQ(toVeloxVariant(literal)->kind(), velox::TypeKind::REAL);
+  EXPECT_EQ(
+      SparkVeloxConverter::toVariant(literal)->kind(), velox::TypeKind::REAL);
 
   literal.set_string("hello world");
-  EXPECT_EQ(toVeloxVariant(literal)->kind(), velox::TypeKind::VARCHAR);
+  EXPECT_EQ(
+      SparkVeloxConverter::toVariant(literal)->kind(),
+      velox::TypeKind::VARCHAR);
 
   // Variants operate on the pysical type layer, so they don't understand
   // logical types.
   literal.set_date(0);
-  EXPECT_EQ(toVeloxVariant(literal)->kind(), velox::TypeKind::INTEGER);
+  EXPECT_EQ(
+      SparkVeloxConverter::toVariant(literal)->kind(),
+      velox::TypeKind::INTEGER);
 }
 
-TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
+TEST_F(SparkVeloxConverterTest, parseJsonType) {
   // Test simple primitive type.
-  EXPECT_EQ(velox::VARCHAR(), jsonToVeloxType("\"string\""));
-  EXPECT_EQ(velox::INTEGER(), jsonToVeloxType("\"integer\""));
-  EXPECT_EQ(velox::BIGINT(), jsonToVeloxType("\"long\""));
+  EXPECT_EQ(velox::VARCHAR(), SparkVeloxConverter::parseJsonType("\"string\""));
+  EXPECT_EQ(
+      velox::INTEGER(), SparkVeloxConverter::parseJsonType("\"integer\""));
+  EXPECT_EQ(velox::BIGINT(), SparkVeloxConverter::parseJsonType("\"long\""));
 
   // Test struct type.
   std::string structJson = R"({
@@ -141,7 +152,7 @@ TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
     ]
   })";
 
-  auto structType = jsonToVeloxType(structJson);
+  auto structType = SparkVeloxConverter::parseJsonType(structJson);
   EXPECT_TRUE(structType->isRow());
   const auto& rowType = structType->asRow();
   EXPECT_EQ(3, rowType.size());
@@ -159,7 +170,7 @@ TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
     "containsNull": true
   })";
 
-  auto arrayType = jsonToVeloxType(arrayJson);
+  auto arrayType = SparkVeloxConverter::parseJsonType(arrayJson);
   EXPECT_TRUE(arrayType->isArray());
   EXPECT_EQ(velox::VARCHAR(), arrayType->asArray().elementType());
 
@@ -170,7 +181,7 @@ TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
     "valueType": "integer"
   })";
 
-  auto mapType = jsonToVeloxType(mapJson);
+  auto mapType = SparkVeloxConverter::parseJsonType(mapJson);
   EXPECT_TRUE(mapType->isMap());
   EXPECT_EQ(velox::VARCHAR(), mapType->asMap().keyType());
   EXPECT_EQ(velox::INTEGER(), mapType->asMap().valueType());

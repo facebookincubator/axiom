@@ -24,52 +24,9 @@ using namespace facebook;
 
 namespace axiom::spark_connect {
 
-facebook::axiom::logical_plan::JoinType toAxiomJoinType(
-    const spark::connect::Join::JoinType& joinType) {
-  switch (joinType) {
-    case spark::connect::Join::JOIN_TYPE_INNER:
-      return facebook::axiom::logical_plan::JoinType::kInner;
-
-    case spark::connect::Join::JOIN_TYPE_LEFT_OUTER:
-      return facebook::axiom::logical_plan::JoinType::kLeft;
-
-    case spark::connect::Join::JOIN_TYPE_RIGHT_OUTER:
-      return facebook::axiom::logical_plan::JoinType::kRight;
-
-    case spark::connect::Join::JOIN_TYPE_FULL_OUTER:
-      return facebook::axiom::logical_plan::JoinType::kFull;
-
-    default:
-      VELOX_NYI(
-          "Unable to convert join type: {}",
-          spark::connect::Join::JoinType_Name(joinType));
-  }
-}
-
-facebook::axiom::logical_plan::SetOperation toAxiomSetOperation(
-    const spark::connect::SetOperation::SetOpType& setOpType,
-    bool isAll) {
-  switch (setOpType) {
-    case spark::connect::SetOperation::SET_OP_TYPE_UNION:
-      return isAll ? facebook::axiom::logical_plan::SetOperation::kUnionAll
-                   : facebook::axiom::logical_plan::SetOperation::kUnion;
-
-    case spark::connect::SetOperation::SET_OP_TYPE_INTERSECT:
-      return isAll ? facebook::axiom::logical_plan::SetOperation::kIntersectAll
-                   : facebook::axiom::logical_plan::SetOperation::kIntersect;
-
-    case spark::connect::SetOperation::SET_OP_TYPE_EXCEPT:
-      return isAll ? facebook::axiom::logical_plan::SetOperation::kExceptAll
-                   : facebook::axiom::logical_plan::SetOperation::kExcept;
-
-    default:
-      VELOX_NYI(
-          "Unable to convert set operation type: {}",
-          spark::connect::SetOperation::SetOpType_Name(setOpType));
-  }
-}
-
-velox::TypePtr toVeloxType(const spark::connect::DataType& sparkType) {
+// static
+velox::TypePtr SparkVeloxConverter::toVeloxType(
+    const spark::connect::DataType& sparkType) {
   static std::unordered_map<int32_t, velox::TypePtr> sparkToVeloxType = {
       {spark::connect::DataType::kNull, velox::UNKNOWN()},
       {spark::connect::DataType::kBoolean, velox::BOOLEAN()},
@@ -98,7 +55,9 @@ velox::TypePtr toVeloxType(const spark::connect::DataType& sparkType) {
 }
 
 // Returns the Velox type for a particular Spark literal.
-velox::TypePtr toVeloxType(const spark::connect::Expression::Literal& literal) {
+// static
+velox::TypePtr SparkVeloxConverter::toVeloxType(
+    const spark::connect::Expression::Literal& literal) {
   static std::unordered_map<int32_t, velox::TypePtr> literalToType = {
       {spark::connect::Expression::Literal::kNull, velox::UNKNOWN()},
       {spark::connect::Expression::Literal::kBoolean, velox::BOOLEAN()},
@@ -135,7 +94,8 @@ velox::TypePtr toVeloxType(const spark::connect::Expression::Literal& literal) {
   }
 }
 
-std::shared_ptr<velox::Variant> toVeloxVariant(
+// static
+std::shared_ptr<velox::Variant> SparkVeloxConverter::toVariant(
     const spark::connect::Expression::Literal& literal) {
   switch (literal.literal_type_case()) {
     case spark::connect::Expression::Literal::kNull:
@@ -261,12 +221,91 @@ velox::TypePtr jsonToVeloxType(const folly::dynamic& obj) {
 
 } // namespace
 
-velox::TypePtr jsonToVeloxType(std::string_view jsonInput) {
+// static
+velox::TypePtr SparkVeloxConverter::parseJsonType(std::string_view json) {
   try {
-    return jsonToVeloxType(folly::parseJson(jsonInput));
+    return jsonToVeloxType(folly::parseJson(json));
   } catch (const folly::json::parse_error& e) {
     VELOX_USER_FAIL("Failed to parse Spark type JSON: {}", e.what());
   }
+}
+
+// static
+spark::connect::DataType SparkVeloxConverter::toSparkType(
+    const velox::TypePtr& type) {
+  spark::connect::DataType result;
+  if (type->isDate()) {
+    result.mutable_date();
+    return result;
+  }
+  if (type->isDecimal()) {
+    const auto [precision, scale] = velox::getDecimalPrecisionScale(*type);
+    result.mutable_decimal()->set_precision(precision);
+    result.mutable_decimal()->set_scale(scale);
+    return result;
+  }
+  switch (type->kind()) {
+    case velox::TypeKind::UNKNOWN:
+      result.mutable_null();
+      break;
+    case velox::TypeKind::BOOLEAN:
+      result.mutable_boolean();
+      break;
+    case velox::TypeKind::TINYINT:
+      result.mutable_byte();
+      break;
+    case velox::TypeKind::SMALLINT:
+      result.mutable_short_();
+      break;
+    case velox::TypeKind::INTEGER:
+      result.mutable_integer();
+      break;
+    case velox::TypeKind::BIGINT:
+      result.mutable_long_();
+      break;
+    case velox::TypeKind::REAL:
+      result.mutable_float_();
+      break;
+    case velox::TypeKind::DOUBLE:
+      result.mutable_double_();
+      break;
+    case velox::TypeKind::VARCHAR:
+      result.mutable_string();
+      break;
+    case velox::TypeKind::VARBINARY:
+      result.mutable_binary();
+      break;
+    case velox::TypeKind::TIMESTAMP:
+      result.mutable_timestamp();
+      break;
+    case velox::TypeKind::ARRAY: {
+      auto* array = result.mutable_array();
+      *array->mutable_element_type() = toSparkType(type->childAt(0));
+      array->set_contains_null(true);
+      break;
+    }
+    case velox::TypeKind::MAP: {
+      auto* map = result.mutable_map();
+      *map->mutable_key_type() = toSparkType(type->childAt(0));
+      *map->mutable_value_type() = toSparkType(type->childAt(1));
+      map->set_value_contains_null(true);
+      break;
+    }
+    case velox::TypeKind::ROW: {
+      const auto& rowType = type->asRow();
+      auto* fields = result.mutable_struct_();
+      for (uint32_t i = 0; i < rowType.size(); ++i) {
+        auto* field = fields->add_fields();
+        field->set_name(rowType.nameOf(i));
+        *field->mutable_data_type() = toSparkType(rowType.childAt(i));
+        field->set_nullable(true);
+      }
+      break;
+    }
+    default:
+      VELOX_NYI("Type is not supported in a schema: {}", type->toString());
+  }
+  return result;
 }
 
 } // namespace axiom::spark_connect
