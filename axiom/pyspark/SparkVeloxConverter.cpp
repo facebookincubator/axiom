@@ -86,10 +86,12 @@ facebook::axiom::logical_plan::SetOperation toAxiomSetOperation(
                    : facebook::axiom::logical_plan::SetOperation::kUnion;
 
     case spark::connect::SetOperation::SET_OP_TYPE_INTERSECT:
-      return facebook::axiom::logical_plan::SetOperation::kIntersect;
+      return isAll ? facebook::axiom::logical_plan::SetOperation::kIntersectAll
+                   : facebook::axiom::logical_plan::SetOperation::kIntersect;
 
     case spark::connect::SetOperation::SET_OP_TYPE_EXCEPT:
-      return facebook::axiom::logical_plan::SetOperation::kExcept;
+      return isAll ? facebook::axiom::logical_plan::SetOperation::kExceptAll
+                   : facebook::axiom::logical_plan::SetOperation::kExcept;
 
     default:
       COLLAGEN_NYI("Unable to convert set operation type: {}", setOpType);
