@@ -699,11 +699,19 @@ folly::F14FastSet<const Join*> valueProducersReadInCluster(
     add(join->filter());
   }
   // A predicate the cluster took from a Filter resolves against the same
-  // relations, so a mark it reads also keeps its producer opaque.
+  // relations, so a mark it reads also keeps its producer opaque. A predicate
+  // that reads an outer join's copy of a column also reads the column the
+  // copies start from.
   PlanObjectSet predicateColumns = joinPredicateColumns;
   for (ExprCP predicate : cluster.filterPredicates) {
     predicateColumns.unionSet(predicate->columns());
   }
+  const JoinCluster::FreshOutputs freshOutputs{cluster};
+  PlanObjectSet sources;
+  predicateColumns.forEach<Column>([&](ColumnCP column) {
+    sources.add(freshOutputs.source(column, [](JoinCP) {}));
+  });
+  predicateColumns.unionSet(sources);
 
   folly::F14FastSet<const Join*> opaqueJoins;
   for (JoinCP join : cluster.joins) {

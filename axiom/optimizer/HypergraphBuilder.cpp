@@ -616,6 +616,8 @@ struct EdgeBuilder {
   const folly::F14FastMap<int8_t, RelationSet>& unnestInputRelations;
   const folly::F14FastMap<int8_t, RelationSet>& unnestSubtrees;
   const PlanObjectSet& freeUnnestColumns;
+  // The eligibility of each non-inner join's edge, filled as edges are added.
+  folly::F14FastMap<JoinCP, RelationSet>& outerEligibility;
 
   // Adds the edges of an inner join, and its filter as graph conjuncts.
   void addInner(JoinCP join, const JoinInputs& inputs) {
@@ -763,6 +765,7 @@ struct EdgeBuilder {
             markColumn,
             std::move(outputColumns),
             std::move(sourceColumns)});
+    outerEligibility.emplace(join, graph.edges().back().totalEligibility());
   }
 };
 
@@ -802,56 +805,40 @@ void addLeafRelations(
 // Unnest columns are registered, so an output padded from one resolves too.
 void addJoinOutputRelations(
     const JoinCluster& cluster,
+    const JoinCluster::FreshOutputs& freshOutputs,
     folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf) {
-  bool changed;
-  do {
-    changed = false;
-    for (JoinCP join : cluster.joins) {
-      for (size_t i = 0; i < join->outputColumns().size(); ++i) {
-        const auto source = columnToLeaf.find(join->sourceColumns()[i]);
-        if (source != columnToLeaf.end()) {
-          const int8_t sourceRelation = source->second;
-          changed |=
-              columnToLeaf.emplace(join->outputColumns()[i], sourceRelation)
-                  .second;
-        }
+  for (JoinCP join : cluster.joins) {
+    for (ColumnCP output : join->outputColumns()) {
+      const auto source =
+          columnToLeaf.find(freshOutputs.source(output, [](JoinCP) {}));
+      if (source != columnToLeaf.end()) {
+        const int8_t sourceRelation = source->second;
+        columnToLeaf.emplace(output, sourceRelation);
       }
     }
-  } while (changed);
+  }
 }
 
 // Adds the cluster's Filter predicates as graph conjuncts. A fresh output of
 // an outer join exists once that join has run. Its source can itself be a
 // fresh output of a join below, so a predicate that reads one takes the
-// eligibility of every join on that chain and the relation the chain starts
-// from.
+// eligibility of every non-inner join on that chain and the relation the chain
+// starts from.
 void addClusterConjuncts(
     const ExprVector& predicates,
+    const JoinCluster::FreshOutputs& freshOutputs,
+    const folly::F14FastMap<JoinCP, RelationSet>& outerEligibility,
     const folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf,
     JoinHypergraph& graph) {
-  struct FreshOutput {
-    RelationSet eligibility;
-    ColumnCP source;
-  };
-  folly::F14FastMap<ColumnCP, FreshOutput> freshOutputs;
-  for (const auto& edge : graph.edges()) {
-    for (size_t i = 0; i < edge.outputColumns().size(); ++i) {
-      if (edge.outputColumns()[i] != edge.sourceColumns()[i]) {
-        freshOutputs.emplace(
-            edge.outputColumns()[i],
-            FreshOutput{edge.totalEligibility(), edge.sourceColumns()[i]});
-      }
-    }
-  }
   for (ExprCP predicate : predicates) {
     RelationSet relations;
     predicate->columns().forEach<Column>([&](ColumnCP column) {
-      ColumnCP source = column;
-      for (auto it = freshOutputs.find(source); it != freshOutputs.end();
-           it = freshOutputs.find(source)) {
-        relations.unionSet(it->second.eligibility);
-        source = it->second.source;
-      }
+      ColumnCP source = freshOutputs.source(column, [&](JoinCP join) {
+        if (const auto it = outerEligibility.find(join);
+            it != outerEligibility.end()) {
+          relations.unionSet(it->second);
+        }
+      });
       relations.unionSet(expressionRelations(source, columnToLeaf));
     });
     graph.addFilterConjunct({predicate, relations});
@@ -880,7 +867,8 @@ JoinHypergraph HypergraphBuilder::build(
       cluster, rewrittenLeaves, estimateProvider, graph, columnToLeaf, leafIds);
   folly::F14FastMap<UnnestCP, int8_t> unnestIds =
       addUnnestRelations(cluster, estimateProvider, graph, columnToLeaf);
-  addJoinOutputRelations(cluster, columnToLeaf);
+  const JoinCluster::FreshOutputs freshOutputs{cluster};
+  addJoinOutputRelations(cluster, freshOutputs, columnToLeaf);
 
   folly::F14FastMap<int8_t, RelationSet> unnestInputRelations =
       addUnnestEdges(cluster, unnestIds, columnToLeaf, graph);
@@ -890,6 +878,7 @@ JoinHypergraph HypergraphBuilder::build(
   populateJoinInputs(
       cluster.root, leafIds, unnestIds, joinInputs, unnestSubtrees);
 
+  folly::F14FastMap<JoinCP, RelationSet> outerEligibility;
   EdgeBuilder edges{
       graph,
       columnToLeaf,
@@ -897,7 +886,8 @@ JoinHypergraph HypergraphBuilder::build(
       joinInputs,
       unnestInputRelations,
       unnestSubtrees,
-      cluster.freeUnnestColumns};
+      cluster.freeUnnestColumns,
+      outerEligibility};
   for (JoinCP join : cluster.joins) {
     const auto& inputs = joinInputs.at(join);
     if (join->isInner()) {
@@ -909,7 +899,12 @@ JoinHypergraph HypergraphBuilder::build(
 
   addTransitiveInnerEdges(graph, columnToLeaf);
 
-  addClusterConjuncts(cluster.filterPredicates, columnToLeaf, graph);
+  addClusterConjuncts(
+      cluster.filterPredicates,
+      freshOutputs,
+      outerEligibility,
+      columnToLeaf,
+      graph);
 
   return graph;
 }
