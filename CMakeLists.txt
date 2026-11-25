@@ -55,6 +55,11 @@ option(AXIOM_ENABLE_COLLAGEN "Build Collagen (Spark Connect server)." OFF)
 option(AXIOM_BUILD_TESTING "Enable Axiom tests." ON)
 option(AXIOM_BUILD_TEST_UTILS "Build Axiom test-support libraries." OFF)
 
+# Collagen runs Velox's Spark SQL functions.
+if(AXIOM_ENABLE_COLLAGEN)
+  set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
+endif()
+
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 set(
@@ -205,6 +210,7 @@ add_subdirectory(axiom/functions/prestosql)
 add_subdirectory(axiom/graphviz)
 add_subdirectory(axiom/cli)
 if(AXIOM_ENABLE_COLLAGEN)
+  add_subdirectory(axiom/functions/sparksql)
   add_subdirectory(axiom/pyspark)
 endif()
 

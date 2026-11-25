@@ -80,7 +80,7 @@ target_link_libraries(
   axiom_tpch_connector_metadata
   axiom_test_connector
   axiom_optimizer_core
-  axiom_functions_prestosql
+  axiom_functions_sparksql
   velox_connector_registry
   velox_hive_connector
   velox_tpch_connector
@@ -88,8 +88,11 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
   velox_dwio_parquet_reader
-  velox_functions_prestosql
+  velox_functions_spark
+  velox_functions_spark_aggregates
+  velox_functions_spark_window
   velox_aggregates
+  velox_window
   velox_presto_serializer
   velox_memory
   Folly::folly

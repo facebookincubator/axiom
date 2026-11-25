@@ -176,9 +176,5 @@ TEST_F(SparkVeloxConverterTest, jsonToVeloxType) {
   EXPECT_EQ(velox::INTEGER(), mapType->asMap().valueType());
 }
 
-TEST_F(SparkVeloxConverterTest, aggregateMapsToReduce) {
-  EXPECT_EQ(toVeloxFunctionName("aggregate"), "reduce");
-}
-
 } // namespace
 } // namespace axiom::collagen::test
