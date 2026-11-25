@@ -24,39 +24,6 @@ using namespace facebook;
 
 namespace axiom::collagen {
 
-std::string toVeloxFunctionName(const std::string& sparkFunctionName) {
-  static std::unordered_map<std::string, std::string> functionMap = {
-      // Arithmetic operators
-      {"+", "plus"},
-      {"-", "minus"},
-      {"*", "multiply"},
-      {"/", "divide"},
-      // Comparison operators
-      {"==", "eq"},
-      // Arithmetic operators (additional)
-      {"%", "mod"},
-      {">", "gt"},
-      {"<", "lt"},
-      {">=", "gte"},
-      {"<=", "lte"},
-      // Higher-order array/map functions (Spark SQL -> Velox/Presto names)
-      {"exists", "any_match"},
-      {"forall", "all_match"},
-      {"aggregate", "reduce"},
-      // Array/collection functions
-      {"size", "cardinality"},
-      {"array_repeat", "repeat"},
-      // Null checking functions
-      {"isnull", "is_null"},
-  };
-
-  auto it = functionMap.find(sparkFunctionName);
-  if (it != functionMap.end()) {
-    return it->second;
-  }
-  return sparkFunctionName;
-}
-
 facebook::axiom::logical_plan::JoinType toAxiomJoinType(
     const spark::connect::Join::JoinType& joinType) {
   switch (joinType) {

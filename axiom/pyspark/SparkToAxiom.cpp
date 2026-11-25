@@ -38,18 +38,32 @@ namespace lp = facebook::axiom::logical_plan;
 
 namespace {
 
-// Resolves Spark's struct field access, 'row["field"]', which reaches the
-// resolver as a subscript of a ROW with a VARCHAR constant. Returns nullptr
-// for any other call.
-lp::ExprPtr resolveFieldAccess(
+// Resolves Spark's 'x[key]', which reaches the resolver as a subscript call
+// once the type of 'x' is known:
+//  - an array subscript reads a 0-based index, Spark's get();
+//  - a map subscript reads a key, Spark's element_at();
+//  - a struct subscript with a field name accesses the field.
+// Returns nullptr for any other call.
+lp::ExprPtr resolveSubscript(
     const std::string& name,
     const std::vector<lp::ExprPtr>& args) {
-  if (name != "subscript" || args.size() != 2 || !args[0]->type()->isRow() ||
-      !args[1]->isConstant() || args[1]->type() != velox::VARCHAR()) {
+  if (name != "subscript" || args.size() != 2) {
     return nullptr;
   }
 
-  const auto& rowType = args[0]->type()->asRow();
+  const auto& type = args[0]->type();
+  if (type->isArray()) {
+    return std::make_shared<lp::CallExpr>(type->childAt(0), "get", args);
+  }
+  if (type->isMap()) {
+    return std::make_shared<lp::CallExpr>(type->childAt(1), "element_at", args);
+  }
+  if (!type->isRow() || !args[1]->isConstant() ||
+      args[1]->type() != velox::VARCHAR()) {
+    return nullptr;
+  }
+
+  const auto& rowType = type->asRow();
   const auto field = args[1]
                          ->as<lp::ConstantExpr>()
                          ->value()
@@ -66,6 +80,26 @@ lp::ExprPtr resolveFieldAccess(
     }
   }
   VELOX_USER_FAIL("Struct field not found: {}", field);
+}
+
+// Returns the Velox function for a Spark operator, or 'name' for a function,
+// which Velox registers under its Spark name.
+std::string toFunctionName(const std::string& name) {
+  static const folly::F14FastMap<std::string, std::string> kOperators = {
+      {"+", "add"},
+      {"-", "subtract"},
+      {"*", "multiply"},
+      {"/", "divide"},
+      {"%", "remainder"},
+      {"==", "equalto"},
+      {"<=>", "equalnullsafe"},
+      {">", "greaterthan"},
+      {"<", "lessthan"},
+      {">=", "greaterthanorequal"},
+      {"<=", "lessthanorequal"},
+  };
+  auto it = kOperators.find(name);
+  return it == kOperators.end() ? name : it->second;
 }
 
 bool isGeneratorFunction(const std::string& functionName) {
@@ -107,7 +141,7 @@ SparkToAxiom::SparkToAxiom(
           catalog_,
           schema_,
           /*queryCtxPtr=*/nullptr,
-          &resolveFieldAccess,
+          &resolveSubscript,
           std::make_shared<lp::ThrowingSqlExpressionsParser>(),
           &velox::functions::prestosql::typeCoercer()} {
   builderContext_.columnsById = true;
@@ -694,7 +728,7 @@ void SparkToAxiom::visitProjectWithGenerator(
     // Spark's position is 0-based; the ordinality is 1-based.
     projections.push_back(
         lp::Call(
-            "minus",
+            "subtract",
             lp::Col(outputType->nameOf(outputType->size() - 1)),
             lp::Lit(int64_t{1}))
             .as(aliasAt(0, "pos")));
@@ -816,11 +850,9 @@ void SparkToAxiom::visit(
     args.push_back(toExpr(argument, context));
   }
 
-  if (functionName == "isnotnull") {
-    VELOX_USER_CHECK_EQ(
-        args.size(), 1, "isnotnull requires exactly 1 argument");
-    expr_ = lp::Call("not", lp::Call("is_null", args[0]));
-    return;
+  // Spark's analyzer passes size() its legacy flag: a NULL has size -1.
+  if (functionName == "size" && args.size() == 1) {
+    args.push_back(lp::Lit(true));
   }
 
   // when(c1, v1, c2, v2, ..., else) with more than one condition is a switch.
@@ -833,7 +865,7 @@ void SparkToAxiom::visit(
     return;
   }
 
-  expr_ = lp::Call(toVeloxFunctionName(functionName), args);
+  expr_ = lp::Call(toFunctionName(functionName), args);
 }
 
 void SparkToAxiom::visit(
@@ -859,8 +891,7 @@ void SparkToAxiom::visit(
     const spark::connect::Expression::UnresolvedExtractValue&
         unresolvedExtractValue,
     SparkPlanVisitorContext& context) {
-  // An array or map subscript. A struct field, 'row["field"]', is resolved by
-  // 'resolveFieldAccess'.
+  // Resolved by 'resolveSubscript' once the type of the child is known.
   auto child = toExpr(unresolvedExtractValue.child(), context);
   auto extraction = toExpr(unresolvedExtractValue.extraction(), context);
   expr_ = lp::Call("subscript", child, extraction);
