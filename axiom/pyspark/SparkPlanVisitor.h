@@ -19,11 +19,11 @@
 #include <glog/logging.h>
 #include <string>
 
-#include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/third-party/protos/base.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "axiom/pyspark/third-party/protos/commands.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "axiom/pyspark/third-party/protos/expressions.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
 #include "axiom/pyspark/third-party/protos/relations.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
 
 namespace axiom::collagen {
@@ -284,8 +284,9 @@ class SparkPlanVisitor {
         break;
 
       default:
-        COLLAGEN_NYI(
-            "Relation type not supported yet: {}", relation.rel_type_case());
+        VELOX_NYI(
+            "Relation type not supported yet: {}",
+            fmt::underlying(relation.rel_type_case()));
     }
   }
 
@@ -304,7 +305,9 @@ class SparkPlanVisitor {
         break;
 
       default:
-        COLLAGEN_NYI("Plan type not implemented: {}", plan.op_type_case());
+        VELOX_NYI(
+            "Plan type not implemented: {}",
+            fmt::underlying(plan.op_type_case()));
     }
   }
 
@@ -319,8 +322,9 @@ class SparkPlanVisitor {
         break;
 
       default:
-        COLLAGEN_NYI(
-            "Command type not implemented: {}", command.command_type_case());
+        VELOX_NYI(
+            "Command type not implemented: {}",
+            fmt::underlying(command.command_type_case()));
     }
   }
 
@@ -377,13 +381,13 @@ class SparkPlanVisitor {
         break;
 
       case spark::connect::Expression::EXPR_TYPE_NOT_SET:
-        COLLAGEN_FAIL(
+        VELOX_USER_FAIL(
             "Expression type not set for plan node '{}'.", context.planId);
 
       default:
-        COLLAGEN_NYI(
+        VELOX_NYI(
             "Do not know how to handle expression type '{}'.",
-            expression.expr_type_case());
+            fmt::underlying(expression.expr_type_case()));
     }
   }
 

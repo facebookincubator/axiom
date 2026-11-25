@@ -26,8 +26,7 @@ namespace axiom::collagen {
 /// Converts a vector of Velox RowVector into an Arrow Array and serializes it
 /// using Arrow IPC.
 ///
-/// Returns the Arrow Buffer containing the serialized IPC payload. Throws
-/// CollagenException on errors.
+/// Returns the Arrow Buffer containing the serialized IPC payload.
 std::shared_ptr<arrow::Buffer> toArrowIpc(
     const std::vector<facebook::velox::RowVectorPtr>& vectors,
     uint64_t& rowCount);

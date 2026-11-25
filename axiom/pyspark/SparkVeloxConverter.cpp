@@ -18,7 +18,7 @@
 #include <folly/String.h>
 #include <folly/json.h>
 #include <string>
-#include "axiom/pyspark/Exception.h"
+#include "velox/common/base/Exceptions.h"
 
 using namespace facebook;
 
@@ -73,7 +73,9 @@ facebook::axiom::logical_plan::JoinType toAxiomJoinType(
       return facebook::axiom::logical_plan::JoinType::kFull;
 
     default:
-      COLLAGEN_NYI("Unable to convert join type: {}", joinType);
+      VELOX_NYI(
+          "Unable to convert join type: {}",
+          spark::connect::Join::JoinType_Name(joinType));
   }
 }
 
@@ -94,7 +96,9 @@ facebook::axiom::logical_plan::SetOperation toAxiomSetOperation(
                    : facebook::axiom::logical_plan::SetOperation::kExcept;
 
     default:
-      COLLAGEN_NYI("Unable to convert set operation type: {}", setOpType);
+      VELOX_NYI(
+          "Unable to convert set operation type: {}",
+          spark::connect::SetOperation::SetOpType_Name(setOpType));
   }
 }
 
@@ -120,9 +124,9 @@ velox::TypePtr toVeloxType(const spark::connect::DataType& sparkType) {
 
   switch (sparkType.kind_case()) {
     default:
-      COLLAGEN_NYI(
+      VELOX_NYI(
           "Data type conversion not implemented yet for '{}'",
-          sparkType.kind_case());
+          fmt::underlying(sparkType.kind_case()));
   }
 }
 
@@ -158,9 +162,9 @@ velox::TypePtr toVeloxType(const spark::connect::Expression::Literal& literal) {
       return toVeloxType(literal.null());
 
     default:
-      COLLAGEN_NYI(
+      VELOX_NYI(
           "Literal type conversion not implemented yet for '{}'",
-          literal.literal_type_case());
+          fmt::underlying(literal.literal_type_case()));
   }
 }
 
@@ -206,9 +210,9 @@ std::shared_ptr<velox::Variant> toVeloxVariant(
       return std::make_shared<velox::Variant>(literal.timestamp());
 
     default:
-      COLLAGEN_NYI(
+      VELOX_NYI(
           "Literal type to variant not implemented yet for '{}'",
-          literal.literal_type_case());
+          fmt::underlying(literal.literal_type_case()));
   }
 }
 
@@ -285,7 +289,7 @@ velox::TypePtr jsonToVeloxType(const folly::dynamic& obj) {
       return jsonToVeloxType(obj["type"]);
     }
   }
-  COLLAGEN_FAIL("Unexpected Spark json type: '{}'", folly::toJson(obj));
+  VELOX_NYI("Spark JSON type is not supported: {}", folly::toJson(obj));
 }
 
 } // namespace
@@ -294,7 +298,7 @@ velox::TypePtr jsonToVeloxType(std::string_view jsonInput) {
   try {
     return jsonToVeloxType(folly::parseJson(jsonInput));
   } catch (const folly::json::parse_error& e) {
-    VELOX_FAIL("Failed to parse Spark type JSON: {}", e.what());
+    VELOX_USER_FAIL("Failed to parse Spark type JSON: {}", e.what());
   }
 }
 

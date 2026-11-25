@@ -19,13 +19,27 @@
 #include "arrow/c/bridge.h"
 #include "arrow/io/api.h"
 #include "arrow/ipc/api.h"
-#include "axiom/pyspark/Exception.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/vector/arrow/Bridge.h"
 
 using namespace facebook;
 
 namespace axiom::collagen {
+
+namespace {
+
+void checkOk(const arrow::Status& status) {
+  VELOX_CHECK(status.ok(), "{}", status.ToString());
+}
+
+template <typename T>
+T valueOrThrow(arrow::Result<T> result) {
+  checkOk(result.status());
+  return std::move(result).ValueUnsafe();
+}
+
+} // namespace
 
 std::shared_ptr<arrow::Buffer> toArrowIpc(
     const std::vector<velox::RowVectorPtr>& vectors,
@@ -34,10 +48,8 @@ std::shared_ptr<arrow::Buffer> toArrowIpc(
 
   if (vectors.empty()) {
     // Return empty buffer for empty input
-    COLLAGEN_ARROW_ASSIGN_OR_THROW(
-        auto sink, arrow::io::BufferOutputStream::Create())
-    COLLAGEN_ARROW_ASSIGN_OR_THROW(auto outputBuffer, sink->Finish());
-    return outputBuffer;
+    auto sink = valueOrThrow(arrow::io::BufferOutputStream::Create());
+    return valueOrThrow(sink->Finish());
   }
 
   // PySpark does not support Arrow's run-end encoding. Dictionary flattening
@@ -51,31 +63,26 @@ std::shared_ptr<arrow::Buffer> toArrowIpc(
   // schema)
   ArrowSchema arrowSchema;
   velox::exportToArrow(vectors[0], arrowSchema, options);
-  COLLAGEN_ARROW_ASSIGN_OR_THROW(
-      auto schema, arrow::ImportSchema(&arrowSchema));
+  auto schema = valueOrThrow(arrow::ImportSchema(&arrowSchema));
 
   // Create output stream and writer
-  COLLAGEN_ARROW_ASSIGN_OR_THROW(
-      auto sink, arrow::io::BufferOutputStream::Create())
-
-  std::shared_ptr<arrow::ipc::RecordBatchWriter> arrowWriter;
-  COLLAGEN_ARROW_CHECK(
-      arrow::ipc::MakeStreamWriter(sink.get(), schema).Value(&arrowWriter));
+  auto sink = valueOrThrow(arrow::io::BufferOutputStream::Create());
+  auto arrowWriter =
+      valueOrThrow(arrow::ipc::MakeStreamWriter(sink.get(), schema));
 
   // Convert each Velox RowVector to Arrow RecordBatch and write to stream
   for (const auto& vector : vectors) {
     ArrowArray arrowArray;
     velox::exportToArrow(vector, arrowArray, vector->pool(), options);
-    COLLAGEN_ARROW_ASSIGN_OR_THROW(
-        auto arrowBatch, arrow::ImportRecordBatch(&arrowArray, schema));
-    COLLAGEN_ARROW_CHECK(arrowWriter->WriteRecordBatch(*arrowBatch));
+    auto arrowBatch =
+        valueOrThrow(arrow::ImportRecordBatch(&arrowArray, schema));
+    checkOk(arrowWriter->WriteRecordBatch(*arrowBatch));
 
     rowCount += vector->size();
   }
 
-  COLLAGEN_ARROW_CHECK(arrowWriter->Close());
-  COLLAGEN_ARROW_ASSIGN_OR_THROW(auto outputBuffer, sink->Finish());
-  return outputBuffer;
+  checkOk(arrowWriter->Close());
+  return valueOrThrow(sink->Finish());
 }
 
 std::vector<velox::RowVectorPtr> fromArrowIpc(
@@ -85,25 +92,24 @@ std::vector<velox::RowVectorPtr> fromArrowIpc(
     return {};
   }
 
-  COLLAGEN_ARROW_ASSIGN_OR_THROW(
-      auto reader,
+  auto reader = valueOrThrow(
       arrow::ipc::RecordBatchStreamReader::Open(
           std::make_shared<arrow::io::BufferReader>(buffer)));
 
   ArrowSchema arrowSchema;
-  COLLAGEN_ARROW_CHECK(arrow::ExportSchema(*reader->schema(), &arrowSchema));
+  checkOk(arrow::ExportSchema(*reader->schema(), &arrowSchema));
 
   std::vector<velox::RowVectorPtr> outputVectors;
 
   // Iterate over each Arrow record batch, convert to Velox vector.
   while (true) {
-    COLLAGEN_ARROW_ASSIGN_OR_THROW(auto arrowBatch, reader->Next());
+    auto arrowBatch = valueOrThrow(reader->Next());
     if (!arrowBatch) {
       break;
     }
 
     ArrowArray arrowArray;
-    COLLAGEN_ARROW_CHECK(ExportRecordBatch(*arrowBatch, &arrowArray));
+    checkOk(arrow::ExportRecordBatch(*arrowBatch, &arrowArray));
 
     auto vector = velox::importFromArrowAsViewer(arrowSchema, arrowArray, pool);
     outputVectors.emplace_back(
