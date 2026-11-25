@@ -22,6 +22,7 @@
 #include "axiom/pyspark/Optimizer.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/spark_connect/ArrowIpc.h"
+#include "axiom/spark_connect/ShowStringFormatter.h"
 #include "axiom/spark_connect/SparkToAxiom.h"
 #include "axiom/spark_connect/SparkVeloxConverter.h"
 #include "velox/common/base/Exceptions.h"
@@ -86,12 +87,14 @@ CollagenService::CollagenService(
 // In Spark Connect, Relation represents any execution plan node.
 PlanAndStats CollagenService::plan(
     const spark::connect::Plan& plan,
-    std::string& logicalPlanStr) {
+    std::string& logicalPlanStr,
+    facebook::velox::RowTypePtr& outputType) {
   spark_connect::SparkToAxiom converter(catalog_, schema_, pool_.get());
   spark_connect::SparkPlanVisitorContext axiomContext;
   converter.visit(plan, axiomContext);
 
   logicalPlanStr = converter.toString();
+  outputType = converter.planNode()->outputType();
 
   return optimize(
       converter.planNode(), catalog_, pool_.get(), functionRegistry_);
@@ -106,10 +109,11 @@ grpc::Status CollagenService::ExecutePlan(
   planResponse.set_session_id(request->session_id());
 
   std::string logicalPlanStr;
+  facebook::velox::RowTypePtr outputType;
   PlanAndStats veloxPlanStats;
 
   try {
-    veloxPlanStats = plan(request->plan(), logicalPlanStr);
+    veloxPlanStats = plan(request->plan(), logicalPlanStr, outputType);
 
     if (veloxPlanStats.plan == nullptr) {
       return grpc::Status(
@@ -139,6 +143,25 @@ grpc::Status CollagenService::ExecutePlan(
       results = getDummyRowVector(pool_.get());
     } else {
       results = runner->execute(queryConfigs);
+    }
+
+    // DataFrame.show() returns its text as the one cell of the result.
+    const auto& root = request->plan().root();
+    if (root.has_show_string()) {
+      const auto& showString = root.show_string();
+      auto text = spark_connect::ShowStringFormatter::format(
+          outputType,
+          results,
+          showString.num_rows(),
+          showString.truncate(),
+          showString.vertical());
+      results = {
+          facebook::velox::BaseVector::create<facebook::velox::RowVector>(
+              facebook::velox::ROW("show_string", facebook::velox::VARCHAR()),
+              1,
+              pool_.get())};
+      results[0]->childAt(0)->asFlatVector<facebook::velox::StringView>()->set(
+          0, facebook::velox::StringView(text));
     }
 
     auto* arrowBatch = planResponse.mutable_arrow_batch();
@@ -173,9 +196,11 @@ grpc::Status CollagenService::AnalyzePlan(
     }
 
     std::string logicalPlanStr;
+    facebook::velox::RowTypePtr outputType;
     switch (request->analyze_case()) {
       case spark::connect::AnalyzePlanRequest::kExplain:
-        veloxPlanStats = plan(request->explain().plan(), logicalPlanStr);
+        veloxPlanStats =
+            plan(request->explain().plan(), logicalPlanStr, outputType);
         break;
 
       default:

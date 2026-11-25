@@ -168,3 +168,9 @@ def cases(
 
     # gap: GC16
     case(mixed.select(F.explode("arr"), "id"))
+
+    # gap: GF19
+    case(mixed.select("id", F.col("arr").cast("string").alias("s")))
+
+    # gap: GF19
+    case(mixed.select(F.col("m").cast("string").alias("s")))

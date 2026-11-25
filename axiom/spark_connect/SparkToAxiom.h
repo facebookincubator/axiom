@@ -84,6 +84,13 @@ class SparkToAxiom : public SparkPlanVisitor {
   void visit(const spark::connect::ToDF& toDF, SparkPlanVisitorContext& context)
       override;
 
+  /// Translates the input of DataFrame.show() as its first num_rows + 1 rows,
+  /// each column cast to VARCHAR as Spark does before formatting. A VARBINARY
+  /// column stays as is; ShowStringFormatter renders it.
+  void visit(
+      const spark::connect::ShowString& showString,
+      SparkPlanVisitorContext& context) override;
+
   void visit(
       const spark::connect::SubqueryAlias& subqueryAlias,
       SparkPlanVisitorContext& context) override;
