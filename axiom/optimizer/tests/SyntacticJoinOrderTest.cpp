@@ -82,20 +82,16 @@ TEST_P(SyntacticJoinOrderTest, innerJoins) {
       startReferencePlan("lineitem")
           .filter("l_shipdate > date '1995-03-15'")
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey",
               startReferencePlan("customer")
                   .filter("c_mktsegment = 'BUILDING'")
                   .hashJoin(
-                      {"c_custkey"},
-                      {"o_custkey"},
+                      "c_custkey = o_custkey",
                       startReferencePlan("orders")
                           .filter("o_orderdate < date '1995-03-15'")
                           .planNode(),
-                      /*filter=*/"",
                       {"o_orderkey"})
                   .planNode(),
-              /*filter=*/"",
               {})
           .singleAggregation({}, {"count(1)"})
           .planNode();
@@ -232,10 +228,8 @@ TEST_P(SyntacticJoinOrderTest, outerJoins) {
 
   auto referencePlan = startReferencePlan("lineitem")
                            .hashJoin(
-                               {"l_orderkey"},
-                               {"o_orderkey"},
+                               "l_orderkey = o_orderkey AND l_returnflag = 'R'",
                                startReferencePlan("orders").planNode(),
-                               /*filter=*/"l_returnflag = 'R'",
                                {},
                                core::JoinType::kLeft)
                            .singleAggregation({}, {"count(1)"})
