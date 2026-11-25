@@ -21,9 +21,9 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
-#include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/runners/Runner.h"
 #include "axiom/runner/LocalRunner.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryCtx.h"
 
 DEFINE_int32(num_workers, 4, "Number of in-process workers");
@@ -54,10 +54,10 @@ class LocalRunner : public Runner {
             std::move(finishWrite),
             std::move(pool)) {
     aggregatePool_ = rootPool_->addAggregateChild("TestRunner");
-    COLLAGEN_CHECK_NOT_NULL(aggregatePool_, "Failed to create aggregate pool");
+    VELOX_CHECK_NOT_NULL(aggregatePool_, "Failed to create aggregate pool");
 
     leafPool_ = aggregatePool_->addLeafChild("LocalRunner");
-    COLLAGEN_CHECK_NOT_NULL(leafPool_, "Failed to create leaf pool");
+    VELOX_CHECK_NOT_NULL(leafPool_, "Failed to create leaf pool");
   }
 
   ~LocalRunner() override = default;

@@ -25,8 +25,8 @@
 #include "axiom/logical_plan/NameMappings.h"
 #include "axiom/logical_plan/PlanPrinter.h"
 #include "axiom/pyspark/ArrowIpcLib.h"
-#include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/coercion/PrestoCoercions.h"
 #include "velox/vector/FlatVector.h"
 
@@ -65,7 +65,7 @@ lp::ExprPtr resolveFieldAccess(
               std::make_shared<velox::Variant>(rowType.nameOf(i))));
     }
   }
-  COLLAGEN_USER_FAIL("Struct field not found: {}", field);
+  VELOX_USER_FAIL("Struct field not found: {}", field);
 }
 
 bool isGeneratorFunction(const std::string& functionName) {
@@ -160,7 +160,7 @@ SparkToAxiom::PlanBuilder SparkToAxiom::visitInput(
     const spark::connect::Relation& relation,
     SparkPlanVisitorContext& context) {
   SparkPlanVisitor::visit(relation, context);
-  COLLAGEN_CHECK(builder_.has_value());
+  VELOX_CHECK(builder_.has_value());
   auto builder = std::move(builder_.value());
   builder_.reset();
   return builder;
@@ -171,7 +171,7 @@ SparkToAxiom::ExprApi SparkToAxiom::toExpr(
     SparkPlanVisitorContext& context) {
   expr_.reset();
   visit(expression, context);
-  COLLAGEN_CHECK(expr_.has_value());
+  VELOX_CHECK(expr_.has_value());
   auto expr = std::move(expr_.value());
   expr_.reset();
   return expr;
@@ -179,7 +179,7 @@ SparkToAxiom::ExprApi SparkToAxiom::toExpr(
 
 SparkToAxiom::LogicalPlanNodePtr SparkToAxiom::planNode() {
   if (plan_ == nullptr) {
-    COLLAGEN_CHECK(builder_.has_value(), "No relation was visited");
+    VELOX_CHECK(builder_.has_value(), "No relation was visited");
     plan_ = isWrite_ ? builder_->planNode() : builder_->build();
   }
   return plan_;
@@ -196,7 +196,7 @@ void SparkToAxiom::visit(
     const spark::connect::Read_NamedTable& namedTable,
     SparkPlanVisitorContext& context) {
   const auto& identifier = namedTable.unparsed_identifier();
-  COLLAGEN_CHECK(
+  VELOX_NYI_CHECK(
       identifier.find('.') == std::string::npos,
       "Schema-qualified table names are not supported: {}",
       identifier);
@@ -219,9 +219,7 @@ void SparkToAxiom::visit(
     SparkPlanVisitorContext& context) {
   auto type = velox::asRowType(
       jsonToVeloxType(std::string_view(localRelation.schema())));
-  if (type == nullptr) {
-    COLLAGEN_USER_FAIL("Top-level type must be a of type 'struct'");
-  }
+  VELOX_USER_CHECK_NOT_NULL(type, "Top-level type must be a of type 'struct'");
 
   auto arrowBuffer = arrow::Buffer::Wrap(
       localRelation.data().data(), localRelation.data().size());
@@ -243,7 +241,7 @@ void SparkToAxiom::visit(
   const int64_t start = range.has_start() ? range.start() : 0;
   const int64_t end = range.end();
   const int64_t step = range.step();
-  COLLAGEN_CHECK_NE(step, 0, "Range step cannot be zero");
+  VELOX_USER_CHECK_NE(step, 0, "Range step cannot be zero");
 
   int32_t numElements;
   if (step > 0) {
@@ -275,7 +273,7 @@ void SparkToAxiom::visit(
 void SparkToAxiom::visit(
     const spark::connect::Join& join,
     SparkPlanVisitorContext& context) {
-  COLLAGEN_CHECK(
+  VELOX_NYI_CHECK(
       join.using_columns().empty(),
       "Join with USING columns is not supported yet");
 
@@ -367,12 +365,8 @@ void SparkToAxiom::visit(
     SparkPlanVisitorContext& context) {
   SparkPlanVisitor::visit(toDF.input(), context);
 
-  if (toDF.column_names().size() != scope_.size()) {
-    COLLAGEN_USER_FAIL(
-        "toDF must name every column: {} names for {} columns",
-        toDF.column_names().size(),
-        scope_.size());
-  }
+  VELOX_USER_CHECK_EQ(
+      toDF.column_names().size(), scope_.size(), "toDF must name every column");
 
   std::vector<ExprApi> projections;
   projections.reserve(scope_.size());
@@ -397,15 +391,13 @@ void SparkToAxiom::visit(
     SparkPlanVisitorContext& context) {
   SparkPlanVisitor::visit(writeOperation.input(), context);
 
-  if (writeOperation.save_type_case() !=
-      spark::connect::WriteOperation::kTable) {
-    COLLAGEN_NYI(
-        "Unsupported write operation type: {}",
-        writeOperation.save_type_case());
-  }
+  VELOX_NYI_CHECK(
+      writeOperation.save_type_case() == spark::connect::WriteOperation::kTable,
+      "Unsupported write operation type: {}",
+      fmt::underlying(writeOperation.save_type_case()));
 
   const auto& rawTableName = writeOperation.table().table_name();
-  COLLAGEN_CHECK(
+  VELOX_NYI_CHECK(
       rawTableName.find('.') == std::string::npos,
       "Schema-qualified table names are not supported: {}",
       rawTableName);
@@ -419,11 +411,13 @@ void SparkToAxiom::visit(
       writeKind = lp::WriteKind::kCreate;
       break;
     case spark::connect::WriteOperation::SAVE_MODE_OVERWRITE:
-      COLLAGEN_NYI("SAVE_MODE_OVERWRITE is not yet supported for table writes");
+      VELOX_NYI("SAVE_MODE_OVERWRITE is not yet supported for table writes");
     case spark::connect::WriteOperation::SAVE_MODE_IGNORE:
-      COLLAGEN_NYI("SAVE_MODE_IGNORE is not yet supported for table writes");
+      VELOX_NYI("SAVE_MODE_IGNORE is not yet supported for table writes");
     default:
-      COLLAGEN_NYI("Unknown save mode: {}", writeOperation.mode());
+      VELOX_NYI(
+          "Unknown save mode: {}",
+          spark::connect::WriteOperation::SaveMode_Name(writeOperation.mode()));
   }
 
   const auto metadata =
@@ -505,7 +499,7 @@ void SparkToAxiom::visit(
   // follow the input columns.
   std::vector<std::pair<std::string, ExprApi>> newColumns;
   for (const auto& alias : withColumns.aliases()) {
-    COLLAGEN_CHECK_EQ(
+    VELOX_USER_CHECK_EQ(
         alias.name_size(),
         1,
         "Expected exactly one name in WithColumns alias, got {}",
@@ -548,12 +542,12 @@ void SparkToAxiom::visit(
   // With allowMissingColumns, a column one input lacks reads as NULL there, and
   // the right input's extra columns follow the left input's.
   if (setOperation.has_by_name() && setOperation.by_name()) {
-    if (setOperation.set_op_type() !=
-        spark::connect::SetOperation::SET_OP_TYPE_UNION) {
-      COLLAGEN_USER_FAIL(
-          "Only UNION can match columns by name: {}",
-          setOperation.set_op_type());
-    }
+    VELOX_USER_CHECK(
+        setOperation.set_op_type() ==
+            spark::connect::SetOperation::SET_OP_TYPE_UNION,
+        "Only UNION can match columns by name: {}",
+        spark::connect::SetOperation::SetOpType_Name(
+            setOperation.set_op_type()));
     const bool allowMissingColumns = setOperation.has_allow_missing_columns() &&
         setOperation.allow_missing_columns();
 
@@ -570,20 +564,18 @@ void SparkToAxiom::visit(
     // ones.
     Columns outputColumns;
     for (const auto& column : leftColumns) {
-      if (!allowMissingColumns && !findColumn(rightColumns, column.name)) {
-        COLLAGEN_USER_FAIL(
-            "Column of the left input is missing from the right input: {}",
-            column.name);
-      }
+      VELOX_USER_CHECK(
+          allowMissingColumns || findColumn(rightColumns, column.name),
+          "Column of the left input is missing from the right input: {}",
+          column.name);
       outputColumns.push_back(column);
     }
     for (const auto& column : rightColumns) {
       if (!findColumn(leftColumns, column.name)) {
-        if (!allowMissingColumns) {
-          COLLAGEN_USER_FAIL(
-              "Column of the right input is missing from the left input: {}",
-              column.name);
-        }
+        VELOX_USER_CHECK(
+            allowMissingColumns,
+            "Column of the right input is missing from the left input: {}",
+            column.name);
         outputColumns.push_back(column);
       }
     }
@@ -637,13 +629,13 @@ void SparkToAxiom::visitProjectWithGenerator(
     }
   }
 
-  COLLAGEN_CHECK(
-      numGenerators == 1,
-      "Only one generator allowed per select clause but found {}. "
-      "Use separate select() calls for multiple explode operations.",
-      numGenerators);
+  VELOX_USER_CHECK_EQ(
+      numGenerators,
+      1,
+      "Only one generator allowed per select clause. "
+      "Use separate select() calls for multiple explode operations.");
 
-  COLLAGEN_CHECK(
+  VELOX_NYI_CHECK(
       !isOuterGenerator(generatorName),
       "{} is not supported yet. UnnestNode uses inner semantics "
       "(rows with empty arrays/maps are dropped). Use explode/posexplode instead.",
@@ -658,8 +650,9 @@ void SparkToAxiom::visitProjectWithGenerator(
   const auto& generator = generatorExpr->has_alias()
       ? generatorExpr->alias().expr().unresolved_function()
       : generatorExpr->unresolved_function();
-  COLLAGEN_CHECK(
-      generator.arguments().size() >= 1,
+  VELOX_USER_CHECK_GE(
+      generator.arguments().size(),
+      1,
       "{} requires at least 1 argument",
       generatorName);
 
@@ -741,7 +734,7 @@ Identifier parseIdentifier(const std::string& input) {
   if (parts.size() == 3) {
     return {.name = parts[2], .parent = parts[1]};
   }
-  COLLAGEN_FAIL("Unable to parse identifier: '{}'", input);
+  VELOX_USER_FAIL("Unable to parse identifier: '{}'", input);
 }
 
 } // namespace
@@ -750,15 +743,11 @@ SparkToAxiom::ExprApi SparkToAxiom::bindColumn(std::string_view name) const {
   const Column* match = nullptr;
   for (const auto& column : scope_) {
     if (column.name == name) {
-      if (match != nullptr) {
-        COLLAGEN_USER_FAIL("Reference is ambiguous: {}", name);
-      }
+      VELOX_USER_CHECK_NULL(match, "Reference is ambiguous: {}", name);
       match = &column;
     }
   }
-  if (match == nullptr) {
-    COLLAGEN_USER_FAIL("Unable to resolve reference: {}", name);
-  }
+  VELOX_USER_CHECK_NOT_NULL(match, "Unable to resolve reference: {}", name);
   return toCol(*match);
 }
 
@@ -780,19 +769,13 @@ SparkToAxiom::ExprApi SparkToAxiom::bindColumn(
       if (it == scope_.end() || (match != nullptr && match->id == column.id)) {
         continue;
       }
-      if (match != nullptr) {
-        COLLAGEN_USER_FAIL("Reference is ambiguous: {}", reference);
-      }
+      VELOX_USER_CHECK_NULL(match, "Reference is ambiguous: {}", reference);
       match = &*it;
     }
   }
-  if (!found) {
-    COLLAGEN_USER_FAIL("Unable to resolve reference: {}", reference);
-  }
-  if (match == nullptr) {
-    COLLAGEN_USER_FAIL(
-        "Column is not available in the current input: {}", reference);
-  }
+  VELOX_USER_CHECK(found, "Unable to resolve reference: {}", reference);
+  VELOX_USER_CHECK_NOT_NULL(
+      match, "Column is not available in the current input: {}", reference);
   return toCol(*match);
 }
 
@@ -805,16 +788,17 @@ void SparkToAxiom::visit(
   if (unresolvedAttribute.has_plan_id()) {
     const auto planId = unresolvedAttribute.plan_id();
     auto it = planIdOutputs_.find(planId);
-    if (it == planIdOutputs_.end()) {
-      COLLAGEN_USER_FAIL("Unable to find Spark Connect plan id: {}", planId);
-    }
+    VELOX_USER_CHECK(
+        it != planIdOutputs_.end(),
+        "Unable to find Spark Connect plan id: {}",
+        planId);
     expr_ = bindColumn(identifier.name, it->second, text);
   } else if (!identifier.parent.empty()) {
     auto it = aliasOutputs_.find(identifier.parent);
-    if (it == aliasOutputs_.end()) {
-      COLLAGEN_USER_FAIL(
-          "Unable to find Spark Connect reference: {}", identifier.parent);
-    }
+    VELOX_USER_CHECK(
+        it != aliasOutputs_.end(),
+        "Unable to find Spark Connect reference: {}",
+        identifier.parent);
     expr_ = bindColumn(identifier.name, it->second, text);
   } else {
     expr_ = bindColumn(identifier.name);
@@ -833,15 +817,17 @@ void SparkToAxiom::visit(
   }
 
   if (functionName == "isnotnull") {
-    COLLAGEN_CHECK(args.size() == 1, "isnotnull requires exactly 1 argument");
+    VELOX_USER_CHECK_EQ(
+        args.size(), 1, "isnotnull requires exactly 1 argument");
     expr_ = lp::Call("not", lp::Call("is_null", args[0]));
     return;
   }
 
   // when(c1, v1, c2, v2, ..., else) with more than one condition is a switch.
   if (functionName == "if" || functionName == "when") {
-    COLLAGEN_CHECK(
-        args.size() >= 2,
+    VELOX_USER_CHECK_GE(
+        args.size(),
+        2,
         "if/when requires at least 2 arguments (condition, then_value)");
     expr_ = lp::Call(args.size() > 3 ? "switch" : "if", args);
     return;
@@ -853,7 +839,7 @@ void SparkToAxiom::visit(
 void SparkToAxiom::visit(
     const spark::connect::Expression::Alias& alias,
     SparkPlanVisitorContext& context) {
-  COLLAGEN_CHECK_EQ(
+  VELOX_USER_CHECK_EQ(
       alias.name().size(),
       1,
       "Expected exactly one alias name, got {}",
@@ -902,12 +888,13 @@ void SparkToAxiom::visit(
         {"timestamp", velox::TIMESTAMP()},
     };
     auto it = kTypes.find(cast.type_str());
-    if (it == kTypes.end()) {
-      COLLAGEN_NYI("Cast type string not supported: '{}'", cast.type_str());
-    }
+    VELOX_NYI_CHECK(
+        it != kTypes.end(),
+        "Cast type string not supported: '{}'",
+        cast.type_str());
     targetType = it->second;
   } else {
-    COLLAGEN_FAIL("Cast expression must have either type or type_str set");
+    VELOX_FAIL("Cast expression must have either type or type_str set");
   }
 
   expr_ = lp::Cast(targetType, input);
@@ -944,11 +931,11 @@ void SparkToAxiom::visit(
         unresolvedNamedLambdaVariable,
     SparkPlanVisitorContext& /*context*/) {
   auto name = lambdaVariableName(unresolvedNamedLambdaVariable);
-  if (std::find(lambdaVariables_.begin(), lambdaVariables_.end(), name) ==
-      lambdaVariables_.end()) {
-    COLLAGEN_USER_FAIL(
-        "Lambda variable not found in current context: {}", name);
-  }
+  VELOX_USER_CHECK(
+      std::find(lambdaVariables_.begin(), lambdaVariables_.end(), name) !=
+          lambdaVariables_.end(),
+      "Lambda variable not found in current context: {}",
+      name);
   expr_ = lp::Col(name);
 }
 
