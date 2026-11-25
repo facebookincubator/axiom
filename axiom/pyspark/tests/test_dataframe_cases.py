@@ -24,13 +24,14 @@ import sys
 import tempfile
 import unittest
 from types import ModuleType
+from typing import Any
 
 from parameterized import parameterized
 from pyspark.sql import SparkSession
 
 from . import cases as case_files
 from .collagen_test_base import CollagenTest
-from .dataframe_cases import Case, catalog, compares_with_spark, run_cases
+from .dataframe_cases import Case, catalog, compares_with_spark, Outcome, run_cases
 
 
 def _case_file_names() -> list[str]:
@@ -61,6 +62,39 @@ def _get_local_spark() -> SparkSession:
     return _local_spark
 
 
+def _comparable_rows(outcome: Outcome, ordered: bool) -> list[Any]:
+    return outcome.rows if ordered else sorted(outcome.rows, key=repr)
+
+
+def _check_gap(
+    test: unittest.TestCase,
+    gap: str,
+    collagen: Outcome,
+    spark: Outcome,
+    collagen_rows: list[Any],
+    spark_rows: list[Any],
+) -> None:
+    """Checks that Collagen still shows the kind of gap Gaps.md records: a GF
+    gap fails where Spark runs, a GC gap returns a different answer."""
+    if gap.startswith("GF"):
+        test.assertIsNotNone(
+            collagen.error,
+            f"{gap} records a failure, but Collagen ran: if it matches Spark, "
+            "remove the '# gap' annotation and the entry in Gaps.md",
+        )
+        return
+
+    test.assertIsNone(
+        collagen.error, f"{gap} records a different answer, but Collagen failed"
+    )
+    test.assertNotEqual(
+        (collagen.columns, collagen_rows),
+        (spark.columns, spark_rows),
+        f"{gap} is fixed: remove the '# gap' annotation and the entry in "
+        "axiom/spark_connect/docs/Gaps.md",
+    )
+
+
 def _check(test: unittest.TestCase, case: Case) -> None:
     annotations = case.annotations
     collagen = case.collagen
@@ -71,19 +105,22 @@ def _check(test: unittest.TestCase, case: Case) -> None:
         test.assertIn(annotations.error, collagen.error)
         return
 
-    test.assertIsNone(collagen.error, f"Collagen failed: {collagen.error}")
     if annotations.count is not None:
+        test.assertIsNone(collagen.error, f"Collagen failed: {collagen.error}")
         test.assertEqual(len(collagen.rows), annotations.count)
         return
 
-    test.assertIsNotNone(spark, "A case not compared with Spark needs '# count'")
-    assert spark is not None
+    assert spark is not None, "A case not compared with Spark needs '# count'"
     test.assertIsNone(spark.error, f"Spark failed: {spark.error}")
+    collagen_rows = _comparable_rows(collagen, annotations.ordered)
+    spark_rows = _comparable_rows(spark, annotations.ordered)
+    if annotations.gap is not None:
+        _check_gap(test, annotations.gap, collagen, spark, collagen_rows, spark_rows)
+        return
+
+    test.assertIsNone(collagen.error, f"Collagen failed: {collagen.error}")
     test.assertEqual(collagen.columns, spark.columns)
-    if annotations.ordered:
-        test.assertEqual(collagen.rows, spark.rows)
-    else:
-        test.assertEqual(sorted(collagen.rows, key=repr), sorted(spark.rows, key=repr))
+    test.assertEqual(collagen_rows, spark_rows)
 
 
 class DataFrameCasesTest(CollagenTest):

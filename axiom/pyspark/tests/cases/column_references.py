@@ -34,6 +34,8 @@ def cases(orders: DataFrame, customers: DataFrame) -> None:
 
     case(orders.select(F.col("amount")))
 
+    case(orders.join(customers, orders.customer_id == customers.id, "left"))
+
     # error: Reference is ambiguous: id
     case(joined.select(F.col("id")))
 

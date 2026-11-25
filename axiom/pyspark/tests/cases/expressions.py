@@ -13,6 +13,8 @@
 # limitations under the License.
 
 
+import datetime
+
 from axiom.pyspark.tests.dataframe_cases import case
 from pyspark.sql import DataFrame, functions as F, SparkSession
 from pyspark.sql.types import IntegerType, StructField, StructType
@@ -44,13 +46,10 @@ def setup(spark: SparkSession) -> dict[str, DataFrame]:
                 ]
             ),
         ),
-        "strings": spark.createDataFrame(
-            [(1, "100"), (2, "-5"), (3, "0")], ["id", "s"]
-        ),
     }
 
 
-def cases(people: DataFrame, numbers: DataFrame, strings: DataFrame) -> None:
+def cases(people: DataFrame, numbers: DataFrame, spark: SparkSession) -> None:
     case(
         people.select(
             F.upper(people.name).alias("upper"),
@@ -64,6 +63,26 @@ def cases(people: DataFrame, numbers: DataFrame, strings: DataFrame) -> None:
 
     case(people.select(F.split(people.name, " ", 100).alias("parts")))
 
+    case(numbers.select("id", (numbers.a * 1.1).alias("scaled")))
+
+    case(numbers.select((numbers.a + numbers.a * 2).alias("x")))
+
+    case(numbers.select(numbers.a, "id"))
+
+    # Aliases name the columns, which may repeat.
+    case(numbers.select(numbers.a.alias("x"), (numbers.a + 1).alias("x")))
+
+    case(
+        numbers.select(
+            F.lit(1).alias("a"),
+            F.lit(0.99).alias("b"),
+            F.lit("bla").alias("c"),
+            F.lit(False).alias("d"),
+            F.lit(bytearray(b"raw")).alias("e"),
+            F.lit(datetime.date(2025, 1, 1)).alias("f"),
+        )
+    )
+
     case(numbers.select("id", F.coalesce("a", "b", "c").alias("first")))
 
     case(numbers.filter(numbers.a.isNull()))
@@ -71,6 +90,8 @@ def cases(people: DataFrame, numbers: DataFrame, strings: DataFrame) -> None:
     case(numbers.filter(numbers.a.isNotNull()))
 
     case(numbers.select("id", F.isnull("b").alias("b_is_null")))
+
+    strings = spark.createDataFrame([(1, "100"), (2, "-5"), (3, "0")], ["id", "s"])
 
     case(strings.select("id", strings.s.cast("int").alias("i")))
 
@@ -83,3 +104,6 @@ def cases(people: DataFrame, numbers: DataFrame, strings: DataFrame) -> None:
     )
 
     case(n.select("id", F.when(n.n > 0, 1).otherwise(0).alias("is_positive")))
+
+    # gap: GC15
+    case(spark.range(5, 6).select((F.col("id") / 2).alias("half")))

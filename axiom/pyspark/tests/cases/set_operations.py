@@ -24,22 +24,9 @@ def setup(spark: SparkSession) -> dict[str, DataFrame]:
         "ab": spark.createDataFrame([(1, "x")], ["a", "b"]),
         "ba": spark.createDataFrame([("y", 2)], ["b", "a"]),
         "bc": spark.createDataFrame([("z", 3.0)], ["b", "c"]),
-        "people": spark.createDataFrame([("Alice", 25), ("Bob", 30)], ["name", "age"]),
-        "nulls": spark.createDataFrame(
-            [("Alice", 25), ("Bob", None), (None, 30)],
-            StructType(
-                [StructField("name", StringType()), StructField("age", IntegerType())]
-            ),
-        ),
         "mixed": spark.createDataFrame(
             [(1, 10.5, True, "a"), (2, 20.3, False, "b"), (3, 30.7, True, "a")],
             ["id", "value", "active", "group"],
-        ),
-        "empty": spark.createDataFrame(
-            [],
-            StructType(
-                [StructField("name", StringType()), StructField("age", IntegerType())]
-            ),
         ),
     }
 
@@ -50,14 +37,22 @@ def cases(
     ab: DataFrame,
     ba: DataFrame,
     bc: DataFrame,
-    people: DataFrame,
-    empty: DataFrame,
-    nulls: DataFrame,
     mixed: DataFrame,
+    spark: SparkSession,
 ) -> None:
     case(left.union(right))
 
     case(left.unionAll(right))
+
+    # A set operation takes its column names from its left input.
+    case(left.union(right.withColumnRenamed("x", "y")))
+
+    nulls = spark.createDataFrame(
+        [("Alice", 25), ("Bob", None), (None, 30)],
+        StructType(
+            [StructField("name", StringType()), StructField("age", IntegerType())]
+        ),
+    )
 
     case(nulls.union(nulls))
 
@@ -91,4 +86,11 @@ def cases(
     case(ab.unionByName(bc))
 
     # The union widens INTEGER to BIGINT.
+    people = spark.createDataFrame([("Alice", 25), ("Bob", 30)], ["name", "age"])
+    empty = spark.createDataFrame(
+        [],
+        StructType(
+            [StructField("name", StringType()), StructField("age", IntegerType())]
+        ),
+    )
     case(people.union(empty))

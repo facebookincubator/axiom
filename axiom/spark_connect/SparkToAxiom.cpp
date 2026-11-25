@@ -913,7 +913,8 @@ void SparkToAxiom::visit(
     return;
   }
 
-  expr_ = lp::Call(toFunctionName(functionName), args);
+  auto call = lp::Call(toFunctionName(functionName), args);
+  expr_ = unresolvedFunction.is_distinct() ? call.distinct() : call;
 }
 
 void SparkToAxiom::visit(

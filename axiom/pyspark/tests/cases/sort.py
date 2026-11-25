@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 from axiom.pyspark.tests.dataframe_cases import case
 from pyspark.sql import DataFrame, functions as F, SparkSession
 
@@ -35,34 +34,6 @@ def setup(spark: SparkSession) -> dict[str, DataFrame]:
 def cases(employees: DataFrame) -> None:
     e = employees
 
-    case(e.filter(e.department == "Engineering"))
-
-    case(e.filter(e.salary > 55000))
-
-    case(e.filter((e.department == "Engineering") & (e.age < 30)))
-
-    case(e.filter((e.age > 30) | (e.department == "Sales")))
-
-    case(e.groupBy("department").count())
-
-    case(
-        e.groupBy("department").agg(
-            F.count("name").alias("employee_count"),
-            F.avg("salary").alias("avg_salary"),
-            F.max("age").alias("max_age"),
-            F.min("age").alias("min_age"),
-            F.sum("salary").alias("total_salary"),
-        )
-    )
-
-    case(
-        e.select(
-            e.name,
-            (e.salary * 1.1).alias("salary_with_bonus"),
-            F.upper(e.department).alias("dept_upper"),
-        )
-    )
-
     # ordered
     case(e.orderBy("age"))
 
@@ -71,3 +42,9 @@ def cases(employees: DataFrame) -> None:
 
     # ordered
     case(e.orderBy("department", F.col("salary").desc()))
+
+    # PySpark 3.4 has offset only on the Spark Connect DataFrame, so the case
+    # checks the row count.
+    # count 4
+    # pyrefly: ignore[not-callable]
+    case(e.orderBy("age").offset(1).limit(10))
