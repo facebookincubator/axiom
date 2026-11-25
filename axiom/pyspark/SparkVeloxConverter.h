@@ -32,12 +32,6 @@ namespace axiom::collagen {
 /// A series of conversion utilities between Spark Connect protobuf structures
 /// and Axiom/Velox.
 
-/// Map Spark scalar function names to Velox.
-///
-/// TODO: We probably want to have the required names registered in Velox
-/// directly, instead of relying on the names registered for Presto.
-std::string toVeloxFunctionName(const std::string& sparkFunctionName);
-
 /// Convert Spark join types to Axiom join types
 facebook::axiom::logical_plan::JoinType toAxiomJoinType(
     const spark::connect::Join::JoinType& joinType);
