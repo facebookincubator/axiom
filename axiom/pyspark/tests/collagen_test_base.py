@@ -40,6 +40,41 @@ def detect_server_port(pid: int, timeout: float = 60.0) -> int:
     raise TimeoutError(f"Process {pid} did not start listening within {timeout}s")
 
 
+class CollagenServer:
+    """A Collagen server process with a Spark Connect session to it. The server
+    reads from the catalog and schema in 'options'."""
+
+    def __init__(self, options: dict[str, str | int]) -> None:
+        server_args = [f"--{k}={v}" for k, v in {**options, "port": 0}.items()]
+        server_path = importlib.resources.files(__package__).joinpath(COLLAGEN_SERVER)
+        # The server's output goes to a file, not a pipe: a pipe nobody reads
+        # until the server stops fills up and blocks the server mid-request.
+        self._output = tempfile.TemporaryFile()
+        self._process: subprocess.Popen[bytes] = subprocess.Popen(
+            [str(server_path)] + server_args,
+            stdout=self._output,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            port = detect_server_port(self._process.pid)
+        except TimeoutError as e:
+            raise TimeoutError(f"{e}. Output: {self.stop()}") from e
+        self.spark: SparkSession = SparkSession.builder.remote(
+            f"sc://localhost:{port}"
+        ).getOrCreate()
+
+    def stop(self) -> str:
+        """Stops the server and returns its output."""
+        if hasattr(self, "spark"):
+            self.spark.stop()
+        self._process.terminate()
+        self._process.wait()
+        self._output.seek(0)
+        output = self._output.read().decode("utf-8")
+        self._output.close()
+        return output
+
+
 class CollagenTest(unittest.TestCase):
     """Collagen integration test super class."""
 
@@ -51,48 +86,14 @@ class CollagenTest(unittest.TestCase):
             "runner_id": "local",
         }
 
-    def setUp(self):
-        opts = self.options()
-        opts["port"] = 0
-        server_args = [f"--{k}={v}" for k, v in opts.items()]
-
-        server_path = importlib.resources.files(__package__).joinpath(COLLAGEN_SERVER)
-        # The server's output goes to a file, not a pipe: a pipe nobody reads
-        # until tearDown fills up and blocks the server mid-request.
-        self._collagen_server_output = tempfile.TemporaryFile()
-        self._collagen_server_proc: subprocess.Popen[bytes] = subprocess.Popen(
-            [server_path] + server_args,
-            stdout=self._collagen_server_output,
-            stderr=subprocess.STDOUT,
-        )
-
-        try:
-            self._collagen_port: int = detect_server_port(
-                self._collagen_server_proc.pid
-            )
-        except TimeoutError as e:
-            self._collagen_server_proc.terminate()
-            self._collagen_server_proc.wait()
-            self.fail(f"{e}. stderr: {self._read_server_output()}")
-
-        self._spark: SparkSession = SparkSession.builder.remote(
-            f"sc://localhost:{self._collagen_port}"
-        ).getOrCreate()
+    def setUp(self) -> None:
+        self._server = CollagenServer(self.options())
+        self._spark: SparkSession = self._server.spark
 
     def tearDown(self) -> None:
-        self._spark.stop()
-
-        self._collagen_server_proc.terminate()
-        self._collagen_server_proc.wait()
-        output = self._read_server_output()
+        output = self._server.stop()
         if output:
             print(f"\n=== Collagen Server stderr ===\n{output}")
-
-    def _read_server_output(self) -> str:
-        self._collagen_server_output.seek(0)
-        output = self._collagen_server_output.read().decode("utf-8")
-        self._collagen_server_output.close()
-        return output
 
     def plan_json(self, df):
         """Return the Velox physical plan as a parsed JSON dict."""

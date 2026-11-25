@@ -68,12 +68,19 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import os
+import sys
+import tempfile
 from types import ModuleType
 from typing import Any, TypeGuard
 
 from pyspark.sql import DataFrame, functions, Row, SparkSession
 from pyspark.sql.connect import functions as connect_functions
 from pyspark.sql.connect.session import SparkSession as ConnectSparkSession
+
+
+# A classic or a Spark Connect session.
+Session = SparkSession | ConnectSparkSession
 
 
 def case(df: DataFrame) -> None:
@@ -191,12 +198,14 @@ def _to_python(value: Any) -> Any:
     return value
 
 
-def _evaluate(
+def evaluate(
     expression: ast.expr,
     namespace: dict[str, Any],
     file: str,
     show: ShowOptions | None,
 ) -> Outcome:
+    """Evaluates 'expression', which yields a DataFrame, and collects it, or
+    with 'show' returns the text DataFrame.show() prints as the only row."""
     try:
         df = eval(compile(ast.Expression(expression), file, "eval"), namespace)
         if show is not None:
@@ -210,30 +219,74 @@ def _evaluate(
         return Outcome(error=str(e))
 
 
-def _run(
-    module: ModuleType,
-    function: ast.FunctionDef,
-    spark: SparkSession,
-    file: str,
-    annotations: dict[int, Annotations],
-) -> dict[int, Outcome]:
-    tables = module.setup(spark)
-    namespace = dict(vars(module))
+def comparable_rows(outcome: Outcome, ordered: bool) -> list[Any]:
+    return outcome.rows if ordered else sorted(outcome.rows, key=repr)
+
+
+def matches(first: Outcome, second: Outcome, ordered: bool) -> bool:
+    """Whether both outcomes succeeded with the same columns and rows."""
+    return (
+        first.error is None
+        and second.error is None
+        and first.columns == second.columns
+        and comparable_rows(first, ordered) == comparable_rows(second, ordered)
+    )
+
+
+def make_namespace(module: ModuleType, spark: Session) -> dict[str, Any]:
+    """Returns the names an expression in 'module' sees with 'spark': the
+    module's globals, the tables its setup() returns, 'spark', and 'F'."""
+    namespace = {**vars(module), **module.setup(spark), "spark": spark}
     # A classic and a Spark Connect session each need columns of their own
     # kind, so 'F' refers to the functions of the session's kind.
     namespace["F"] = (
         connect_functions if isinstance(spark, ConnectSparkSession) else functions
     )
-    for arg in function.args.args:
-        namespace[arg.arg] = spark if arg.arg == "spark" else tables[arg.arg]
+    return namespace
 
+
+_local_spark: SparkSession | None = None
+
+
+def get_local_spark() -> SparkSession:
+    """Returns a local Spark session, created on first use."""
+    global _local_spark
+    if _local_spark is None:
+        # Spark's Python workers must run the same interpreter, with the same
+        # modules, as this process.
+        os.environ["PYSPARK_PYTHON"] = sys.executable
+        os.environ["PYTHONPATH"] = os.pathsep.join(sys.path)
+        _local_spark = (
+            SparkSession.builder.master("local[1]")
+            .config("spark.ui.enabled", "false")
+            .config("spark.ui.showConsoleProgress", "false")
+            .config("spark.sql.shuffle.partitions", "1")
+            .config("spark.sql.warehouse.dir", tempfile.mkdtemp())
+            .getOrCreate()
+        )
+    return _local_spark
+
+
+def stop_local_spark() -> None:
+    if _local_spark is not None:
+        _local_spark.stop()
+
+
+def _run(
+    module: ModuleType,
+    function: ast.FunctionDef,
+    spark: Session,
+    file: str,
+    annotations: dict[int, Annotations],
+) -> dict[int, Outcome]:
+    namespace = make_namespace(module, spark)
     outcomes = {}
     for statement in function.body:
         if _is_case(statement):
             assert isinstance(statement, ast.Expr)
             call = statement.value
             assert isinstance(call, ast.Call)
-            outcomes[statement.lineno] = _evaluate(
+            outcomes[statement.lineno] = evaluate(
                 call.args[0], namespace, file, annotations[statement.lineno].show
             )
         else:
@@ -254,7 +307,7 @@ def compares_with_spark(module: ModuleType) -> bool:
 
 
 def run_cases(
-    module: ModuleType, collagen: SparkSession, spark: SparkSession | None
+    module: ModuleType, collagen: Session, spark: Session | None
 ) -> list[Case]:
     """Runs the cases in 'module' with Collagen, and with 'spark' unless it is
     None."""
