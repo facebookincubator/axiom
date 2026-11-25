@@ -1261,6 +1261,39 @@ void SparkToAxiom::visit(
       targetType, facebook::axiom::logical_plan::SpecialForm::kCast, inputExpr);
 }
 
+namespace {
+
+// Returns 'input' with the columns of 'outputType' in that order, taken by
+// name. A column 'input' lacks reads as NULL.
+facebook::axiom::logical_plan::LogicalPlanNodePtr projectByName(
+    std::string id,
+    facebook::axiom::logical_plan::LogicalPlanNodePtr input,
+    const velox::RowType& outputType) {
+  const auto& inputType = *input->outputType();
+  std::vector<std::string> names;
+  std::vector<facebook::axiom::logical_plan::ExprPtr> exprs;
+  for (uint32_t i = 0; i < outputType.size(); ++i) {
+    const auto& name = outputType.nameOf(i);
+    if (auto index = inputType.getChildIdxIfExists(name)) {
+      exprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::InputReferenceExpr>(
+              inputType.childAt(*index), name));
+    } else {
+      const auto& type = outputType.childAt(i);
+      exprs.emplace_back(
+          std::make_shared<facebook::axiom::logical_plan::ConstantExpr>(
+              type,
+              std::make_shared<velox::variant>(
+                  velox::variant::null(type->kind()))));
+    }
+    names.emplace_back(name);
+  }
+  return std::make_shared<facebook::axiom::logical_plan::ProjectNode>(
+      std::move(id), std::move(input), std::move(names), std::move(exprs));
+}
+
+} // namespace
+
 void SparkToAxiom::visit(
     const spark::connect::SetOperation& setOperation,
     SparkPlanVisitorContext& context) {
@@ -1274,6 +1307,52 @@ void SparkToAxiom::visit(
   // Visit the right input relation
   SparkPlanVisitor::visit(setOperation.right_input(), context);
   auto rightSubtree = std::move(planNode_);
+
+  // unionByName matches the right input's columns to the left input's by name.
+  // With allowMissingColumns, a column one input lacks reads as NULL there, and
+  // the right input's extra columns follow the left input's.
+  if (setOperation.has_by_name() && setOperation.by_name()) {
+    if (setOperation.set_op_type() !=
+        spark::connect::SetOperation::SET_OP_TYPE_UNION) {
+      COLLAGEN_USER_FAIL(
+          "Only UNION can match columns by name: {}",
+          setOperation.set_op_type());
+    }
+    const bool allowMissingColumns = setOperation.has_allow_missing_columns() &&
+        setOperation.allow_missing_columns();
+    const auto& leftType = *leftSubtree->outputType();
+    const auto& rightType = *rightSubtree->outputType();
+
+    auto names = leftType.names();
+    auto types = leftType.children();
+    for (const auto& name : leftType.names()) {
+      if (!allowMissingColumns && !rightType.containsChild(name)) {
+        COLLAGEN_USER_FAIL(
+            "Column of the left input is missing from the right input: {}",
+            name);
+      }
+    }
+    for (uint32_t i = 0; i < rightType.size(); ++i) {
+      const auto& name = rightType.nameOf(i);
+      if (!leftType.containsChild(name)) {
+        if (!allowMissingColumns) {
+          COLLAGEN_USER_FAIL(
+              "Column of the right input is missing from the left input: {}",
+              name);
+        }
+        names.emplace_back(name);
+        types.emplace_back(rightType.childAt(i));
+      }
+    }
+
+    const auto outputType = velox::ROW(std::move(names), std::move(types));
+    if (outputType->size() > leftType.size()) {
+      leftSubtree =
+          projectByName(nextId(), std::move(leftSubtree), *outputType);
+    }
+    rightSubtree =
+        projectByName(nextId(), std::move(rightSubtree), *outputType);
+  }
 
   // Create the inputs vector for the set operation
   std::vector<facebook::axiom::logical_plan::LogicalPlanNodePtr> inputs;

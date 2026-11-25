@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <memory>
 
 #include "axiom/connectors/ConnectorMetadataRegistry.h"
 #include "axiom/connectors/tests/TestConnector.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "axiom/pyspark/Exception.h"
 #include "axiom/pyspark/SparkToAxiom.h"
 #include "axiom/pyspark/SparkVeloxConverter.h"
 #include "axiom/pyspark/third-party/protos/relations.grpc.pb.h" // @manual=fbcode//axiom/pyspark/third-party/protos:collagen_proto-cpp
@@ -42,6 +44,18 @@ registerTestConnector(const std::string& connectorId) {
       "training_table", velox::ROW({"viewer_rid"}, {velox::BIGINT()}));
   connector->addTable(
       "feature_table", velox::ROW({"primary_rid"}, {velox::BIGINT()}));
+  connector->addTable(
+      "ab", velox::ROW({{"a", velox::BIGINT()}, {"b", velox::VARCHAR()}}));
+  connector->addTable(
+      "ba", velox::ROW({{"b", velox::VARCHAR()}, {"a", velox::BIGINT()}}));
+  connector->addTable(
+      "bc", velox::ROW({{"b", velox::VARCHAR()}, {"c", velox::DOUBLE()}}));
+  connector->addTable(
+      "abc",
+      velox::ROW(
+          {{"a", velox::BIGINT()},
+           {"b", velox::VARCHAR()},
+           {"c", velox::DOUBLE()}}));
 
   velox::connector::registerConnector(connector);
   facebook::axiom::connector::ConnectorMetadataRegistry::global().insert(
@@ -66,6 +80,13 @@ class SparkToAxiomSetOperationTest : public ::testing::Test {
     facebook::axiom::connector::ConnectorMetadataRegistry::global().erase(
         connector_->connectorId());
     velox::connector::unregisterConnector(connector_->connectorId());
+  }
+
+  lp::LogicalPlanNodePtr toAxiom(const spark::connect::Relation& relation) {
+    SparkToAxiom converter("test_connector", "default", pool_.get());
+    SparkPlanVisitorContext context;
+    converter.SparkPlanVisitor::visit(relation, context);
+    return converter.planNode();
   }
 
   std::shared_ptr<facebook::axiom::connector::TestConnector> connector_;
@@ -310,6 +331,79 @@ TEST_F(SparkToAxiomSetOperationTest, visitSetOperationWithComplexInputs) {
   // Verify the right input is a table scan
   auto rightInput = setNode->inputs()[1];
   EXPECT_EQ(rightInput->kind(), lp::NodeKind::kTableScan);
+}
+
+// Builds 'leftTable' UNION ALL 'rightTable' matching columns by name, as
+// DataFrame.unionByName does.
+spark::connect::Relation createUnionByNameRelation(
+    const std::string& leftTable,
+    const std::string& rightTable,
+    bool allowMissingColumns = false,
+    spark::connect::SetOperation::SetOpType opType =
+        spark::connect::SetOperation::SET_OP_TYPE_UNION) {
+  auto relation = createSetOperationRelation(
+      createTestTableRelation(leftTable, 2),
+      createTestTableRelation(rightTable, 3),
+      opType,
+      /*isAll=*/true,
+      /*planId=*/1);
+  relation.mutable_set_op()->set_by_name(true);
+  relation.mutable_set_op()->set_allow_missing_columns(allowMissingColumns);
+  return relation;
+}
+
+TEST_F(SparkToAxiomSetOperationTest, unionByName) {
+  const auto plan = toAxiom(createUnionByNameRelation("ab", "ba"));
+  const auto* setNode = plan->as<lp::SetNode>();
+  ASSERT_NE(setNode, nullptr);
+
+  const auto expectedType =
+      velox::ROW({{"a", velox::BIGINT()}, {"b", velox::VARCHAR()}});
+  EXPECT_EQ(*setNode->outputType(), *expectedType);
+  EXPECT_EQ(*setNode->inputs()[1]->outputType(), *expectedType);
+}
+
+// A column one input lacks reads as NULL there. The right input's extra columns
+// follow the left input's columns.
+TEST_F(SparkToAxiomSetOperationTest, unionByNameAllowMissingColumns) {
+  const auto plan = toAxiom(
+      createUnionByNameRelation("ab", "bc", /*allowMissingColumns=*/true));
+  const auto* setNode = plan->as<lp::SetNode>();
+  ASSERT_NE(setNode, nullptr);
+
+  const auto expectedType = velox::ROW(
+      {{"a", velox::BIGINT()},
+       {"b", velox::VARCHAR()},
+       {"c", velox::DOUBLE()}});
+  EXPECT_EQ(*setNode->outputType(), *expectedType);
+  EXPECT_EQ(*setNode->inputs()[0]->outputType(), *expectedType);
+  EXPECT_EQ(*setNode->inputs()[1]->outputType(), *expectedType);
+}
+
+TEST_F(SparkToAxiomSetOperationTest, unionByNameErrors) {
+  using testing::HasSubstr;
+  using testing::ThrowsMessage;
+
+  EXPECT_THAT(
+      [&]() { toAxiom(createUnionByNameRelation("ab", "bc")); },
+      ThrowsMessage<CollagenException>(HasSubstr(
+          "Column of the left input is missing from the right "
+          "input: a")));
+  EXPECT_THAT(
+      [&]() { toAxiom(createUnionByNameRelation("ab", "abc")); },
+      ThrowsMessage<CollagenException>(HasSubstr(
+          "Column of the right input is missing from the left "
+          "input: c")));
+  EXPECT_THAT(
+      [&]() {
+        toAxiom(createUnionByNameRelation(
+            "ab",
+            "ba",
+            /*allowMissingColumns=*/false,
+            spark::connect::SetOperation::SET_OP_TYPE_INTERSECT));
+      },
+      ThrowsMessage<CollagenException>(
+          HasSubstr("Only UNION can match columns by name")));
 }
 
 } // namespace
