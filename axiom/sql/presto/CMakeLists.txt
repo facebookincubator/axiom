@@ -56,6 +56,7 @@ add_library(
 target_link_libraries(
   axiom_sql_presto_parser
   axiom_logical_plan_builder
+  axiom_sql_parsing
   axiom_sql_presto_ast
   axiom_sql_presto_error
   axiom_sql_presto_parser_options

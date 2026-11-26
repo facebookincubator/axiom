@@ -62,11 +62,10 @@ def main():
 
     directory = Path(sys.argv[1])
 
-    # Process all .h and .cpp files
+    # Process all .h and .cpp files. The directory holds only generated files.
     for pattern in ["*.h", "*.cpp"]:
         for file_path in directory.glob(pattern):
-            if file_path.name.startswith("PrestoSql"):
-                add_license_header(file_path)
+            add_license_header(file_path)
 
 
 if __name__ == "__main__":

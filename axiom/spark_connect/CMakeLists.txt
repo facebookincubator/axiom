@@ -32,6 +32,7 @@ target_link_libraries(
   axiom_connectors
   axiom_logical_plan
   axiom_logical_plan_builder
+  axiom_sql_spark
   velox_arrow_bridge
   velox_presto_coercions
   velox_memory
