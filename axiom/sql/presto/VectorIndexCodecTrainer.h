@@ -35,6 +35,12 @@ struct VectorIndexSample {
   /// a sample, and of the trainer's result, starts with them, in this order.
   facebook::velox::RowTypePtr partitionColumns;
 
+  /// The context of REFRESH's plan, which the plans of makeSample share, and
+  /// which resolves columns by name, as they do. A trainer starts any plan of
+  /// its own in it, lp::PlanBuilder(context), so that names stay unique within
+  /// REFRESH's plan.
+  facebook::axiom::logical_plan::PlanBuilder::Context context;
+
   /// Plans the valid rows among each partition's about 'numRows' rows of
   /// smallest sample hash, in no particular order, the same rows on any number
   /// of workers and drivers. A partition of at most 'numRows' rows keeps all
@@ -44,8 +50,7 @@ struct VectorIndexSample {
   ///
   /// Plans anew on each call, since a logical plan is a tree and a trainer may
   /// read the sample more than once. Every plan the trainer builds comes from
-  /// makeSample, or from its builder via PlanBuilder::newPlan(), so that names
-  /// stay unique within REFRESH's plan. The columns, in order:
+  /// makeSample or starts in 'context'. The columns, in order:
   ///  - the partition columns, all non-null, for the partitions being
   ///    refreshed;
   ///  - the key (BIGINT), non-null;
