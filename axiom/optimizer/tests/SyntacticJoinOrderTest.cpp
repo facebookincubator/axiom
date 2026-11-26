@@ -291,69 +291,307 @@ TEST_P(SyntacticJoinOrderTest, outerJoins) {
   }
 }
 
-TEST_P(SyntacticJoinOrderTest, crossJoinStartsWithSingleRowSubqueries) {
+// In the written join order, the single-row input of an inner join without keys
+// goes on the build side and computes none of the join's filter parts. Every
+// other join keeps its written sides.
+TEST_P(SyntacticJoinOrderTest, singleRowBuild) {
   optimizerOptions_.sampleJoins = false;
-
-  auto logicalPlan = parseSelect(
-      "WITH "
-      "t AS (SELECT count(*) AS c FROM orders), "
-      "u AS (SELECT count(*) AS c FROM lineitem), "
-      "v AS (SELECT o_orderstatus, count(*) AS s FROM orders GROUP BY o_orderstatus) "
-      "SELECT t.c, u.c, v.s FROM t, u, v");
-
-  optimizerOptions_.syntacticJoinOrder = false;
-  auto referenceResults = runVelox(logicalPlan).results;
-
   optimizerOptions_.syntacticJoinOrder = true;
-  auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher =
-      matchHiveScan("orders")
-          .aliases({"status"})
-          .singleAggregation({"status"}, {"count(*) as s"})
-          .project()
-          .nestedLoopJoin(
-              matchHiveScan("orders").singleAggregation({}, {"count(*) as c"}))
-          .nestedLoopJoin(matchHiveScan("lineitem")
-                              .singleAggregation({}, {"count(*) as c"}))
-          .project()
-          .build();
-  // v2 does not implement the single-row uncorrelated subquery exception
-  // documented on OptimizerOptions::syntacticJoinOrder: it leads with t and u
-  // instead of placing them after v.
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
-  checkSame(logicalPlan, referenceResults);
-}
+  using core::JoinType;
 
-// A single-row uncorrelated subquery that is not the first table in the
-// syntactic join order must not block the tables placed after it. Here the
-// max() subquery sits between the base table and a later correlated subquery.
-TEST_P(SyntacticJoinOrderTest, singleRowSubqueryInMiddleOfJoinOrder) {
-  optimizerOptions_.sampleJoins = false;
+  {
+    SCOPED_TRACE("two single-row inputs written first");
+    auto logicalPlan = parseSelect(
+        "WITH "
+        "t AS (SELECT count(*) AS c FROM orders), "
+        "u AS (SELECT count(*) AS c FROM lineitem), "
+        "v AS (SELECT o_orderstatus, count(*) AS s FROM orders GROUP BY o_orderstatus) "
+        "SELECT t.c, u.c, v.s FROM t, u, v");
+    auto singleRows = matchHiveScan("orders")
+                          .singleAggregation({}, {"count(*) as c"})
+                          .nestedLoopJoin(
+                              matchHiveScan("lineitem")
+                                  .singleAggregation({}, {"count(*) as c2"}),
+                              JoinType::kInner,
+                              "");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan("orders")
+            .aliases({"status"})
+            .singleAggregation({"status"}, {"count(*) as s"})
+            .nestedLoopJoin(singleRows, JoinType::kInner, "")
+            .project({"c", "c2", "s"})
+            .build());
+    // The grouped input stays partitioned, and the one-row build is broadcast
+    // to its tasks.
+    auto singleRowsDistributed =
+        matchHiveScan("orders")
+            .partialAggregation({}, {"count(*) as pc"})
+            .gather()
+            .localGather()
+            .finalAggregation({}, {"count(pc) as c"})
+            .nestedLoopJoin(
+                matchHiveScan("lineitem")
+                    .partialAggregation({}, {"count(*) as pc2"})
+                    .gather()
+                    .localGather()
+                    .finalAggregation({}, {"count(pc2) as c2"}),
+                JoinType::kInner,
+                "")
+            .broadcast();
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchHiveScan("orders")
+            .aliases({"status"})
+            .partialAggregation({"status"}, {"count(*) as ps"})
+            .shuffle({"status"})
+            .localPartition({"status"})
+            .finalAggregation({"status"}, {"count(ps) as s"})
+            .nestedLoopJoin(singleRowsDistributed, JoinType::kInner, "")
+            .gather()
+            .project({"c", "c2", "s"})
+            .build());
+  }
 
-  auto logicalPlan = parseSelect(
-      "SELECT "
-      "  (SELECT max(l_quantity) FROM lineitem) AS x, "
-      "  (SELECT count(*) FROM nation WHERE n_regionkey = r.r_regionkey) AS y "
-      "FROM region r");
+  {
+    SCOPED_TRACE("single-row input already the build");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT "
+            "  (SELECT max(l_quantity) FROM lineitem) AS x, "
+            "  (SELECT count(*) FROM nation WHERE n_regionkey = r.r_regionkey) AS y "
+            "FROM region r")),
+        matchHiveScan("region")
+            .nestedLoopJoin(
+                matchHiveScan("lineitem")
+                    .singleAggregation({}, {"max(l_quantity) as x"}),
+                JoinType::kInner,
+                "")
+            .hashJoin(
+                matchHiveScan("nation").singleAggregation(
+                    {"n_regionkey"}, {"count(*) as cnt"}),
+                JoinType::kLeft)
+            .project({"x", "coalesce(cnt, 0)"})
+            .build());
+  }
 
-  optimizerOptions_.syntacticJoinOrder = false;
-  auto referenceResults = runVelox(logicalPlan).results;
+  {
+    SCOPED_TRACE("joined by a WHERE comparison");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_name "
+            "FROM (SELECT max(r_regionkey) AS m FROM region) s, nation "
+            "WHERE n_regionkey < s.m")),
+        matchHiveScan("nation")
+            .nestedLoopJoin(
+                matchHiveScan("region").singleAggregation(
+                    {}, {"max(r_regionkey) as m"}),
+                JoinType::kInner,
+                "m > n_regionkey")
+            .build());
+  }
 
-  optimizerOptions_.syntacticJoinOrder = true;
-  auto plan = toSingleNodePlan(logicalPlan);
-  auto matcher =
-      matchHiveScan("region")
-          .hashJoin(
-              matchHiveScan("nation").singleAggregation().project(),
-              core::JoinType::kLeft)
-          .nestedLoopJoin(matchHiveScan("lineitem")
-                              .singleAggregation({}, {"max(l_quantity)"}))
-          .project()
-          .build();
-  // Same gap: v2 leaves the max() subquery where it was written instead of
-  // placing it after the other tables.
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
-  checkSame(logicalPlan, referenceResults);
+  {
+    SCOPED_TRACE("runtime-empty filtered aggregate");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_name, s.c "
+            "FROM ("
+            "  SELECT sum(r_regionkey) AS c "
+            "  FROM region "
+            "  HAVING sum(r_regionkey) < 0"
+            ") s, nation")),
+        matchHiveScan("nation")
+            .nestedLoopJoin(
+                matchHiveScan("region")
+                    .singleAggregation({}, {"sum(r_regionkey) as c"})
+                    .filter("c < 0"),
+                JoinType::kInner,
+                "")
+            .project({"n_name", "c"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("filter parts reading one input each");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_name "
+            "FROM (SELECT count(*) AS c FROM region) s, nation "
+            "WHERE contains(sequence(0, s.c), n_nationkey + 1)")),
+        matchHiveScan("nation")
+            .project({"n_name", "n_nationkey + 1 as k"})
+            .nestedLoopJoin(
+                matchHiveScan("region").singleAggregation(
+                    {}, {"count(*) as c"}),
+                JoinType::kInner,
+                "contains(sequence(0, c), k)")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("filter part on a build already on the right");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_name FROM nation "
+            "WHERE n_nationkey < (SELECT max(r_regionkey) FROM region) * 2")),
+        matchHiveScan("nation")
+            .nestedLoopJoin(
+                matchHiveScan("region").singleAggregation(
+                    {}, {"max(r_regionkey) as mx"}),
+                JoinType::kInner,
+                "n_nationkey < mx * 2")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("unknown size");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT element_at(s.v, n_nationkey + 1) "
+            "FROM (SELECT array_agg(r_name) AS v FROM region) s, nation")),
+        matchHiveScan("region")
+            .singleAggregation({}, {"array_agg(r_name) as v"})
+            .nestedLoopJoin(matchHiveScan("nation"), JoinType::kInner, "")
+            .project({"element_at(v, n_nationkey + 1)"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("both inputs single-row");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT s.c, q.m "
+            "FROM (SELECT count(*) AS c FROM nation) s, "
+            "(SELECT max(r_regionkey) AS m FROM region) q "
+            "WHERE s.c < q.m * 2")),
+        matchHiveScan("nation")
+            .singleAggregation({}, {"count(*) as c"})
+            .nestedLoopJoin(
+                matchHiveScan("region")
+                    .singleAggregation({}, {"max(r_regionkey) as m"})
+                    .project({"m", "m * 2 as m2"}),
+                JoinType::kInner,
+                "c < m2")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("keyed join");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_name "
+            "FROM (SELECT max(r_regionkey) AS m FROM region) s "
+            "JOIN nation ON n_regionkey = s.m")),
+        matchHiveScan("region")
+            .singleAggregation({}, {"max(r_regionkey) as m"})
+            .hashJoinInner(
+                matchHiveScan("nation"), {.keys = {{"m = n_regionkey"}}})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("two multi-row inputs");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT n_nationkey, r_regionkey FROM nation, region "
+            "WHERE n_nationkey < r_regionkey * 2")),
+        matchHiveScan("nation")
+            .nestedLoopJoin(
+                matchHiveScan("region").project(
+                    {"r_regionkey", "r_regionkey * 2 as r2"}),
+                JoinType::kInner,
+                "n_nationkey < r2")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("preserved side of a LEFT join");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT s.c, n_name "
+            "FROM (SELECT count(*) AS c FROM region) s "
+            "LEFT JOIN nation ON n_regionkey < s.c")),
+        matchHiveScan("region")
+            .singleAggregation({}, {"count(*) as c"})
+            .nestedLoopJoin(
+                matchHiveScan("nation"), JoinType::kLeft, "c > n_regionkey")
+            .build());
+  }
+
+  // One BIGINT row is 8 bytes.
+  const auto oneRow = parseSelect(
+      "SELECT n_name, s.c FROM (SELECT count(*) AS c FROM region) s, nation");
+  auto count = [] {
+    return matchHiveScan("region").singleAggregation({}, {"count(*) as c"});
+  };
+  {
+    SCOPED_TRACE("one BIGINT row, limit 0");
+    optimizerOptions_.broadcastSizeLimit = 0;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(oneRow),
+        count()
+            .nestedLoopJoin(matchHiveScan("nation"), JoinType::kInner, "")
+            .project({"n_name", "c"})
+            .build());
+  }
+  {
+    SCOPED_TRACE("one BIGINT row, limit 4");
+    optimizerOptions_.broadcastSizeLimit = 4;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(oneRow),
+        count()
+            .nestedLoopJoin(matchHiveScan("nation"), JoinType::kInner, "")
+            .project({"n_name", "c"})
+            .build());
+  }
+  {
+    SCOPED_TRACE("one BIGINT row, limit 8");
+    optimizerOptions_.broadcastSizeLimit = 8;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(oneRow),
+        matchHiveScan("nation")
+            .nestedLoopJoin(count(), JoinType::kInner, "")
+            .project({"n_name", "c"})
+            .build());
+  }
+
+  // Four BIGINTs are 32 bytes.
+  const auto fourColumns = parseSelect(
+      "SELECT n_name, s.a, s.b, s.c, s.d "
+      "FROM ("
+      "  SELECT count(*) AS a, sum(r_regionkey) AS b, max(r_regionkey) AS c, "
+      "    min(r_regionkey) AS d "
+      "  FROM region"
+      ") s, nation");
+  auto aggregates = [] {
+    return matchHiveScan("region").singleAggregation(
+        {},
+        {"count(*) as a",
+         "sum(r_regionkey) as b",
+         "max(r_regionkey) as c",
+         "min(r_regionkey) as d"});
+  };
+  {
+    SCOPED_TRACE("four BIGINT row, limit 16");
+    optimizerOptions_.broadcastSizeLimit = 16;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(fourColumns),
+        aggregates()
+            .nestedLoopJoin(matchHiveScan("nation"), JoinType::kInner, "")
+            .project({"n_name", "a", "b", "c", "d"})
+            .build());
+  }
+  {
+    SCOPED_TRACE("four BIGINT row, limit 32");
+    optimizerOptions_.broadcastSizeLimit = 32;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(fourColumns),
+        matchHiveScan("nation")
+            .nestedLoopJoin(aggregates(), JoinType::kInner, "")
+            .project({"n_name", "a", "b", "c", "d"})
+            .build());
+  }
 }
 
 // 12-way inner-join chain. Without the per-step restriction that keeps

@@ -174,7 +174,9 @@ std::vector<ConfigProperty> buildProperties(
           "copy must fit in each worker's memory. \"0B\" disables broadcast "
           "for keyed joins. Joins with no partitioned distributed shape may "
           "still broadcast: keyless joins, and IN / NOT IN whose correlation "
-          "has no equality.",
+          "has no equality. The limit also bounds the single row that an "
+          "inner join without keys takes as its build side; at \"0B\" that "
+          "choice is off.",
       },
       {
           std::string(OptimizerOptions::kDphypEnumerationBudget),

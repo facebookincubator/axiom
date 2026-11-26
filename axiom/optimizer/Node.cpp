@@ -2578,6 +2578,18 @@ bool Node::atMostOneRow() const {
       this, [](const PlanObjectSet& unique) { return unique.empty(); });
 }
 
+std::optional<float> Node::knownRowSize() const {
+  float size{0};
+  for (ColumnCP column : outputColumns()) {
+    const auto& value = column->value();
+    if (!value.type->isFixedWidth() && !value.avgSizeInBytes.has_value()) {
+      return std::nullopt;
+    }
+    size += value.byteSize();
+  }
+  return size;
+}
+
 Join::Sides Join::emittedOnceSides(
     velox::core::JoinType joinType,
     NodeCP left,
@@ -3057,6 +3069,38 @@ bool Join::canBuildLoopInvariant(
   return std::ranges::all_of(rightKeys, [&](ExprCP key) {
     return key->is(PlanType::kColumnExpr) && distinct.insert(key).second;
   });
+}
+
+namespace {
+// True when 'node' has at most one row, of a known size that fits
+// 'limitBytes'.
+bool singleRowFits(NodeCP node, int64_t limitBytes) {
+  if (!node->atMostOneRow()) {
+    return false;
+  }
+  const std::optional<float> rowBytes = node->knownRowSize();
+  return rowBytes.has_value() &&
+      Exchange::broadcastSizeIfFits(1, *rowBytes, limitBytes).has_value();
+}
+} // namespace
+
+// static
+Join::Sides Join::singleRowBuildSide(
+    velox::core::JoinType joinType,
+    bool hasKeys,
+    NodeCP left,
+    NodeCP right,
+    int64_t limitBytes) {
+  if (joinType != velox::core::JoinType::kInner || hasKeys) {
+    return {};
+  }
+  if (singleRowFits(right, limitBytes) && !left->atMostOneRow()) {
+    return {.right = true};
+  }
+  if (singleRowFits(left, limitBytes) && !right->atMostOneRow()) {
+    return {.left = true};
+  }
+  return {};
 }
 
 void Join::Key::swapInputs() {
@@ -4266,6 +4310,21 @@ Placement Exchange::placementAfter(
     return oneDriver ? Placement::kSingleThread : Placement::kSingleTask;
   }
   return oneDriver ? Placement::kOneDriverPerTask : Placement::kDistributed;
+}
+
+// static
+std::optional<float> Exchange::broadcastSizeIfFits(
+    std::optional<float> cardinality,
+    float rowBytes,
+    int64_t limitBytes) {
+  if (limitBytes <= 0 || !cardinality.has_value()) {
+    return std::nullopt;
+  }
+  const float size = *cardinality * std::max<float>(1, rowBytes);
+  if (size > limitBytes) {
+    return std::nullopt;
+  }
+  return size;
 }
 
 Exchange::Exchange(Key key)

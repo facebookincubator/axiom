@@ -1915,6 +1915,223 @@ TEST_P(JoinTest, crossJoin) {
   }
 }
 
+// In cost-based order, the single-row input of an inner join without keys goes
+// on the build side before estimates are compared, and at each cross product
+// that combines planned components. Only sides change: the components keep
+// their order.
+TEST_P(JoinTest, singleRowBuild) {
+  optimizerOptions_.sampleJoins = false;
+  using core::JoinType;
+  addTableWithStats("t", {"a", "b"}, 1'000);
+  addTableWithStats("u", {"a"}, 1, {{"a", 1}});
+  addTableWithStats("v", {"a"}, 1, {{"a", 1}});
+  addTableWithStats("r", {"a", "b"}, 1'000);
+  testConnector_->addTable("d", ROW({"a", "b"}, BIGINT()));
+  for (const auto* name : {"w", "w2"}) {
+    auto definition =
+        connector::TableDefinition::create(ROW({"a", "b", "d"}, BIGINT()), {});
+    definition.primaryKey = {"a"};
+    testConnector_->addTable(name, std::move(definition))
+        ->setStats(10, {{"a", {.numDistinct = 1}}, {"b", {.numDistinct = 10}}});
+  }
+
+  // The component {l, r}: u joined with v, each estimated at one row.
+  auto pair = [] {
+    return matchScan("u").aliases({"ua"}).hashJoinInner(
+        matchScan("v").aliases({"va"}), {.keys = {{"ua = va"}}});
+  };
+  auto count = [] {
+    return matchScan("t").singleAggregation({}, {"count(*) as c"});
+  };
+  constexpr std::string_view kFirstCombine =
+      "SELECT s.c, l.a "
+      "FROM (SELECT count(*) AS c FROM t) s "
+      "CROSS JOIN u l "
+      "JOIN v r ON l.a = r.a";
+
+  {
+    SCOPED_TRACE("first combine");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(kFirstCombine),
+        pair()
+            .nestedLoopJoin(count(), JoinType::kInner, "")
+            .project({"c", "ua"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("first combine, limit 0");
+    optimizerOptions_.broadcastSizeLimit = 0;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(kFirstCombine),
+        count()
+            .nestedLoopJoin(pair(), JoinType::kInner, "")
+            .project({"c", "ua"})
+            .build());
+    optimizerOptions_.broadcastSizeLimit =
+        OptimizerOptions{}.broadcastSizeLimit;
+  }
+
+  {
+    SCOPED_TRACE("result so far becomes the single row");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT s.c, q.m, l.a "
+            "FROM (SELECT count(*) AS c FROM t) s "
+            "CROSS JOIN (SELECT max(b) AS m FROM t) q "
+            "CROSS JOIN u l "
+            "JOIN v r ON l.a = r.a"),
+        pair()
+            .nestedLoopJoin(
+                count().nestedLoopJoin(
+                    matchScan("t").aliases({"tb"}).singleAggregation(
+                        {}, {"max(tb) as m"}),
+                    JoinType::kInner,
+                    ""),
+                JoinType::kInner,
+                "")
+            .project({"c", "m", "ua"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("result so far narrowed by a conjunct it consumed");
+    // 's' and 'q' are estimated at 10 rows, so they fold first. Each of their
+    // rows is 16 bytes. The first combine consumes the conjunct, which leaves
+    // only 's.c'.
+    optimizerOptions_.broadcastSizeLimit = 8;
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT s.c, l.a "
+            "FROM (SELECT b AS x, d AS c FROM w WHERE a = 1) s "
+            "CROSS JOIN u l "
+            "JOIN ("
+            "  (SELECT b AS x, d AS c FROM w2 WHERE a = 1) q "
+            "  CROSS JOIN v r"
+            ") ON l.a = r.a AND s.x + q.x > s.c + q.c"),
+        pair()
+            .nestedLoopJoin(
+                matchScan("w")
+                    .filter("a = 1")
+                    .project({"b", "d"})
+                    .nestedLoopJoin(
+                        matchScan("w2")
+                            .aliases({"qb", "qd", "qa"})
+                            .filter("qa = 1")
+                            .project({"qb", "qd"}),
+                        JoinType::kInner,
+                        "b + qb > d + qd"),
+                JoinType::kInner,
+                "")
+            .project({"d", "ua"})
+            .build());
+    optimizerOptions_.broadcastSizeLimit =
+        OptimizerOptions{}.broadcastSizeLimit;
+  }
+
+  {
+    SCOPED_TRACE("two single-row inputs, one of unknown size");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT s.c, q.v "
+            "FROM (SELECT sum(b) AS c FROM t) s "
+            "CROSS JOIN (SELECT array_agg(b) AS v FROM t) q "
+            "JOIN (SELECT max(b) AS c FROM t) z ON s.c = z.c"),
+        matchScan("t")
+            .singleAggregation({}, {"sum(b) as c"})
+            .hashJoinInner(
+                matchScan("t").aliases({"zb"}).singleAggregation(
+                    {}, {"max(zb) as zc"}),
+                {.keys = {{"c = zc"}}})
+            .nestedLoopJoin(
+                matchScan("t").aliases({"qb"}).singleAggregation(
+                    {}, {"array_agg(qb) as v"}),
+                JoinType::kInner,
+                "")
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("unknown size");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT s.v, l.a "
+            "FROM (SELECT array_agg(b) AS v FROM t) s "
+            "CROSS JOIN u l "
+            "JOIN v r ON l.a = r.a"),
+        matchScan("t")
+            .singleAggregation({}, {"array_agg(b) as v"})
+            .nestedLoopJoin(pair(), JoinType::kInner, "")
+            .project({"v", "ua"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("single-row scan estimated at 10 rows");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT s.b, l.a "
+            "FROM (SELECT b FROM w WHERE a = 1) s "
+            "CROSS JOIN u l "
+            "JOIN v r ON l.a = r.a"),
+        pair()
+            .nestedLoopJoin(
+                matchScan("w").filter("a = 1").project({"b"}),
+                JoinType::kInner,
+                "")
+            .project({"b", "ua"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("single row already the build");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT count(*) "
+            "FROM (SELECT max(b) AS m FROM t) s "
+            "CROSS JOIN d "
+            "CROSS JOIN t x "
+            "JOIN t y ON x.a = y.a AND y.b > s.m"),
+        matchScan("t")
+            .aliases({"ya", "yb"})
+            .hashJoinInner(
+                matchScan("t").aliases({"xa"}), {.keys = {{"ya = xa"}}})
+            .nestedLoopJoin(
+                matchScan("t").singleAggregation({}, {"max(b) as m"}),
+                JoinType::kInner,
+                "m < yb")
+            .nestedLoopJoin(matchScan("d"), JoinType::kInner, "")
+            .singleAggregation({}, {"count(*)"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("single row estimated larger than the probe");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT r.a, s.c1, s.c2, s.c3, s.c4 "
+            "FROM r "
+            "CROSS JOIN ("
+            "  SELECT count(*) AS c1, sum(a) AS c2, max(a) AS c3, min(a) AS c4 "
+            "  FROM t"
+            ") s "
+            "WHERE r.b = 150"),
+        matchScan("r")
+            .filter("b = 150")
+            .project({"a"})
+            .nestedLoopJoin(
+                matchScan("t").aliases({"ta"}).singleAggregation(
+                    {},
+                    {"count(*) as c1",
+                     "sum(ta) as c2",
+                     "max(ta) as c3",
+                     "min(ta) as c4"}),
+                JoinType::kInner,
+                "")
+            .build());
+  }
+}
+
 TEST_P(JoinTest, unusedSingleRowAggregateCrossJoin) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));

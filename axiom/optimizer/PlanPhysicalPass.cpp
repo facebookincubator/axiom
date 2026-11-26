@@ -1803,8 +1803,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Chooses the build side of inner, left, and right joins. In a loop's step,
   // a loop-invariant input goes on the build side (see
-  // `Join::loopInvariantSide`). Otherwise the smaller input does when both
-  // inputs have point estimates, and the written orientation stays when not. A
+  // `Join::loopInvariantSide`). Next, the single-row input of an inner join
+  // without keys does. Otherwise the smaller input does when both inputs have
+  // point estimates, and the written orientation stays when not. A
   // distributed keyless left or right join instead puts its non-preserved input
   // on the build side so that input can be broadcast.
   Join::Key chooseBuildSide(Join::Key join) {
@@ -1832,6 +1833,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return join;
     }
 
+    if (buildOnSingleRowInput(join)) {
+      return join;
+    }
+
     if (join.joinType != velox::core::JoinType::kInner &&
         join.joinType != velox::core::JoinType::kLeft &&
         join.joinType != velox::core::JoinType::kRight) {
@@ -1844,6 +1849,21 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     return join;
   }
 
+  // Puts the single-row input of 'join' on the build side. Returns whether
+  // 'join' has one.
+  bool buildOnSingleRowInput(Join::Key& join) const {
+    const Join::Sides side = Join::singleRowBuildSide(
+        join.joinType,
+        !join.leftKeys.empty(),
+        join.left,
+        join.right,
+        options_.broadcastSizeLimit);
+    if (side.left) {
+      join.swapInputs();
+    }
+    return side.left || side.right;
+  }
+
   // Returns true if 'node' is estimated to output fewer bytes than 'other'.
   // False when either estimate is unavailable.
   bool isEstimatedSmaller(NodeCP node, NodeCP other) {
@@ -1854,7 +1874,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
 
   // Returns whether 'node' fits the per-worker broadcast limit.
   bool broadcastFits(NodeCP node) {
-    return CostModel::broadcastSizeIfFits(
+    return Exchange::broadcastSizeIfFits(
                estimateProvider_.estimate(node).cardinality,
                byteSize(node->outputColumns()),
                options_.broadcastSizeLimit)
@@ -1907,13 +1927,22 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // Returns the inputs of 'join' that compute the parts of its filter that
   // read only them: those with fewer rows than the pairs the join matches on
   // its keys, on each of which it evaluates its filter. A join without keys
-  // matches every pair, so both inputs do.
+  // matches every pair, so both inputs do, except a single-row build.
   Join::Sides filterInputs(const Join::Key& join) {
     if (join.filter.empty()) {
       return {};
     }
     if (join.leftKeys.empty()) {
-      return {.left = true, .right = true};
+      return {
+          .left = true,
+          .right = !Join::singleRowBuildSide(
+                        join.joinType,
+                        /*hasKeys=*/false,
+                        join.left,
+                        join.right,
+                        options_.broadcastSizeLimit)
+                        .right,
+      };
     }
     const Estimate& left = estimateProvider_.estimate(join.left);
     const Estimate& right = estimateProvider_.estimate(join.right);
@@ -2120,6 +2149,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
           simplifier_,
           numWorkers_,
           /*oneDriverPerTask=*/numDrivers_ == 1,
+          options_.broadcastSizeLimit,
           joinFactory,
           crossJoinFactory);
     }
@@ -2152,15 +2182,19 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         simplifier_,
         /*numWorkers=*/1,
         /*oneDriverPerTask=*/numDrivers_ == 1,
+        options_.broadcastSizeLimit,
         fallbackJoinFactory,
         fallbackJoinFactory);
   }
 
   NodeCP rewriteJoin(const Join* node, NoContext& context) override {
     // Syntactic mode keeps every join in query order, including its input
-    // orientation.
+    // orientation, except that the single-row input of an inner join without
+    // keys goes on the build side.
     if (options_.syntacticJoinOrder) {
-      return makePhysicalJoin(rewriteJoinInputs(node, context));
+      Join::Key join = rewriteJoinInputs(node, context);
+      buildOnSingleRowInput(join);
+      return makePhysicalJoin(std::move(join));
     }
     const bool stopAtStateFree = replicate_ != nullptr;
     std::optional<PlannedCluster> planned =

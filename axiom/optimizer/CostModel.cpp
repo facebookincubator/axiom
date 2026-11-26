@@ -23,6 +23,7 @@
 #include "axiom/optimizer/Filters.h"
 #include "axiom/optimizer/JoinConstraints.h"
 #include "axiom/optimizer/JoinFanout.h"
+#include "axiom/optimizer/Node.h"
 #include "axiom/optimizer/Schema.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -428,24 +429,10 @@ std::optional<float> DefaultCostModel::broadcastCost(
 }
 
 std::optional<float> CostModel::broadcastSizeIfFits(
-    std::optional<float> cardinality,
-    float rowBytes,
-    int64_t limitBytes) {
-  if (limitBytes <= 0 || !cardinality.has_value()) {
-    return std::nullopt;
-  }
-  const float size = *cardinality * std::max<float>(1, rowBytes);
-  if (size > limitBytes) {
-    return std::nullopt;
-  }
-  return size;
-}
-
-std::optional<float> CostModel::broadcastSizeIfFits(
     MemoOpCP op,
     const JoinHypergraph& graph,
     int64_t limitBytes) {
-  return broadcastSizeIfFits(
+  return Exchange::broadcastSizeIfFits(
       op->cost.cardinality, coveredRowBytes(op->cover(), graph), limitBytes);
 }
 

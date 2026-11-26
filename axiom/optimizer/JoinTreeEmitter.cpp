@@ -903,6 +903,7 @@ NodeCP JoinTreeEmitter::emitComponents(
     ExprSimplifier& simplifier,
     int32_t numWorkers,
     bool oneDriverPerTask,
+    int64_t broadcastSizeLimit,
     JoinFactory joinFactory,
     JoinFactory crossJoinFactory) {
   VELOX_CHECK_GE(
@@ -920,8 +921,8 @@ NodeCP JoinTreeEmitter::emitComponents(
     emitted.push_back(emitOp(root, state));
   }
 
-  // Largest component drives as the bottom-left probe; the rest join as
-  // builds in ascending cardinality.
+  // Components fold in descending cardinality, each joining the result so
+  // far.
   std::vector<size_t> order(componentRoots.size());
   std::iota(order.begin(), order.end(), 0);
   std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
@@ -960,6 +961,15 @@ NodeCP JoinTreeEmitter::emitComponents(
   auto materialized = emitted[order[0]].materialized;
   for (size_t i = 1; i < order.size(); ++i) {
     NodeCP build = emitted[order[i]].node;
+    if (Join::singleRowBuildSide(
+            velox::core::JoinType::kInner,
+            /*hasKeys=*/false,
+            result,
+            build,
+            broadcastSizeLimit)
+            .left) {
+      std::swap(result, build);
+    }
     materialized =
         merge(std::move(materialized), emitted[order[i]].materialized);
     // A cross product is keyless: replicate the build so the probe keeps its

@@ -96,3 +96,15 @@ WITH RECURSIVE r(n) AS (
   SELECT t.a FROM r JOIN t ON t.a > r.n WHERE r.n < 3
 )
 SELECT n, count(*) FROM r GROUP BY n
+----
+-- A step that crosses a relation of one row, computed from the state, with a
+-- table.
+WITH RECURSIVE r(n) AS (
+  SELECT CAST(1 AS BIGINT)
+  UNION ALL
+  SELECT u.a
+  FROM (SELECT sum(n) AS m FROM r) s
+  CROSS JOIN t_no_stats u
+  WHERE s.m < 2
+)
+SELECT n, count(*) FROM r GROUP BY n

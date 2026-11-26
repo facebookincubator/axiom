@@ -27,7 +27,9 @@ namespace facebook::axiom::optimizer {
 /// A join evaluates its filter once for every pair of input rows it matches,
 /// while a part of the filter reading only one side has the same value for
 /// every pair built from a given row of that side. Join planning decides which
-/// inputs take their parts. A cross join matches every pair, so both do:
+/// inputs take their parts. A cross join matches every pair, so both inputs do
+/// unless one is a single-row build, an input of at most one row that the join
+/// takes as its build side:
 ///
 ///   SELECT ... FROM big, small WHERE big.threshold < length(small.name)
 ///

@@ -65,10 +65,11 @@ class JoinTreeEmitter {
 
   /// Emits a cross-product combine of independently planned connected
   /// components. Each component subtree is emitted, then the components
-  /// are folded left-deep into keyless inner `Join` nodes (Velox lowers
-  /// these to NestedLoopJoin): the largest component (by estimated
-  /// cardinality) drives as the bottom-left probe, the rest join as
-  /// builds in ascending cardinality. Cross-component filter conjuncts
+  /// are folded into keyless inner `Join` nodes (Velox lowers these to
+  /// NestedLoopJoin) in descending estimated cardinality, each joining the
+  /// result so far as its build. The result so far is the build instead when
+  /// it has at most one row, of a known size within `broadcastSizeLimit`, and
+  /// the next component may have more rows. Cross-component filter conjuncts
   /// are placed at the lowest fold whose cover satisfies them. The root
   /// carries `rootOutputColumns`. Requires at least two components.
   /// `numWorkers > 1` broadcasts each cross-product build so a single-task
@@ -84,6 +85,7 @@ class JoinTreeEmitter {
       ExprSimplifier& simplifier,
       int32_t numWorkers,
       bool oneDriverPerTask,
+      int64_t broadcastSizeLimit,
       JoinFactory joinFactory,
       JoinFactory crossJoinFactory);
 };
