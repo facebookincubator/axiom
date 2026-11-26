@@ -380,6 +380,10 @@ class SparkPlanVisitor {
         visit(expression.cast(), context);
         break;
 
+      case spark::connect::Expression::kExpressionString:
+        visit(expression.expression_string(), context);
+        break;
+
       case spark::connect::Expression::EXPR_TYPE_NOT_SET:
         VELOX_USER_FAIL(
             "Expression type not set for plan node '{}'.", context.planId);
@@ -442,6 +446,10 @@ class SparkPlanVisitor {
   virtual void visit(
       const spark::connect::Expression::UnresolvedNamedLambdaVariable&
       /*unresolvedNamedLambdaVariable*/,
+      SparkPlanVisitorContext& /*context*/) {}
+
+  virtual void visit(
+      const spark::connect::Expression::ExpressionString& /*expressionString*/,
       SparkPlanVisitorContext& /*context*/) {}
 
   virtual void visit(

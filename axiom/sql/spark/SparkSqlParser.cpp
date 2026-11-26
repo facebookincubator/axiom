@@ -512,21 +512,31 @@ lp::ExprApi toLiteral(
   notSupported("literal", context);
 }
 
-// True for a name: a, a.b, a.b.c. Field access on any other expression is a
-// subscript, which reads a struct field or a map value.
-bool isName(Parser::PrimaryExpressionContext* context) {
-  if (dynamic_cast<Parser::ColumnReferenceContext*>(context) != nullptr) {
-    return true;
+// Returns the parts of a name: a, a.b, a.b.c. Returns nullopt for anything
+// else.
+std::optional<std::vector<std::string>> toNameParts(
+    Parser::PrimaryExpressionContext* context) {
+  if (auto* column = dynamic_cast<Parser::ColumnReferenceContext*>(context)) {
+    return std::vector<std::string>{toName(column->identifier())};
   }
   auto* dereference = dynamic_cast<Parser::DereferenceContext*>(context);
-  return dereference != nullptr && isName(dereference->base);
+  if (dereference == nullptr) {
+    return std::nullopt;
+  }
+  auto parts = toNameParts(dereference->base);
+  if (parts.has_value()) {
+    parts->push_back(toName(dereference->fieldName));
+  }
+  return parts;
 }
 
 // Builds expressions from the parse tree.
 class ExpressionBuilder {
  public:
-  explicit ExpressionBuilder(const tz::TimeZone& sessionTimeZone)
-      : sessionTimeZone_{sessionTimeZone} {}
+  ExpressionBuilder(
+      const tz::TimeZone& sessionTimeZone,
+      const SparkSqlParser::NameResolver& nameResolver)
+      : sessionTimeZone_{sessionTimeZone}, nameResolver_{nameResolver} {}
 
   lp::ExprApi toExpr(Parser::NamedExpressionContext* context) {
     auto expr = toExpr(context->expression());
@@ -672,17 +682,15 @@ class ExpressionBuilder {
             dynamic_cast<Parser::ConstantDefaultContext*>(context)) {
       return toLiteral(constant->constant(), sessionTimeZone_);
     }
-    if (auto* column = dynamic_cast<Parser::ColumnReferenceContext*>(context)) {
-      return lp::Col(toName(column->identifier()));
+    if (auto parts = toNameParts(context)) {
+      return toNameExpr(*parts);
     }
     if (auto* dereference =
             dynamic_cast<Parser::DereferenceContext*>(context)) {
-      auto field = toName(dereference->fieldName);
-      if (isName(dereference->base)) {
-        return lp::Col(field, toExpr(dereference->base));
-      }
       return SparkFunctions::call(
-          "subscript", toExpr(dereference->base), lp::Lit(field));
+          "subscript",
+          toExpr(dereference->base),
+          lp::Lit(toName(dereference->fieldName)));
     }
     if (auto* function = dynamic_cast<Parser::FunctionCallContext*>(context)) {
       return toCall(function);
@@ -698,9 +706,13 @@ class ExpressionBuilder {
     if (auto* lambda = dynamic_cast<Parser::LambdaContext*>(context)) {
       std::vector<std::string> parameters;
       for (auto* identifier : lambda->identifier()) {
-        parameters.push_back(toName(identifier));
+        auto name = toName(identifier);
+        parameters.push_back(nameResolver_.newLambdaParameterName(name));
+        lambdaParameters_.emplace_back(std::move(name), parameters.back());
       }
-      return lp::Lambda(std::move(parameters), toExpr(lambda->expression()));
+      auto body = toExpr(lambda->expression());
+      lambdaParameters_.resize(lambdaParameters_.size() - parameters.size());
+      return lp::Lambda(std::move(parameters), body);
     }
     if (auto* cast = dynamic_cast<Parser::CastContext*>(context)) {
       auto type = toType(cast->dataType());
@@ -785,21 +797,44 @@ class ExpressionBuilder {
                              : SparkFunctions::call("when", std::move(args));
   }
 
+  // A name that starts with a lambda parameter refers to it, and its other
+  // parts read fields. The innermost lambda's parameters come last, so they
+  // hide the outer ones. Other names go to the resolver.
+  lp::ExprApi toNameExpr(std::span<const std::string> parts) const {
+    auto it = std::find_if(
+        lambdaParameters_.rbegin(),
+        lambdaParameters_.rend(),
+        [&](const auto& parameter) {
+          return parameter.first == parts.front();
+        });
+    if (it == lambdaParameters_.rend()) {
+      return nameResolver_.resolveName(parts);
+    }
+    auto expr = lp::Col(it->second);
+    for (const auto& field : parts.subspan(1)) {
+      expr = SparkFunctions::call("subscript", expr, lp::Lit(field));
+    }
+    return expr;
+  }
+
   const tz::TimeZone& sessionTimeZone_;
+  const SparkSqlParser::NameResolver& nameResolver_;
+
+  // Parameters of the lambdas enclosing the expression being built: the name
+  // in the text and the name the resolver gave it.
+  std::vector<std::pair<std::string, std::string>> lambdaParameters_;
 };
 
 } // namespace
 
-SparkSqlParser::SparkSqlParser(const tz::TimeZone* sessionTimeZone)
-    : sessionTimeZone_{sessionTimeZone} {
-  VELOX_CHECK_NOT_NULL(sessionTimeZone_);
-}
-
-lp::ExprApi SparkSqlParser::parseExpression(std::string_view sql) const {
+lp::ExprApi SparkSqlParser::parseExpression(
+    std::string_view sql,
+    const NameResolver& nameResolver) const {
   ParserState state{sql};
   auto* tree = state.parser.singleExpression();
   state.checkErrors();
-  return ExpressionBuilder(*sessionTimeZone_).toExpr(tree->namedExpression());
+  return ExpressionBuilder(*sessionTimeZone_, nameResolver)
+      .toExpr(tree->namedExpression());
 }
 
 TypePtr SparkSqlParser::parseDataType(std::string_view sql) {

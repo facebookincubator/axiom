@@ -90,5 +90,5 @@ def cases(orders: DataFrame, customers: DataFrame) -> None:
         )
     )
 
-    # error: Unable to find Spark Connect reference: t
+    # error: Unable to resolve reference: t
     case(orders.select(F.col("t.id")))
