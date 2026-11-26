@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <span>
+
 #include <folly/container/F14Map.h>
 #include "axiom/logical_plan/PlanBuilder.h"
 #include "axiom/spark_connect/SparkPlanVisitor.h"
@@ -163,6 +165,10 @@ class SparkToAxiom : public SparkPlanVisitor {
       SparkPlanVisitorContext& context) override;
 
   void visit(
+      const spark::connect::Expression::ExpressionString& expressionString,
+      SparkPlanVisitorContext& context) override;
+
+  void visit(
       const spark::connect::SetOperation& setOperation,
       SparkPlanVisitorContext& context) override;
 
@@ -228,6 +234,10 @@ class SparkToAxiom : public SparkPlanVisitor {
       const std::vector<Columns>& outputs,
       std::string_view reference) const;
 
+  // Returns the column a name refers to: a, a column of a DataFrame alias or
+  // table, t.a or s.t.a, or a struct field, a.f or t.a.f.
+  ExprApi bindName(std::span<const std::string> nameParts) const;
+
   // Translates a Project that has a generator (explode, posexplode) into an
   // Unnest followed by a Project. Spark allows one generator per Project. The
   // Project outputs the non-generator expressions, then for posexplode the
@@ -260,8 +270,9 @@ class SparkToAxiom : public SparkPlanVisitor {
   // Output columns of each DataFrame alias and table name.
   folly::F14FastMap<std::string, std::vector<Columns>> aliasOutputs_;
 
-  // Lambda variables in scope, innermost last.
-  std::vector<std::string> lambdaVariables_;
+  // Lambda variables in scope, innermost last: the name in the Spark plan and
+  // the parameter name allocated for it, which differs from every column ID.
+  std::vector<std::pair<std::string, std::string>> lambdaVariables_;
 
   // True if the plan is a table write, which has no OutputNode.
   bool isWrite_{false};

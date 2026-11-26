@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#include <fmt/format.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -29,9 +31,23 @@ using namespace facebook::velox;
 
 class SparkSqlParserTest : public testing::Test {
  protected:
+  // Resolves a.b to lp::Col("b", lp::Col("a")), and names lambda parameter x
+  // x_0.
   static lp::ExprApi parse(std::string_view sql) {
-    return SparkSqlParser(tz::locateZone("America/Los_Angeles"))
-        .parseExpression(sql);
+    const SparkSqlParser::NameResolver nameResolver{
+        .resolveName =
+            [](std::span<const std::string> nameParts) {
+              auto column = lp::Col(nameParts.front());
+              for (const auto& part : nameParts.subspan(1)) {
+                column = lp::Col(part, column);
+              }
+              return column;
+            },
+        .newLambdaParameterName =
+            [](std::string_view name) { return fmt::format("{}_0", name); },
+    };
+    return SparkSqlParser(*tz::locateZone("America/Los_Angeles"))
+        .parseExpression(sql, nameResolver);
   }
 };
 
@@ -45,7 +61,8 @@ TEST_F(SparkSqlParserTest, expressions) {
            lp::Call(
                "transform",
                lp::Col("a", lp::Col("t")),
-               lp::Lambda({"x"}, lp::Call("add", lp::Col("x"), lp::Lit(1)))),
+               lp::Lambda(
+                   {"x_0"}, lp::Call("add", lp::Col("x_0"), lp::Lit(1)))),
            lp::Lit(0))
            .expr());
 

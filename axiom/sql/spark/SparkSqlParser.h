@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <functional>
+#include <span>
+#include <string>
 #include <string_view>
 
 #include "axiom/logical_plan/ExprApi.h"
@@ -30,25 +33,39 @@ namespace axiom::sql::spark {
 /// Parses Spark SQL, with Spark 3.4's grammar and default settings: keywords
 /// are not ANSI, and double quotes delimit strings.
 ///
-///   SparkSqlParser parser(tz::locateZone("America/Los_Angeles"));
-///   auto expr = parser.parseExpression("age + 1 AS next_age");
+///   SparkSqlParser parser(*tz::locateZone("America/Los_Angeles"));
+///   auto expr = parser.parseExpression("age + 1 AS next_age", nameResolver);
 ///   // add(age, 1) aliased next_age.
 class SparkSqlParser {
  public:
   /// @param sessionTimeZone The time zone of a TIMESTAMP literal without one.
-  /// Not null.
-  explicit SparkSqlParser(const facebook::velox::tz::TimeZone* sessionTimeZone);
+  explicit SparkSqlParser(const facebook::velox::tz::TimeZone& sessionTimeZone)
+      : sessionTimeZone_{&sessionTimeZone} {}
+
+  /// Binds the names of an expression to the caller's plan.
+  struct NameResolver {
+    /// Returns the expression a name refers to, given its parts: a, or t.a,
+    /// or a.f for a field of a struct column.
+    std::function<facebook::axiom::logical_plan::ExprApi(
+        std::span<const std::string> nameParts)>
+        resolveName;
+
+    /// Returns the name of a lambda parameter, given its name in the text.
+    /// The name must differ from every name 'resolveName' refers to, so the
+    /// parameter cannot hide a column.
+    std::function<std::string(std::string_view name)> newLambdaParameterName;
+  };
 
   /// Parses one expression, optionally aliased, as in F.expr() or
-  /// DataFrame.selectExpr(). Returns an unresolved expression: names and
-  /// functions are resolved when the expression is added to a plan.
-  /// Operators and functions follow SparkFunctions.
+  /// DataFrame.selectExpr(). Names other than lambda parameters go to
+  /// 'nameResolver'. Operators and functions follow SparkFunctions.
   ///
   /// @throws VeloxUserError on a syntax error, naming its position.
   /// @throws VeloxRuntimeError with kNotImplemented for a construct not
   /// supported yet, such as a subquery or a window function.
   facebook::axiom::logical_plan::ExprApi parseExpression(
-      std::string_view sql) const;
+      std::string_view sql,
+      const NameResolver& nameResolver) const;
 
   /// Parses a Spark type name, such as 'int', 'decimal(10, 2)' or
   /// 'array<struct<a: string>>', as in Column.cast().
@@ -59,7 +76,7 @@ class SparkSqlParser {
   static facebook::velox::TypePtr parseDataType(std::string_view sql);
 
  private:
-  const facebook::velox::tz::TimeZone* const sessionTimeZone_;
+  const facebook::velox::tz::TimeZone* sessionTimeZone_;
 };
 
 } // namespace axiom::sql::spark

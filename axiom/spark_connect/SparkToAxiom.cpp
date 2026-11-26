@@ -30,6 +30,7 @@
 #include "axiom/sql/spark/SparkSqlParser.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/coercion/PrestoCoercions.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook;
@@ -833,25 +834,28 @@ void SparkToAxiom::visit(
 
 namespace {
 
-struct Identifier {
-  std::string name;
-  std::string parent;
-};
+// Returns 'column' with the struct fields the parts of a name after the first
+// 'numBound' read. Spark names a field read through a name after the field.
+lp::ExprApi readFields(
+    lp::ExprApi column,
+    std::span<const std::string> nameParts,
+    size_t numBound) {
+  if (numBound == nameParts.size()) {
+    return column;
+  }
+  // Resolved by 'resolveSubscript' once the type of the column is known.
+  for (const auto& field : nameParts.subspan(numBound)) {
+    column = lp::Call("subscript", column, lp::Lit(field));
+  }
+  return column.as(nameParts.back());
+}
 
-// Splits 'column', 'parent.column' or 'catalog.parent.column'.
-Identifier parseIdentifier(const std::string& input) {
+// Splits a column reference, such as 'a', 't.a' or 'a.f', into its parts.
+std::vector<std::string> splitNameParts(const std::string& text) {
   std::vector<std::string> parts;
-  folly::split('.', input, parts, /*ignoreEmpty=*/true);
-  if (parts.size() == 1) {
-    return {.name = parts[0]};
-  }
-  if (parts.size() == 2) {
-    return {.name = parts[1], .parent = parts[0]};
-  }
-  if (parts.size() == 3) {
-    return {.name = parts[2], .parent = parts[1]};
-  }
-  VELOX_USER_FAIL("Unable to parse identifier: '{}'", input);
+  folly::split('.', text, parts, /*ignoreEmpty=*/true);
+  VELOX_USER_CHECK(!parts.empty(), "Unable to parse identifier: '{}'", text);
+  return parts;
 }
 
 } // namespace
@@ -900,7 +904,7 @@ void SparkToAxiom::visit(
     const spark::connect::Expression::UnresolvedAttribute& unresolvedAttribute,
     SparkPlanVisitorContext& /*context*/) {
   const auto& text = unresolvedAttribute.unparsed_identifier();
-  const auto identifier = parseIdentifier(text);
+  const auto nameParts = splitNameParts(text);
 
   if (unresolvedAttribute.has_plan_id()) {
     const auto planId = unresolvedAttribute.plan_id();
@@ -909,16 +913,10 @@ void SparkToAxiom::visit(
         it != planIdOutputs_.end(),
         "Unable to find Spark Connect plan id: {}",
         planId);
-    expr_ = bindColumn(identifier.name, it->second, text);
-  } else if (!identifier.parent.empty()) {
-    auto it = aliasOutputs_.find(identifier.parent);
-    VELOX_USER_CHECK(
-        it != aliasOutputs_.end(),
-        "Unable to find Spark Connect reference: {}",
-        identifier.parent);
-    expr_ = bindColumn(identifier.name, it->second, text);
+    expr_ = readFields(
+        bindColumn(nameParts.front(), it->second, text), nameParts, 1);
   } else {
-    expr_ = bindColumn(identifier.name);
+    expr_ = bindName(nameParts);
   }
 }
 
@@ -999,10 +997,11 @@ void SparkToAxiom::visit(
   std::vector<std::string> names;
   names.reserve(lambdaFunction.arguments().size());
   for (const auto& argument : lambdaFunction.arguments()) {
-    names.push_back(lambdaVariableName(argument));
+    auto name = lambdaVariableName(argument);
+    names.push_back(builderContext_.nameAllocator->newName(name));
+    lambdaVariables_.emplace_back(std::move(name), names.back());
   }
 
-  lambdaVariables_.insert(lambdaVariables_.end(), names.begin(), names.end());
   auto body = toExpr(lambdaFunction.function(), context);
   lambdaVariables_.resize(lambdaVariables_.size() - names.size());
 
@@ -1014,12 +1013,71 @@ void SparkToAxiom::visit(
         unresolvedNamedLambdaVariable,
     SparkPlanVisitorContext& /*context*/) {
   auto name = lambdaVariableName(unresolvedNamedLambdaVariable);
+  auto it = std::find_if(
+      lambdaVariables_.rbegin(),
+      lambdaVariables_.rend(),
+      [&](const auto& variable) { return variable.first == name; });
   VELOX_USER_CHECK(
-      std::find(lambdaVariables_.begin(), lambdaVariables_.end(), name) !=
-          lambdaVariables_.end(),
+      it != lambdaVariables_.rend(),
       "Lambda variable not found in current context: {}",
       name);
-  expr_ = lp::Col(name);
+  expr_ = lp::Col(it->second);
+}
+
+SparkToAxiom::ExprApi SparkToAxiom::bindName(
+    std::span<const std::string> nameParts) const {
+  // Returns the outputs of the DataFrame alias or table 'name', if any.
+  auto findAlias = [&](const std::string& name) -> const std::vector<Columns>* {
+    auto it = aliasOutputs_.find(name);
+    return it == aliasOutputs_.end() ? nullptr : &it->second;
+  };
+
+  // Qualifiers come first, the longest first: s.t.a, then t.a, then a column.
+  // The schema of s.t.a is not checked.
+  std::optional<ExprApi> expr;
+  size_t numBound{0};
+  if (nameParts.size() >= 3) {
+    if (const auto* outputs = findAlias(nameParts[1])) {
+      expr = bindColumn(
+          nameParts[2], *outputs, folly::join(".", nameParts.first(3)));
+      numBound = 3;
+    }
+  }
+  if (!expr.has_value() && nameParts.size() >= 2) {
+    if (const auto* outputs = findAlias(nameParts[0])) {
+      expr = bindColumn(
+          nameParts[1],
+          *outputs,
+          fmt::format("{}.{}", nameParts[0], nameParts[1]));
+      numBound = 2;
+    }
+  }
+  if (!expr.has_value()) {
+    expr = bindColumn(nameParts[0]);
+    numBound = 1;
+  }
+
+  return readFields(*expr, nameParts, numBound);
+}
+
+void SparkToAxiom::visit(
+    const spark::connect::Expression::ExpressionString& expressionString,
+    SparkPlanVisitorContext& /*context*/) {
+  // TIMESTAMP literals without a time zone are read in UTC: Collagen has no
+  // session time zone yet (GC13).
+  static const sql::spark::SparkSqlParser kParser{
+      *velox::tz::locateZone("UTC")};
+  const sql::spark::SparkSqlParser::NameResolver nameResolver{
+      .resolveName =
+          [this](std::span<const std::string> nameParts) {
+            return bindName(nameParts);
+          },
+      .newLambdaParameterName =
+          [this](std::string_view name) {
+            return builderContext_.nameAllocator->newName(name);
+          },
+  };
+  expr_ = kParser.parseExpression(expressionString.expression(), nameResolver);
 }
 
 } // namespace axiom::spark_connect
