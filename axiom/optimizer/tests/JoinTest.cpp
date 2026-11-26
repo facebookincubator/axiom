@@ -3995,10 +3995,8 @@ TEST_P(JoinTest, impliedSameTableEqualityPreservedSide) {
   AXIOM_ASSERT_PLAN(plan, matcher);
 }
 
-// LEFT JOIN with no equalities when the DT has 3+ tables. The comma join
-// between nation and region is inlined into the same DT. The EXISTS semi-join
-// adds a 3rd table. The subsequent LEFT JOIN ON clause uses contains() which
-// has no equalities, so leftTables must be inferred from the DT.
+// A LEFT join whose condition has no equality, over a join of three tables,
+// plans as a nested loop join.
 TEST_P(JoinTest, leftJoinNoEqualitiesMultipleTables) {
   auto query =
       "WITH base AS ("
@@ -4016,22 +4014,31 @@ TEST_P(JoinTest, leftJoinNoEqualitiesMultipleTables) {
       "SELECT * FROM with_exists LEFT JOIN supplier ON s_nationkey > n_nationkey";
   SCOPED_TRACE(query);
 
-  // V2 is worse: it applies the Project after the join, where it could process
-  // more rows than a Project on the input for joins with fanout.
-  // TODO: Push the V2 Project below the final left join.
+  // The rename of the EXISTS result runs above the LEFT join.
   auto matcher = matchScan("nation")
                      .hashJoin(matchScan("region"), core::JoinType::kInner)
                      .hashJoin(
                          matchScan("customer"),
                          core::JoinType::kLeftSemiProject,
                          {.nullAware = false})
-                     .project()
+                     .aliases({std::nullopt, std::nullopt, "m"})
                      .nestedLoopJoinLeft(
                          matchScan("supplier"), "n_nationkey < s_nationkey")
+                     .project(
+                         {"n_nationkey",
+                          "n_name",
+                          "m",
+                          "s_suppkey",
+                          "s_name",
+                          "s_address",
+                          "s_nationkey",
+                          "s_phone",
+                          "s_acctbal",
+                          "s_comment"})
                      .build();
 
   auto plan = toSingleNodePlan(query);
-  AXIOM_ASSERT_PLAN_V1(plan, matcher);
+  AXIOM_ASSERT_PLAN_V2(plan, matcher);
 }
 
 // LEFT-to-INNER JOIN conversion with aggregation. replaceJoinOutputs must not
