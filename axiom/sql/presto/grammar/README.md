@@ -70,7 +70,7 @@ java -jar antlr-4.13.2-complete.jar \
 Apply license headers and copy the generated files:
 
 ```bash
-python3 axiom/sql/presto/grammar/add_license_headers.py \
+python3 axiom/sql/add_license_headers.py \
     /tmp/antlr-output/axiom/sql/presto/grammar
 cp /tmp/antlr-output/axiom/sql/presto/grammar/PrestoSql*.{h,cpp} \
     axiom/sql/presto/grammar/
@@ -98,7 +98,7 @@ Or step by step:
 
 3. **Apply license headers and copy:**
    ```bash
-   python3 axiom/sql/presto/grammar/add_license_headers.py "$BUCK_OUT_DIR"
+   python3 axiom/sql/add_license_headers.py "$BUCK_OUT_DIR"
    cp "$BUCK_OUT_DIR"/* axiom/sql/presto/grammar/
    ```
 
@@ -135,6 +135,5 @@ Eventually, the ANTLR4 generated code may be automatically generated as part of 
 
 - `PrestoSql.g4` - ANTLR4 grammar definition (source file)
 - `gen.sh` - Script to regenerate ANTLR files (Meta-internal, requires Buck)
-- `add_license_headers.py` - Script to add Apache license headers
 - `PrestoSql*.h/cpp` - Generated ANTLR4 files (checked in, regenerated from grammar)
 - `tests/` - Grammar parsing tests

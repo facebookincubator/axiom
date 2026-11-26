@@ -25,6 +25,7 @@
 #include <span>
 
 #include "axiom/common/SchemaTypeName.h"
+#include "axiom/sql/DecimalDigits.h"
 #include "axiom/sql/presto/GroupByPlanner.h"
 #include "axiom/sql/presto/IntervalParser.h"
 #include "axiom/sql/presto/PrestoSqlError.h"
@@ -382,82 +383,20 @@ std::string toFunctionName(ArithmeticBinaryExpression::Operator op) {
 }
 
 lp::ExprApi parseDecimal(std::string_view value, NodeLocation location) {
+  const auto digits = DecimalDigits::parse(value);
   AXIOM_PRESTO_SEMANTIC_CHECK(
-      !value.empty(), location, std::string(value), "Invalid decimal value");
-
-  size_t startPos = 0;
-  if (value.at(0) == '+' || value.at(0) == '-') {
-    startPos = 1;
-  }
-
-  int32_t periodPos = -1;
-  int32_t firstNonZeroPos = -1;
-
-  for (auto i = startPos; i < value.size(); ++i) {
-    if (value.at(i) == '.') {
-      AXIOM_PRESTO_SEMANTIC_CHECK(
-          periodPos == -1,
-          location,
-          std::string(value),
-          "Invalid decimal value");
-      periodPos = i;
-    } else {
-      AXIOM_PRESTO_SEMANTIC_CHECK(
-          std::isdigit(value.at(i)),
-          location,
-          std::string(value),
-          "Invalid decimal value");
-
-      if (firstNonZeroPos == -1 && value.at(i) != '0') {
-        firstNonZeroPos = i;
-      }
-    }
-  }
-
-  size_t precision;
-  size_t scale;
-  std::string unscaledValue;
-
-  if (periodPos == -1) {
-    if (firstNonZeroPos == -1) {
-      // All zeros: 000000. Treat as 0.
-      precision = 1;
-    } else {
-      precision = value.size() - firstNonZeroPos;
-    }
-
-    scale = 0;
-    unscaledValue = value;
-  } else {
-    scale = value.size() - periodPos - 1;
-
-    if (firstNonZeroPos == -1 || firstNonZeroPos > periodPos) {
-      // All zeros before decimal point. Treat as .0123.
-      precision = scale > 0 ? scale : 1;
-    } else {
-      precision = value.size() - firstNonZeroPos - 1;
-    }
-
-    unscaledValue = fmt::format(
-        "{}{}", value.substr(0, periodPos), value.substr(periodPos + 1));
-  }
-
-  if (precision <= ShortDecimalType::kMaxPrecision) {
-    int64_t v = atol(unscaledValue.c_str());
-    return lp::Lit(v, DECIMAL(precision, scale));
-  }
-
-  if (precision <= LongDecimalType::kMaxPrecision) {
-    return lp::Lit(
-        folly::to<int128_t>(unscaledValue), DECIMAL(precision, scale));
-  }
-
-  AXIOM_PRESTO_SEMANTIC_FAIL(
+      digits.has_value(),
+      location,
+      std::string(value),
+      "Invalid decimal value");
+  AXIOM_PRESTO_SEMANTIC_CHECK(
+      digits->precision() <= LongDecimalType::kMaxPrecision,
       location,
       std::string(value),
       "Invalid decimal value. Precision exceeds maximum: {} > {}.",
-      precision,
+      digits->precision(),
       LongDecimalType::kMaxPrecision);
+  return digits->toExpr();
 }
 
 // Flattens a nested DereferenceExpression chain into dot-separated parts.

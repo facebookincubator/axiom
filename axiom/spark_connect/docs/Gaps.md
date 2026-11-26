@@ -35,7 +35,8 @@ runs. A new gap takes the next number.
 | GC15 | Division of integers returns DECIMAL |
 | GC16 | A generator's columns come last in a select |
 | GC17 | `range` with 2^31 or more rows returns too few rows |
-| GF19 | Casting an array, map or struct to a string fails |
+| GF19 | Casting an array, map or struct to a string, or showing one, fails |
+| GF20 | A simple CASE fails |
 
 ## Details
 
@@ -196,7 +197,7 @@ spark.range(2**31).count()
 Collagen returns 0. Spark returns 2147483648. Collagen counts the rows of a
 range in a 32-bit integer and builds the whole range in memory as one vector.
 
-### GF19: Casting an array, map or struct to a string fails
+### GF19: Casting an array, map or struct to a string, or showing one, fails
 
 ```python
 df.select(F.col("arr").cast("string"))
@@ -205,3 +206,19 @@ df.select(F.col("arr").cast("string"))
 Collagen fails with `not a scalar type! kind: ARRAY`. Spark returns `[10, 20]`,
 and `{k -> 5}` for a map. Velox's cast converts arrays, maps and structs only to
 other arrays, maps and structs.
+
+`df.show()` fails the same way when `df` has an array, map or struct column:
+Collagen formats each value for `show()` by casting it to a string.
+
+### GF20: A simple CASE fails
+
+```python
+spark.range(3).select(F.expr("CASE id WHEN 1 THEN 'one' ELSE 'other' END"))
+```
+
+Collagen fails with `case: no 'eq' function registered for type 'BIGINT'`.
+Spark compares the value with each WHEN. A searched CASE, `CASE WHEN id = 1
+THEN ...`, works.
+
+Velox's simple CASE looks up the equality function by its Presto name, `eq`.
+Velox's Spark functions name it `equalto`.
