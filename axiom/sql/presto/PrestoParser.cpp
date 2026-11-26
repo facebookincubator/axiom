@@ -209,6 +209,11 @@ class RelationPlanner : public AstVisitor {
     builder_->tableDelete(connectorId, table.schema, table.table);
   }
 
+  // The context of every plan of the statement.
+  const lp::PlanBuilder::Context& context() const {
+    return context_;
+  }
+
   // Returns the plan of the rows 'node' refreshes 'index' with: the key, the
   // embedding and the partition columns of the rows of its table that its
   // condition selects. Each call plans them again, with new names.
@@ -3077,6 +3082,7 @@ SqlStatementPtr parseRefreshVectorIndex(
       tableName,
       *index,
       connectorId,
+      planner.context(),
       [&]() { return planner.planVectorIndexRows(refresh, *index); },
       [&](const facebook::axiom::SchemaTableName& storageTable) {
         return planner.scanVectorIndexStorage(

@@ -244,10 +244,11 @@ lp::PlanBuilder planCentroids(
 
 // Returns one codec per sampled partition: trained with vector_index_train,
 // or packed with vector_index_pack from the centroids of 'trainer' if set.
-// 'makeSample' plans sample() for a given number of rows.
+// 'makeSample' plans sample() for a given number of rows in 'context'.
 lp::PlanBuilder trainCodecs(
     const VectorIndex& index,
     const std::vector<std::string>& partitions,
+    const lp::PlanBuilder::Context& context,
     const std::function<lp::PlanBuilder(int64_t)>& makeSample,
     const VectorIndexCodecTrainer* trainer) {
   const auto metric =
@@ -266,12 +267,17 @@ lp::PlanBuilder trainCodecs(
              .as("codec")});
   }
 
+  // The trainer composes plans by name, so the plans it starts in REFRESH's
+  // context resolve columns by name too.
+  auto trainerContext = context;
+  trainerContext.columnsById = false;
   auto centroids = planCentroids(
       *trainer,
       index,
       partitions,
       {.properties = index.properties,
        .partitionColumns = index.partitionColumns,
+       .context = std::move(trainerContext),
        .makeSample = [&](int64_t numRows) {
          return makeSample(numRows).byColumnName();
        }});
@@ -295,10 +301,11 @@ lp::LogicalPlanNodePtr planTrain(
     const std::string& connectorId,
     const std::vector<std::string>& partitions,
     const lp::ExprApi& codecId,
+    const lp::PlanBuilder::Context& context,
     const std::function<lp::PlanBuilder(int64_t)>& makeSample,
     const lp::PlanBuilder& selected,
     const VectorIndexCodecTrainer* trainer) {
-  auto codecs = trainCodecs(index, partitions, makeSample, trainer);
+  auto codecs = trainCodecs(index, partitions, context, makeSample, trainer);
   codecs.project(
       ColumnExprs::concat(
           ColumnExprs::renamed(codecs, partitions, "t_"),
@@ -482,6 +489,7 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
     const facebook::axiom::SchemaTableName& table,
     const VectorIndex& index,
     const std::string& connectorId,
+    const lp::PlanBuilder::Context& context,
     const std::function<lp::PlanBuilder()>& makeQuery,
     const std::function<
         lp::PlanBuilder(const facebook::axiom::SchemaTableName&)>& scanStorage,
@@ -506,6 +514,7 @@ VectorIndexRefresh::Plans VectorIndexRefresh::plan(
           connectorId,
           partitions,
           codecId,
+          context,
           makeSample,
           selectedPartitions(partitions, makeQuery()),
           trainer),

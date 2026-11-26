@@ -108,7 +108,8 @@ class SphericalKMeans : public VectorIndexCodecTrainer {
                      lp::Col("seed").as("centroid")}));
 
     const auto state = [&] {
-      return seeds.newPlan().fixedPointState("centroids", seeds);
+      return lp::PlanBuilder(sample.context)
+          .fixedPointState("centroids", seeds);
     };
 
     // Each point's nearest centroid of its partition: the cluster ID of the
