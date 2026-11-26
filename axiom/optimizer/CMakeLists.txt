@@ -92,6 +92,7 @@ add_library(
   GroupedRead.cpp
   HypergraphBuilder.cpp
   ImpliedFilters.cpp
+  JoinCluster.cpp
   JoinCondition.cpp
   JoinFanout.cpp
   JoinInputRewriter.cpp

@@ -253,6 +253,33 @@ SELECT a, b, EXISTS (SELECT 1 WHERE b > 100)
 FROM t
 WHERE a IN (SELECT 2 WHERE b > 0)
 ----
+-- A filter between joins that reads an EXISTS value through a LEFT join. The
+-- rows of t with a = 3 match nothing and read a NULL value.
+SELECT y.a, y.e, v.a
+FROM (
+    SELECT t.a, x.e
+    FROM t
+    LEFT JOIN (SELECT a, EXISTS (SELECT 1 FROM v WHERE v.a = u.a) AS e FROM u) x
+      ON x.a = t.a + 3
+    WHERE x.e IS NULL OR x.e) y
+JOIN v ON v.a = y.a * 2
+----
+-- The same filter reading the EXISTS value through two LEFT joins.
+SELECT y.a, y.e, v.a
+FROM (
+    SELECT t.a, x.e
+    FROM t
+    LEFT JOIN (
+        SELECT u.a, z.e
+        FROM u
+        LEFT JOIN (
+            SELECT s.a, EXISTS (SELECT 1 FROM v WHERE v.a = s.a) AS e
+            FROM u s) z
+          ON z.a = u.a) x
+      ON x.a = t.a + 3
+    WHERE x.e IS NULL OR x.e) y
+JOIN v ON v.a = y.a * 2
+----
 -- IN over a correlated inner join returns false for an empty left input, NULL
 -- for only an unknown comparison, and true for a match.
 -- error_v1: Nested correlation across subquery boundaries is not supported yet

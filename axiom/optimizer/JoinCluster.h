@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include <utility>
 #include <vector>
+
+#include <folly/Function.h>
+#include <folly/container/F14Map.h>
 
 #include "axiom/optimizer/Node.h"
 
@@ -51,6 +55,25 @@ struct JoinCluster {
   /// Predicates of the `Filter` nodes the cluster spans. Each becomes a graph
   /// conjunct, applied wherever the relations it reads are covered.
   ExprVector filterPredicates;
+
+  /// The fresh outputs of the cluster's joins. A join that null-extends an
+  /// input gives each of its columns a fresh output, and a join above can copy
+  /// that output again.
+  class FreshOutputs {
+   public:
+    explicit FreshOutputs(const JoinCluster& cluster);
+
+    /// Returns the column that 'column' is made from, following a fresh output
+    /// of a fresh output back to the first, or 'column' when no join of the
+    /// cluster makes it. Calls 'visit' with each join on the way, nearest
+    /// first.
+    ColumnCP source(ColumnCP column, folly::FunctionRef<void(JoinCP)> visit)
+        const;
+
+   private:
+    // The join that makes each fresh output, and the column it is made from.
+    folly::F14FastMap<ColumnCP, std::pair<JoinCP, ColumnCP>> copies_;
+  };
 };
 
 } // namespace facebook::axiom::optimizer
