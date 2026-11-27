@@ -2569,23 +2569,29 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     return nodeSimplifier_.materialize(simplified);
   }
 
-  // Inference: every conjunct stays above, since the common case reads the
-  // call's result.
+  // Inference: conjuncts that read the call's result stay above; the others,
+  // including nondeterministic ones, push below, so the call runs only on the
+  // rows they keep.
   NodeCP rewriteInference(const Inference* node, PushdownContext& context)
       override {
-    return blockAt(context, [&](PushdownContext& child) -> NodeCP {
-      // The input supplies what the call reads; the result is produced here.
-      child.required.unionColumns(node->call());
-      child.requiredAbove = child.required;
-      child.nonNullColumns = context.nonNullColumns;
-      NodeCP newInput = rewrite(node->input(), child);
-      auto simplified = nodeSimplifier_.make(
-          Inference::Key{
-              newInput, node->call(), node->result(), node->outputColumns()},
-          {newInput, std::move(child.outputSubstitutions)});
-      child.outputSubstitutions = std::move(simplified.substitutions);
-      return nodeSimplifier_.materialize(simplified);
-    });
+    PlanObjectSet callColumns;
+    callColumns.unionColumns(node->call());
+    return rewritePerRowNode(
+        node->input(),
+        PlanObjectSet::single(node->result()),
+        callColumns,
+        context,
+        [&](NodeCP newInput,
+            PlanSubstitutions substitutions,
+            bool /*producedColumnsRead*/) {
+          return nodeSimplifier_.make(
+              Inference::Key{
+                  newInput,
+                  node->call(),
+                  node->result(),
+                  node->outputColumns()},
+              {newInput, std::move(substitutions)});
+        });
   }
 
   // Window: conjuncts whose columns are all direct partition-key
@@ -2848,33 +2854,21 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   NodeCP rewriteAssignUniqueId(
       const AssignUniqueId* node,
       PushdownContext& context) override {
-    const PlanObjectSet idColumn = PlanObjectSet::single(node->idColumn());
-    auto [pushable, blocked] = partition(context.pending, idColumn);
-    PlanObjectSet outputsKept = context.requiredAbove;
-    outputsKept.unionColumns(blocked);
-
-    PushdownContext childContext =
-        makeChildContext(std::move(pushable), context);
-    // Each input row passes through on its own, with a unique id added.
-    childContext.nonNullColumns = context.nonNullColumns;
-    childContext.required.unionColumns(blocked);
-    childContext.requiredAbove = childContext.required;
-    if (!outputsKept.contains(node->idColumn())) {
-      NodeCP newInput = rewrite(node->input(), childContext);
-      applyOutputSubstitutions(childContext, blocked);
-      return finishSimplifiedNode(
-          {maybeWrapFilter(newInput, std::move(blocked)),
-           std::move(childContext.outputSubstitutions)},
-          {},
-          context);
-    }
-
-    NodeCP newInput = rewrite(node->input(), childContext);
-    auto simplified = nodeSimplifier_.make(
-        AssignUniqueId::Key{newInput, node->idColumn()},
-        {newInput, std::move(childContext.outputSubstitutions)});
-    return finishSimplifiedNode(
-        std::move(simplified), std::move(blocked), context);
+    return rewritePerRowNode(
+        node->input(),
+        PlanObjectSet::single(node->idColumn()),
+        PlanObjectSet{},
+        context,
+        [&](NodeCP newInput,
+            PlanSubstitutions substitutions,
+            bool producedColumnsRead) -> NodeSimplifier::SimplifiedNode {
+          if (!producedColumnsRead) {
+            return {newInput, std::move(substitutions)};
+          }
+          return nodeSimplifier_.make(
+              AssignUniqueId::Key{newInput, node->idColumn()},
+              {newInput, std::move(substitutions)});
+        });
   }
 
   NodeCP rewriteEnforceDistinct(
@@ -3171,8 +3165,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // subtree rewrite under its own clean pending state, while still
   // propagating `required` — then wraps the caller's `context.pending`
   // as a Filter above the recursed result. Non-NULL hints stay above as
-  // well; a caller whose node computes the output rows of each input row from
-  // that row alone restores them in `recurse`.
+  // well.
   template <typename Recurse>
   NodeCP blockAt(PushdownContext& context, Recurse recurse) {
     PushdownContext empty;
@@ -3191,27 +3184,37 @@ class Pushdown : public NodeRewriter<PushdownContext> {
         context);
   }
 
-  // Routes each pending conjunct to either the input (pushable) or a
-  // Filter above the rebuilt node (blocked), based on whether the
-  // conjunct touches any column in `outputOnlyColumns` — the set of
-  // columns the node produces that don't exist on its input. `rebuild`
-  // builds a new node from a rewritten input. Child required carries
-  // every input-side column read by blocked conjuncts or pushable.
-  template <typename SingleInputNode, typename Rebuild>
-  NodeCP splitOnOutputColumns(
-      const SingleInputNode* node,
-      const PushdownContext& parent,
-      const PlanObjectSet& outputOnlyColumns,
-      Rebuild rebuild) {
-    auto [pushable, blocked] = partition(parent.pending, outputOnlyColumns);
+  // Rewrites a node that computes each output row from its input row alone.
+  // Conjuncts that read 'producedColumns', the columns the node adds, stay
+  // above it; the others push into 'input', with the non-NULL hints.
+  // 'readColumns' are the input columns the node itself reads. 'make' returns
+  // the node's replacement over the rewritten input, which may be that input
+  // alone. It receives the input's output substitutions and whether anything
+  // above, a consumer or a conjunct kept above, reads 'producedColumns'.
+  template <typename Make>
+  NodeCP rewritePerRowNode(
+      NodeCP input,
+      const PlanObjectSet& producedColumns,
+      const PlanObjectSet& readColumns,
+      PushdownContext& context,
+      Make make) {
+    auto [pushable, blocked] = partition(context.pending, producedColumns);
+    const bool producedColumnsRead = !blocked.empty() ||
+        context.requiredAbove.hasIntersection(producedColumns);
     PushdownContext childContext =
-        makeChildContext(std::move(pushable), parent);
+        makeChildContext(std::move(pushable), context);
+    childContext.nonNullColumns = context.nonNullColumns;
+    childContext.required.unionSet(readColumns);
     childContext.required.unionColumns(blocked);
     childContext.requiredAbove = childContext.required;
-    NodeCP newInput = rewrite(node->input(), childContext);
-    NodeCP newNode = (newInput == node->input()) ? static_cast<NodeCP>(node)
-                                                 : rebuild(newInput);
-    return maybeWrapFilter(newNode, std::move(blocked));
+    NodeCP newInput = rewrite(input, childContext);
+    return finishSimplifiedNode(
+        make(
+            newInput,
+            std::move(childContext.outputSubstitutions),
+            producedColumnsRead),
+        std::move(blocked),
+        context);
   }
 
   NodeCP maybeWrapFilter(NodeCP body, ExprVector conjuncts) {
