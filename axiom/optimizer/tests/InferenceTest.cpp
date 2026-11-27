@@ -159,18 +159,59 @@ TEST_F(InferenceTest, underSpecialForm) {
                      .project({"cast(e as double[])"})
                      .build();
   AXIOM_ASSERT_PLAN_V2(plan, matcher);
+}
 
-  plan = toSingleNodePlan(
-      "SELECT n_name FROM nation "
-      "WHERE n_nationkey > 10 AND test_inference(n_name)[1] > 0.5");
-
-  matcher =
-      matchScan("nation")
-          .inference("test_inference(n_name) as e")
-          .filter("n_nationkey > 10 AND cast(subscript(e, 1) as DOUBLE) > 0.5")
-          .project({"n_name"})
-          .build();
-  AXIOM_ASSERT_PLAN_V2(plan, matcher);
+// A condition that does not read the call's result runs before the call, so
+// the call sees only the rows it keeps. A condition that reads the result runs
+// after the call.
+TEST_F(InferenceTest, filterPlacement) {
+  {
+    const auto query =
+        "SELECT n_name FROM nation "
+        "WHERE n_nationkey > 10 AND test_inference(n_name)[1] > 0.5";
+    SCOPED_TRACE(query);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("nation")
+            .filter("n_nationkey > 10")
+            .inference("test_inference(n_name) as e")
+            .filter("cast(subscript(e, 1) as DOUBLE) > 0.5")
+            .project({"n_name"})
+            .build());
+  }
+  {
+    const auto query =
+        "SELECT n_name FROM nation "
+        "WHERE rand() < 0.5 AND test_inference(n_name)[1] > 0.5";
+    SCOPED_TRACE(query);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("nation")
+            .filter("rand() < 0.5")
+            .inference("test_inference(n_name) as e")
+            .filter("cast(subscript(e, 1) as DOUBLE) > 0.5")
+            .project({"n_name"})
+            .build());
+  }
+  {
+    // The condition kept above reads the equivalent of a key the join drops.
+    testConnector_->addTable("t", ROW("t_k", VARCHAR()));
+    testConnector_->addTable("u", ROW("u_k", VARCHAR()));
+    const auto query =
+        "SELECT t_k FROM t JOIN u ON t_k = u_k "
+        "WHERE cardinality(test_inference(u_k)) > length(u_k)";
+    SCOPED_TRACE(query);
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(query),
+        matchScan("t")
+            .hashJoinInner(
+                matchScan("u"),
+                {.keys = {{"t_k = u_k"}}, .outputColumnNames = {{"t_k"}}})
+            .inference("test_inference(t_k) as e")
+            .filter("cardinality(e) > length(t_k)")
+            .project({"t_k"})
+            .build());
+  }
 }
 
 // A branch a form may skip cannot hold a call, which becomes a node that runs
