@@ -64,7 +64,8 @@ class JoinInputProjection {
 
   // Returns the input with the projection under its exchange. The exchange
   // partitions on the projected columns, which hold the same values as its
-  // original keys.
+  // original keys. Without an exchange the projection is added only to compute
+  // a key or a part of the filter.
   NodeCP node(Builder& builder) && {
     if (exchange_ == nullptr) {
       return std::move(precompute_).node();
@@ -73,7 +74,7 @@ class JoinInputProjection {
     for (ExprCP& partitionKey : partitioning.keys) {
       partitionKey = precompute_.toColumn(partitionKey);
     }
-    NodeCP projected = std::move(precompute_).node();
+    NodeCP projected = std::move(precompute_).narrowedNode();
     if (projected == belowExchange_) {
       return input_;
     }

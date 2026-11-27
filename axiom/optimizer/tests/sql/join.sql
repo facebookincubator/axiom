@@ -111,6 +111,20 @@ JOIN (VALUES (0), (1)) AS u(x) ON coalesce(t.a, 0) = u.x
 LEFT JOIN (VALUES (0), (1), (2)) AS v(k) ON coalesce(u.x, 0) = v.k
 
 ----
+-- A FULL join on a key computed from a column read nowhere else matches on
+-- the computed value: a = 2 maps to 4, so those rows and the right rows with
+-- a = 2 are both padded.
+SELECT t2.a, count(*)
+FROM t t1 FULL JOIN t t2 ON coalesce(nullif(t1.a, 2), 4) = t2.a
+GROUP BY t2.a
+
+----
+-- A cross join that reads no column of one side still pairs each row with
+-- every row of that side.
+SELECT count(*)
+FROM t t1, (SELECT a, count(*) AS c FROM t GROUP BY a) s
+
+----
 -- NULL keys matched by INTERSECT remain nullable in a subsequent join.
 SELECT i.x, v.k
 FROM (

@@ -40,9 +40,10 @@ class PhysicalJoin {
   /// so each part is evaluated once per row of its input rather than once per
   /// pair the join matches. Each side's projection goes below the side's
   /// exchange, if it has one, and outputs only what the exchange and the join
-  /// read, so an input column kept solely to feed a key or a moved part stops
-  /// below them. In a loop's step, marks the build loop-invariant when it can
-  /// be (see `Join::Key::buildIsLoopInvariant`).
+  /// read. Below an exchange it is also added to drop a column the join does
+  /// not read, so that column stops below the exchange. In a loop's step, marks
+  /// the build loop-invariant when it can be (see
+  /// `Join::Key::buildIsLoopInvariant`).
   static NodeCP makeJoin(
       Join::Key key,
       Join::Sides filterInputs,

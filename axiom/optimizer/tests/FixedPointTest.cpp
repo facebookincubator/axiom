@@ -287,6 +287,7 @@ TEST_F(FixedPointTest, kMeansUpdate) {
                                       .localAggregation(
                                           {"m_day", "m_partition"},
                                           {"map_agg(m_cluster, m_x) AS matrix"})
+                                      .project({"m_partition", "matrix"})
                                       .shuffle({"m_partition"}),
                                   {.keys = {{"p_partition = m_partition"}}})
                               .project(
@@ -549,7 +550,7 @@ TEST_F(FixedPointTest, partitionedLoop) {
                                     .project({"a"}))
                             .hashTableState(matchScan("e").shuffle({"src"}))
                             .plan(matchDelta("r", {"n"})
-                                      .project({"n", "n + 1 AS k"})
+                                      .project({"n + 1 AS k"})
                                       .shuffle({"k"})
                                       .stateHashJoin({"k"})
                                       .project({"dst"}))
