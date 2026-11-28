@@ -146,7 +146,7 @@ ExprVector appliedConjuncts(const JoinOp& join, const JoinHypergraph& graph) {
   }
   ExprVector result;
   for (const auto& conjunct : graph.filterConjuncts()) {
-    if (conjunct.relations.isSubset(join.cover()) &&
+    if (!conjunct.absorbed && conjunct.relations.isSubset(join.cover()) &&
         !conjunct.relations.isSubset(join.left->cover()) &&
         !conjunct.relations.isSubset(join.right->cover())) {
       result.push_back(conjunct.expr);
@@ -249,7 +249,7 @@ const Estimate& unnestEstimate(
       result.constraints);
   ExprVector conjuncts;
   for (const auto& conjunct : graph.filterConjuncts()) {
-    if (conjunct.relations.isSubset(cover) &&
+    if (!conjunct.absorbed && conjunct.relations.isSubset(cover) &&
         !conjunct.relations.isSubset(unnest.input->cover())) {
       conjuncts.push_back(conjunct.expr);
     }

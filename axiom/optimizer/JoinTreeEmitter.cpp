@@ -679,7 +679,8 @@ Emitted buildJoin(
 // `build`, the preserved left side) emits each build row plus a mark for a
 // probe match; `Filter(not mark)` keeps the unmatched rows (the antijoin
 // result); a Project drops the mark, restoring the antijoin schema. The mark is
-// fresh and never escapes this subtree.
+// fresh and never escapes this subtree. The conjuncts ready at this cover read
+// only the preserved side, so they filter the build input.
 //
 // TODO: Replace this synthesis (and the reversedAnti orientation marker)
 // with a plain kRightAnti relabel once Velox adds that join type:
@@ -693,6 +694,15 @@ Emitted buildReversedAnti(
     EmitState& state) {
   const auto& edge = state.graph.edges()[join->edgeIndex];
 
+  NodeCP buildNode = build.node;
+  ExprVector ready = rewrite(
+      takeReadyConjuncts(state.graph, join->cover(), state.fired),
+      beforeJoin,
+      state);
+  if (!ready.empty()) {
+    buildNode = state.builder.make<Filter>({buildNode, std::move(ready)});
+  }
+
   const ColumnVector antiOutput = build.node->outputsAmong(outputColumns);
   ColumnCP mark = Column::createBoolean("mark");
   ColumnVector joinOutput{antiOutput};
@@ -703,7 +713,7 @@ Emitted buildReversedAnti(
   auto materialized = merge(probe.materialized, build.materialized);
   NodeCP marked = state.joinFactory(
       {probe.node,
-       build.node,
+       buildNode,
        JoinOp::emittedJoinType(join->joinType, join->reversedAnti),
        rewrite(ExprVector{edge.rightKeys()}, beforeJoin, state),
        rewrite(ExprVector{edge.leftKeys()}, beforeJoin, state),

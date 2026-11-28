@@ -819,13 +819,14 @@ void addJoinOutputRelations(
   }
 }
 
-// Adds the cluster's Filter predicates as graph conjuncts. A fresh output of
-// an outer join exists once that join has run. Its source can itself be a
-// fresh output of a join below, so a predicate that reads one takes the
-// eligibility of every non-inner join on that chain and the relation the chain
-// starts from.
+// Adds the cluster's Filter predicates as graph conjuncts, marked 'absorbed'
+// for those of the Filter above the root. A fresh output of an outer join
+// exists once that join has run. Its source can itself be a fresh output of a
+// join below, so a predicate that reads one takes the eligibility of every
+// non-inner join on that chain and the relation the chain starts from.
 void addClusterConjuncts(
     const ExprVector& predicates,
+    bool absorbed,
     const JoinCluster::FreshOutputs& freshOutputs,
     const folly::F14FastMap<JoinCP, RelationSet>& outerEligibility,
     const folly::F14FastMap<ColumnCP, int8_t>& columnToLeaf,
@@ -841,7 +842,7 @@ void addClusterConjuncts(
       });
       relations.unionSet(expressionRelations(source, columnToLeaf));
     });
-    graph.addFilterConjunct({predicate, relations});
+    graph.addFilterConjunct({predicate, relations, absorbed});
   }
 }
 
@@ -901,6 +902,14 @@ JoinHypergraph HypergraphBuilder::build(
 
   addClusterConjuncts(
       cluster.filterPredicates,
+      /*absorbed=*/false,
+      freshOutputs,
+      outerEligibility,
+      columnToLeaf,
+      graph);
+  addClusterConjuncts(
+      cluster.absorbedPredicates,
+      /*absorbed=*/true,
       freshOutputs,
       outerEligibility,
       columnToLeaf,

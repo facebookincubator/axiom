@@ -253,6 +253,27 @@ SELECT a, b, EXISTS (SELECT 1 WHERE b > 100)
 FROM t
 WHERE a IN (SELECT 2 WHERE b > 0)
 ----
+-- A filter above the joins compares with a correlated count through a LEFT
+-- join. Rows of t with a = 3 have no count and compare with 0.
+SELECT t.a, t.b, v.a
+FROM t
+JOIN v ON v.a = t.a * 2
+  AND t.b > (SELECT count(*) FROM u WHERE u.a = t.a * 2) * 50
+----
+-- The same comparison in WHERE.
+SELECT t.a, t.b, v.a
+FROM t
+JOIN v ON v.a = t.a * 2
+WHERE t.b > (SELECT count(*) FROM u WHERE u.a = t.a * 2) * 50
+----
+-- A filter above a LEFT join that reads an EXISTS value through it. The rows of
+-- t with a = 3 match nothing and read a NULL value.
+SELECT t.a, x.e
+FROM t
+LEFT JOIN (SELECT a, EXISTS (SELECT 1 FROM v WHERE v.a = u.a) AS e FROM u) x
+  ON x.a = t.a + 3
+WHERE x.e IS NULL OR x.e
+----
 -- A filter between joins that reads an EXISTS value through a LEFT join. The
 -- rows of t with a = 3 match nothing and read a NULL value.
 SELECT y.a, y.e, v.a

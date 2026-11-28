@@ -56,6 +56,10 @@ struct JoinCluster {
   /// conjunct, applied wherever the relations it reads are covered.
   ExprVector filterPredicates;
 
+  /// Predicates of the `Filter` directly above `root` that join planning takes
+  /// in. Each becomes a graph conjunct placed like a `filterPredicates` one.
+  ExprVector absorbedPredicates;
+
   /// The fresh outputs of the cluster's joins. A join that null-extends an
   /// input gives each of its columns a fresh output, and a join above can copy
   /// that output again.
