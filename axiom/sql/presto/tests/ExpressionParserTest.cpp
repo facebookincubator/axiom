@@ -1110,6 +1110,18 @@ TEST_F(ExpressionParserTest, lateralColumnAliasErrors) {
       "Cannot resolve column: j");
 }
 
+TEST_F(ExpressionParserTest, unresolvedOperandOrder) {
+  // When several operands fail to resolve, the error names the leftmost one, as
+  // Presto Java does.
+  for (const auto* expression :
+       {"a = b", "a + b", "a BETWEEN b AND c", "a[b]"}) {
+    SCOPED_TRACE(expression);
+    AXIOM_EXPECT_PRESTO_SEMANTIC_ERROR(
+        parseSql(fmt::format("SELECT {} FROM nation", expression)),
+        "Cannot resolve column: a");
+  }
+}
+
 TEST_F(ExpressionParserTest, lateralColumnAliasNotVisibleInSubquery) {
   // A lateral column alias belongs to its own SELECT block, so it must not be
   // visible inside a subquery. Here the outer alias `r_regionkey` collides with
