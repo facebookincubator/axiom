@@ -1051,6 +1051,28 @@ class PlanMatcherBuilder {
   /// column for downstream matchers.
   PlanMatcherBuilder& inference(const std::string& call);
 
+  /// What a Python call node must carry besides its calls. Unset fields are
+  /// not checked.
+  struct PythonCallDetails {
+    /// The URI of the environment the node's worker runs in.
+    std::optional<std::string> environmentUri;
+    /// The Python version the node's functions were pickled with.
+    std::optional<std::string> pythonVersion;
+    /// Each function's own name and pickled code, in any order. Two functions
+    /// may share a name.
+    std::optional<std::vector<std::pair<std::string, std::string>>> functions;
+  };
+
+  /// Matches a Python call node evaluating 'calls', in order, e.g.
+  /// {"score(comment) as s", "try(label(score(comment))) as l"}. A call names
+  /// a function by the function's own name, not the unique name the node
+  /// gives it, nests the calls whose results it reads, and is wrapped in
+  /// try() when under TRY. An alias names the result column for downstream
+  /// matchers.
+  PlanMatcherBuilder& pythonCall(
+      const std::vector<std::string>& calls,
+      const PythonCallDetails& details = {});
+
   /// Matches any Window node regardless of functions or partitioning.
   PlanMatcherBuilder& window();
 

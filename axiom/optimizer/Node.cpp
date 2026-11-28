@@ -22,6 +22,7 @@
 #include <type_traits>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/AppendAll.h"
 #include "axiom/optimizer/Builder.h"
 #include "axiom/optimizer/ExprFactory.h"
@@ -53,6 +54,7 @@ const auto& nodeTypeNames() {
       {NodeType::kIndexLookupJoin, "IndexLookupJoin"},
       {NodeType::kWindow, "Window"},
       {NodeType::kInference, "Inference"},
+      {NodeType::kPythonCall, "PythonCall"},
       {NodeType::kRowNumber, "RowNumber"},
       {NodeType::kTopNRowNumber, "TopNRowNumber"},
       {NodeType::kApply, "Apply"},
@@ -3485,6 +3487,177 @@ bool Inference::KeyEq::operator()(const Inference* node, const Key& key) const {
   return (*this)(key, node);
 }
 
+Partitioning PythonCall::globalPartition(
+    std::span<const Partitioning> inputPartitions,
+    Builder& /*builder*/) const {
+  return inheritedPartition(inputPartitions[0]);
+}
+
+// static
+bool PythonCall::canRead(const Call& reader, const Call& producer) {
+  const bool readerUnderTry = reader.nullOnError || reader.nested;
+  if (producer.nested) {
+    return readerUnderTry;
+  }
+  return !readerUnderTry && !producer.nullOnError &&
+      producer.function->deterministic;
+}
+
+// static
+ColumnVector PythonCall::outputColumnsIn(
+    NodeCP input,
+    const QGVector<Call>& calls,
+    const PlanObjectSet& columns) {
+  ColumnVector outputColumns;
+  for (ColumnCP column : input->outputColumns()) {
+    if (columns.contains(column)) {
+      outputColumns.push_back(column);
+    }
+  }
+  for (const auto& call : calls) {
+    if (columns.contains(call.result)) {
+      outputColumns.push_back(call.result);
+    }
+  }
+  return outputColumns;
+}
+
+PythonCall::PythonCall(Key key)
+    : Node(
+          NodeType::kPythonCall,
+          ColumnVector{key.outputColumns},
+          derivedProperties(
+              {key.input},
+              [&] { return rankedPhysical(key.input, /*partitionKeys=*/{}); },
+              [&] { return sameRowsRelational(key.input); })),
+      input_(key.input),
+      calls_(std::move(key.calls)) {
+  VELOX_CHECK_NOT_NULL(input_);
+  VELOX_CHECK(!calls_.empty(), "PythonCall must have a call");
+
+  const PlanObjectSet inputColumns =
+      PlanObjectSet::fromObjects(input_->outputColumns());
+  const auto& first = *calls_.front().function;
+  // The calls so far, by result, and how many calls read each.
+  folly::F14FastMap<ColumnCP, const Call*> produced;
+  folly::F14FastMap<ColumnCP, int32_t> numReaders;
+  // The first call of each name.
+  folly::F14FastMap<Name, const Call*> named;
+  for (const auto& call : calls_) {
+    VELOX_CHECK_NOT_NULL(call.function);
+    VELOX_CHECK_NOT_NULL(call.name);
+    VELOX_CHECK_NOT_NULL(call.result);
+    const auto [existing, inserted] = named.emplace(call.name, &call);
+    VELOX_CHECK(
+        inserted ||
+            (existing->second->function == call.function &&
+             existing->second->result->value().type ==
+                 call.result->value().type),
+        "PythonCall calls of one name must call one function with one result type: {}",
+        call.name);
+    VELOX_CHECK_EQ(
+        call.function->environmentUri,
+        first.environmentUri,
+        "PythonCall calls must share an environment");
+    VELOX_CHECK_EQ(
+        call.function->pythonVersion,
+        first.pythonVersion,
+        "PythonCall calls must share a Python version");
+    for (ExprCP arg : call.args) {
+      if (arg->is(PlanType::kLiteralExpr)) {
+        continue;
+      }
+      VELOX_CHECK(
+          arg->is(PlanType::kColumnExpr),
+          "PythonCall argument must be a column or a literal: {}",
+          arg->toString());
+      if (const auto it = produced.find(arg->as<Column>());
+          it != produced.end()) {
+        VELOX_CHECK(
+            canRead(call, *it->second),
+            "PythonCall call cannot read this result: {}",
+            arg->toString());
+        ++numReaders[it->first];
+      } else {
+        VELOX_CHECK(
+            inputColumns.contains(arg),
+            "PythonCall argument must be an input column or an earlier result: {}",
+            arg->toString());
+      }
+    }
+    produced.emplace(call.result, &call);
+  }
+
+  const auto& outputs = this->outputColumns();
+  auto output = outputs.begin();
+  for (ColumnCP column : input_->outputColumns()) {
+    if (output != outputs.end() && *output == column) {
+      ++output;
+    }
+  }
+  for (const auto& call : calls_) {
+    const bool isOutput = output != outputs.end() && *output == call.result;
+    if (isOutput) {
+      ++output;
+    }
+    const auto readers = numReaders.find(call.result);
+    if (call.nested) {
+      VELOX_CHECK(
+          !isOutput && readers != numReaders.end() && readers->second == 1,
+          "PythonCall nested call must be read by one call and not output: {}",
+          call.result->toString());
+    } else {
+      VELOX_CHECK(
+          isOutput || readers != numReaders.end(),
+          "PythonCall result must be an output or read by a later call: {}",
+          call.result->toString());
+    }
+  }
+  VELOX_CHECK(
+      output == outputs.end(),
+      "PythonCall outputs must be input columns in input order, then results "
+      "in call order: {}",
+      (*output)->toString());
+}
+
+size_t PythonCall::KeyHash::operator()(const PythonCall* node) const {
+  return (*this)(Key{node->input(), node->calls(), node->outputColumns()});
+}
+
+size_t PythonCall::KeyHash::operator()(const Key& key) const {
+  size_t hash = hashOf(key.input, key.outputColumns);
+  for (const auto& call : key.calls) {
+    hash = velox::bits::hashMix(
+        hash,
+        hashOf(
+            call.function,
+            call.name,
+            call.args,
+            call.result,
+            call.nullOnError,
+            call.nested));
+  }
+  return hash;
+}
+
+bool PythonCall::KeyEq::operator()(
+    const PythonCall* left,
+    const PythonCall* right) const {
+  return left->input() == right->input() && left->calls() == right->calls() &&
+      left->outputColumns() == right->outputColumns();
+}
+
+bool PythonCall::KeyEq::operator()(const Key& key, const PythonCall* node)
+    const {
+  return key.input == node->input() && key.calls == node->calls() &&
+      key.outputColumns == node->outputColumns();
+}
+
+bool PythonCall::KeyEq::operator()(const PythonCall* node, const Key& key)
+    const {
+  return (*this)(key, node);
+}
+
 Partitioning Window::globalPartition(
     std::span<const Partitioning> inputPartitions,
     Builder& /*builder*/) const {
@@ -5246,6 +5419,7 @@ V2_DEFINE_ACCEPT(Join)
 V2_DEFINE_ACCEPT(IndexLookupJoin)
 V2_DEFINE_ACCEPT(Window)
 V2_DEFINE_ACCEPT(Inference)
+V2_DEFINE_ACCEPT(PythonCall)
 V2_DEFINE_ACCEPT(RowNumber)
 V2_DEFINE_ACCEPT(TopNRowNumber)
 V2_DEFINE_ACCEPT(Apply)

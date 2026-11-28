@@ -65,6 +65,14 @@ class ExprVisitor {
     VELOX_USER_FAIL("Unbound placeholder: {}", expr.toString());
   }
 
+  /// A visitor of plans without Python calls need not handle them.
+  virtual void visit(
+      const PythonCallExpr& expr,
+      ExprVisitorContext& /*context*/) const {
+    VELOX_UNSUPPORTED(
+        "Python calls are not supported here: {}", expr.toString());
+  }
+
  protected:
   void visitInputs(const Expr& expr, ExprVisitorContext& ctx) const {
     for (const auto& input : expr.inputs()) {

@@ -88,6 +88,8 @@ class NodeRewriter {
         return rewriteWindow(node->as<Window>(), context);
       case NodeType::kInference:
         return rewriteInference(node->as<Inference>(), context);
+      case NodeType::kPythonCall:
+        return rewritePythonCall(node->as<PythonCall>(), context);
       case NodeType::kRowNumber:
         return rewriteRowNumber(node->as<RowNumber>(), context);
       case NodeType::kTopNRowNumber:
@@ -326,6 +328,22 @@ class NodeRewriter {
     outputColumns.push_back(node->result());
     return builder_.template make<Inference>(
         {newInput, node->call(), node->result(), std::move(outputColumns)});
+  }
+
+  virtual NodeCP rewritePythonCall(const PythonCall* node, TContext& context) {
+    NodeCP newInput = rewrite(node->input(), context);
+    if (newInput == node->input()) {
+      return node;
+    }
+    // The node emits the input columns and results it had, so pruning the
+    // input narrows the output too.
+    return builder_.template make<PythonCall>(
+        {newInput,
+         node->calls(),
+         PythonCall::outputColumnsIn(
+             newInput,
+             node->calls(),
+             PlanObjectSet::fromObjects(node->outputColumns()))});
   }
 
   virtual NodeCP rewriteWindow(const Window* node, TContext& context) {

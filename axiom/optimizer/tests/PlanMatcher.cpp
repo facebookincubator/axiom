@@ -1980,6 +1980,85 @@ class InferenceMatcher : public PlanMatcherImpl<core::RPCNode> {
   const std::string call_;
 };
 
+// Returns 'expr' with each Python call in it named by its function's own name,
+// as tests spell calls.
+core::TypedExprPtr withFunctionNames(
+    const core::TypedExprPtr& expr,
+    const core::PythonCallNode& node) {
+  const auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (call == nullptr) {
+    return expr;
+  }
+  std::vector<core::TypedExprPtr> inputs;
+  inputs.reserve(call->inputs().size());
+  for (const auto& input : call->inputs()) {
+    inputs.push_back(withFunctionNames(input, node));
+  }
+  const auto function = node.functions().find(call->name());
+  return std::make_shared<core::CallTypedExpr>(
+      call->type(),
+      std::move(inputs),
+      function != node.functions().end() ? function->second.name
+                                         : call->name());
+}
+
+class PythonCallMatcher : public PlanMatcherImpl<core::PythonCallNode> {
+ public:
+  PythonCallMatcher(
+      const std::shared_ptr<PlanMatcher>& matcher,
+      std::vector<std::string> calls,
+      PlanMatcherBuilder::PythonCallDetails details)
+      : PlanMatcherImpl<core::PythonCallNode>({matcher}),
+        calls_{std::move(calls)},
+        details_{std::move(details)} {}
+
+  MatchResult matchDetails(
+      const core::PythonCallNode& plan,
+      const std::unordered_map<std::string, std::string>& symbols)
+      const override {
+    SCOPED_TRACE(plan.toString(true, false));
+
+    if (details_.environmentUri.has_value()) {
+      EXPECT_EQ(plan.environmentUri(), details_.environmentUri.value());
+    }
+    if (details_.pythonVersion.has_value()) {
+      EXPECT_EQ(plan.pythonVersion(), details_.pythonVersion.value());
+    }
+    if (details_.functions.has_value()) {
+      std::vector<std::pair<std::string, std::string>> functions;
+      for (const auto& [_, function] : plan.functions()) {
+        functions.emplace_back(function.name, function.pickledFunction);
+      }
+      auto expected = details_.functions.value();
+      std::ranges::sort(functions);
+      std::ranges::sort(expected);
+      EXPECT_EQ(functions, expected);
+    }
+    EXPECT_EQ(plan.calls().size(), calls_.size()) << "Python call count";
+    AXIOM_TEST_RETURN_IF_FAILURE
+
+    std::unordered_map<std::string, std::string> newSymbols{symbols};
+    for (size_t i = 0; i < calls_.size(); ++i) {
+      auto expected = parseExpr(calls_[i]);
+      if (expected->alias()) {
+        newSymbols[expected->alias().value()] = plan.names()[i];
+      }
+      if (!symbols.empty()) {
+        expected = ExprMatcher::rewriteInputNames(expected, symbols);
+      }
+      ExprMatcher::match(
+          withFunctionNames(plan.calls()[i], plan), expected->dropAlias());
+      AXIOM_TEST_RETURN_IF_FAILURE
+    }
+
+    return MatchResult::success(newSymbols);
+  }
+
+ private:
+  const std::vector<std::string> calls_;
+  const PlanMatcherBuilder::PythonCallDetails details_;
+};
+
 class WindowMatcher : public PlanMatcherImpl<WindowNode> {
  public:
   explicit WindowMatcher(const std::shared_ptr<PlanMatcher>& matcher)
@@ -3267,6 +3346,14 @@ PlanMatcherBuilder& PlanMatcherBuilder::enforceDistinct(
 PlanMatcherBuilder& PlanMatcherBuilder::inference(const std::string& call) {
   VELOX_USER_CHECK_NOT_NULL(matcher_);
   matcher_ = std::make_shared<InferenceMatcher>(matcher_, call);
+  return *this;
+}
+
+PlanMatcherBuilder& PlanMatcherBuilder::pythonCall(
+    const std::vector<std::string>& calls,
+    const PythonCallDetails& details) {
+  VELOX_USER_CHECK_NOT_NULL(matcher_);
+  matcher_ = std::make_shared<PythonCallMatcher>(matcher_, calls, details);
   return *this;
 }
 

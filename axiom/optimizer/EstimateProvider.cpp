@@ -729,6 +729,7 @@ Estimate EstimateProvider::compute(NodeCP node) {
     case NodeType::kSort:
     case NodeType::kWindow:
     case NodeType::kInference:
+    case NodeType::kPythonCall:
     case NodeType::kMarkDistinct:
     case NodeType::kAssignUniqueId:
     case NodeType::kEnforceDistinct:

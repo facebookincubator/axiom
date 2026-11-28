@@ -22,6 +22,7 @@
 #include <limits>
 
 #include "axiom/connectors/ConnectorMetadata.h"
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/EstimateProvider.h"
 #include "axiom/optimizer/ExprEmitter.h"
 #include "axiom/optimizer/PhysicalProperties.h"
@@ -34,6 +35,7 @@
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 
@@ -283,6 +285,8 @@ class Emitter {
         return emitWindow(*node->as<Window>());
       case NodeType::kInference:
         return emitInference(*node->as<Inference>());
+      case NodeType::kPythonCall:
+        return emitPythonCall(*node->as<PythonCall>());
       case NodeType::kRowNumber:
         return emitRowNumber(*node->as<RowNumber>());
       case NodeType::kTopNRowNumber:
@@ -470,6 +474,7 @@ class Emitter {
   velox::core::PlanNodePtr emitValues(const Values& values);
   velox::core::PlanNodePtr emitWindow(const Window& window);
   velox::core::PlanNodePtr emitInference(const Inference& node);
+  velox::core::PlanNodePtr emitPythonCall(const PythonCall& node);
   velox::core::PlanNodePtr emitRowNumber(const RowNumber& node);
   velox::core::PlanNodePtr emitTopNRowNumber(const TopNRowNumber& node);
   velox::core::PlanNodePtr emitUnnest(const Unnest& unnest);
@@ -1939,6 +1944,57 @@ velox::core::PlanNodePtr Emitter::emitInference(const Inference& node) {
       std::move(call),
       node.result()->outputName(),
       ExprEmitter::toRowType(node.outputColumns()));
+}
+
+velox::core::PlanNodePtr Emitter::emitPythonCall(const PythonCall& node) {
+  velox::core::PlanNodePtr input = emit(node.input());
+
+  folly::F14FastMap<std::string, velox::core::PythonCallNode::Function>
+      functions;
+  // A call reading an earlier call's result nests that call.
+  folly::F14FastMap<ExprCP, velox::core::CallTypedExprPtr> resultCalls;
+  const PlanObjectSet outputs =
+      PlanObjectSet::fromObjects(node.outputColumns());
+  std::vector<std::string> names;
+  std::vector<velox::core::CallTypedExprPtr> calls;
+  for (const auto& call : node.calls()) {
+    functions.emplace(
+        call.name,
+        velox::core::PythonCallNode::Function{
+            .name = call.function->name,
+            .pickledFunction = call.function->pickledFunction,
+            .deterministic = call.function->deterministic,
+        });
+    std::vector<velox::core::TypedExprPtr> args;
+    args.reserve(call.args.size());
+    for (ExprCP arg : call.args) {
+      const auto result = resultCalls.find(arg);
+      args.push_back(
+          result != resultCalls.end() ? result->second
+                                      : exprEmitter_.toTypedExpr(arg));
+    }
+    auto typed = std::make_shared<velox::core::CallTypedExpr>(
+        toTypePtr(call.result->value().type), std::move(args), call.name);
+    resultCalls.emplace(call.result, typed);
+    if (outputs.contains(call.result)) {
+      names.push_back(call.result->outputName());
+      calls.push_back(
+          call.nullOnError ? std::make_shared<velox::core::CallTypedExpr>(
+                                 typed->type(), velox::expression::kTry, typed)
+                           : std::move(typed));
+    }
+  }
+
+  const auto& first = *node.calls().front().function;
+  return std::make_shared<velox::core::PythonCallNode>(
+      nextId(),
+      first.environmentUri,
+      first.pythonVersion,
+      std::move(functions),
+      std::move(names),
+      std::move(calls),
+      ExprEmitter::toRowType(node.outputColumns()),
+      std::move(input));
 }
 
 velox::core::PlanNodePtr Emitter::emitRowNumber(const RowNumber& node) {

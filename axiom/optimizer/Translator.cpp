@@ -1138,7 +1138,8 @@ Translated Translator::translateProject(
       translatedExpr = it->second;
     } else {
       currentInput = withLiftTarget(currentInput, [&](LiftTarget& target) {
-        translatedExpr = translateExpr(*exprs[idx], windowScope, &target);
+        translatedExpr =
+            translateExpr(*exprs[idx], windowScope, &target, toName(name));
       });
     }
     // A name binds to its expression, so a chain of projections collapses and
@@ -3395,7 +3396,8 @@ ExprCP Translator::reuseScalarSubquery(
 ExprCP Translator::translateExpr(
     const lp::Expr& expr,
     const Scope& scope,
-    LiftTarget* liftTarget) {
+    LiftTarget* liftTarget,
+    Name symbol) {
   switch (expr.kind()) {
     case lp::ExprKind::kInputReference:
       return translateInputReference(*expr.as<lp::InputReferenceExpr>(), scope);
@@ -3404,10 +3406,10 @@ ExprCP Translator::translateExpr(
     case lp::ExprKind::kPlaceholder:
       return translatePlaceholder(*expr.as<lp::PlaceholderExpr>());
     case lp::ExprKind::kCall:
-      return translateCall(*expr.as<lp::CallExpr>(), scope, liftTarget);
+      return translateCall(*expr.as<lp::CallExpr>(), scope, liftTarget, symbol);
     case lp::ExprKind::kSpecialForm:
       return translateSpecialForm(
-          *expr.as<lp::SpecialFormExpr>(), scope, liftTarget);
+          *expr.as<lp::SpecialFormExpr>(), scope, liftTarget, symbol);
     case lp::ExprKind::kLambda:
       return translateLambda(*expr.as<lp::LambdaExpr>(), scope, liftTarget);
     case lp::ExprKind::kSubquery: {
@@ -3434,6 +3436,13 @@ ExprCP Translator::translateExpr(
       }
       return result;
     }
+    case lp::ExprKind::kPythonCall:
+      return translatePythonCall(
+          *expr.as<lp::PythonCallExpr>(),
+          scope,
+          liftTarget,
+          /*nullOnError=*/false,
+          symbol);
     default:
       VELOX_NYI(
           "Unsupported expression kind: {}", static_cast<int>(expr.kind()));
@@ -3474,7 +3483,8 @@ ExprCP Translator::translateConstant(const lp::ConstantExpr& expr) {
 ExprCP Translator::translateCall(
     const lp::CallExpr& expr,
     const Scope& scope,
-    LiftTarget* liftTarget) {
+    LiftTarget* liftTarget,
+    Name symbol) {
   ExprVector args = translateAll(expr.inputs(), scope, liftTarget);
   Value value =
       clampCardinality(Value{toType(expr.type()), maxCardinality(args)});
@@ -3483,12 +3493,15 @@ ExprCP Translator::translateCall(
   FunctionSet funcs = Call::unionArgFunctions(ownFunctions, args);
   auto* call = builder_.makeCall(name, value, std::move(args), funcs);
   if (ownFunctions.contains(FunctionSet::kInference)) {
-    return liftInferenceCall(call, liftTarget);
+    return liftInferenceCall(call, liftTarget, symbol);
   }
   return simplifier_.simplify(call);
 }
 
-ExprCP Translator::liftInferenceCall(const Call* call, LiftTarget* liftTarget) {
+ExprCP Translator::liftInferenceCall(
+    const Call* call,
+    LiftTarget* liftTarget,
+    Name symbol) {
   VELOX_USER_CHECK_EQ(
       lambdaDepth_,
       0,
@@ -3520,11 +3533,9 @@ ExprCP Translator::liftInferenceCall(const Call* call, LiftTarget* liftTarget) {
   ExprCP lifted = exprFactory_.rebuildCall(call, args);
   liftTarget->node = std::move(precompute).node();
 
-  auto* result = make<Column>(
-      queryCtx()->newName(call->name()),
-      /*relation=*/nullptr,
-      lifted->value(),
-      /*alias=*/nullptr);
+  ColumnCP result = symbol != nullptr
+      ? columnForSymbol(symbol, lifted->value())
+      : Column::create(call->name(), lifted->value());
 
   ColumnVector outputColumns = liftTarget->node->outputColumns();
   outputColumns.push_back(result);
@@ -3538,7 +3549,226 @@ ExprCP Translator::liftInferenceCall(const Call* call, LiftTarget* liftTarget) {
   return result;
 }
 
+ExprCP Translator::translatePythonCall(
+    const lp::PythonCallExpr& expr,
+    const Scope& scope,
+    LiftTarget* liftTarget,
+    bool nullOnError,
+    Name symbol) {
+  VELOX_USER_CHECK_EQ(
+      lambdaDepth_,
+      0,
+      "Python call is not supported inside a lambda: {}",
+      expr.toString());
+  VELOX_USER_CHECK_NOT_NULL(
+      liftTarget,
+      "Python call is not supported in this position: {}",
+      expr.toString());
+
+  QGVector<PythonCall::Call> calls;
+  if (nullOnError) {
+    addTryCalls(expr, *expr.function(), scope, /*nested=*/false, symbol, calls);
+  } else {
+    calls.push_back(makePythonCall(
+        expr,
+        translateAll(expr.inputs(), scope, liftTarget),
+        /*nullOnError=*/false,
+        /*nested=*/false,
+        symbol));
+  }
+  return liftPythonCalls(std::move(calls), *liftTarget);
+}
+
+ColumnCP Translator::addTryCalls(
+    const lp::PythonCallExpr& expr,
+    const lp::PythonFunction& outer,
+    const Scope& scope,
+    bool nested,
+    Name symbol,
+    QGVector<PythonCall::Call>& calls) {
+  ExprVector args;
+  args.reserve(expr.inputs().size());
+  for (const auto& input : expr.inputs()) {
+    if (input->isPythonCall()) {
+      const auto& argument = *input->as<lp::PythonCallExpr>();
+      VELOX_USER_CHECK_EQ(
+          argument.function()->environmentUri,
+          outer.environmentUri,
+          "Python call under TRY must run in the environment of the call it "
+          "is nested in: {}",
+          argument.toString());
+      VELOX_USER_CHECK_EQ(
+          argument.function()->pythonVersion,
+          outer.pythonVersion,
+          "Python call under TRY must run in the Python version of the call "
+          "it is nested in: {}",
+          argument.toString());
+      args.push_back(addTryCalls(
+          argument,
+          outer,
+          scope,
+          /*nested=*/true,
+          /*symbol=*/nullptr,
+          calls));
+      continue;
+    }
+    VELOX_USER_CHECK(
+        input->isInputReference() || input->isConstant(),
+        "Argument of a Python call under TRY must be a column, a constant or "
+        "a Python call: {}",
+        input->toString());
+    args.push_back(translateExpr(*input, scope, /*liftTarget=*/nullptr));
+  }
+  calls.push_back(makePythonCall(
+      expr,
+      std::move(args),
+      /*nullOnError=*/!nested,
+      nested,
+      symbol));
+  return calls.back().result;
+}
+
+PythonCall::Call Translator::makePythonCall(
+    const lp::PythonCallExpr& expr,
+    ExprVector args,
+    bool nullOnError,
+    bool nested,
+    Name symbol) {
+  auto& sameName = pythonFunctions_[expr.function()->name];
+  auto function = std::ranges::find_if(sameName, [&](const auto& candidate) {
+    return *candidate == *expr.function();
+  });
+  if (function == sameName.end()) {
+    sameName.push_back(expr.function());
+    function = sameName.end() - 1;
+  }
+  Value value =
+      clampCardinality(Value{toType(expr.type()), maxCardinality(args)});
+  auto [name, inserted] =
+      pythonCallNames_.try_emplace({function->get(), value.type}, nullptr);
+  if (inserted) {
+    name->second = queryCtx()->newName(expr.function()->name);
+  }
+  ColumnCP result = symbol != nullptr
+      ? columnForSymbol(symbol, value)
+      : Column::create(expr.function()->name, value);
+  return {
+      function->get(),
+      name->second,
+      std::move(args),
+      result,
+      nullOnError,
+      nested};
+}
+
+size_t Translator::PythonCallKeyHash::operator()(
+    const PythonCallKey& key) const {
+  size_t hash =
+      folly::hash::hash_combine(key.function, key.resultType, key.nullOnError);
+  for (ExprCP arg : key.args) {
+    hash = folly::hash::hash_combine(hash, arg);
+  }
+  return hash;
+}
+
+ExprCP Translator::liftPythonCalls(
+    QGVector<PythonCall::Call> calls,
+    LiftTarget& liftTarget) {
+  const auto& top = calls.back();
+  const PythonCallKey key{
+      top.function, top.result->value().type, top.args, top.nullOnError};
+  if (top.function->deterministic) {
+    if (const auto it = pythonColumns_.find(key);
+        it != pythonColumns_.end() && liftTarget.outputs(it->second)) {
+      return it->second;
+    }
+  }
+
+  // A pending lift may supply an argument, so it has to be attached before
+  // the node that reads it.
+  flushLifts(liftTarget);
+
+  PlanObjectSet ownResults;
+  for (const auto& call : calls) {
+    ownResults.add(call.result);
+  }
+  const PythonCall* below = liftTarget.node->is(NodeType::kPythonCall)
+      ? liftTarget.node->as<PythonCall>()
+      : nullptr;
+  // The results of the node below, by column.
+  folly::F14FastMap<ExprCP, const PythonCall::Call*> belowResults;
+  if (below != nullptr) {
+    PlanObjectSet belowColumns;
+    for (const auto& belowCall : below->calls()) {
+      belowResults.emplace(belowCall.result, &belowCall);
+      belowColumns.add(belowCall.result);
+    }
+    const auto& belowFunction = *below->calls().front().function;
+    const bool joins =
+        belowFunction.environmentUri == top.function->environmentUri &&
+        belowFunction.pythonVersion == top.function->pythonVersion &&
+        std::ranges::all_of(calls, [&](const auto& reader) {
+          return std::ranges::all_of(reader.args, [&](ExprCP arg) {
+            if (const auto it = belowResults.find(arg);
+                it != belowResults.end()) {
+              return PythonCall::canRead(reader, *it->second);
+            }
+            return ownResults.contains(arg) ||
+                !arg->columns().hasIntersection(belowColumns);
+          });
+        });
+    if (!joins) {
+      below = nullptr;
+      belowResults.clear();
+    }
+  }
+
+  // Arguments that are neither results nor literals are computed below.
+  PrecomputeProjections precompute{
+      below != nullptr ? below->input() : liftTarget.node,
+      builder_,
+      simplifier_};
+  for (auto& call : calls) {
+    for (auto& arg : call.args) {
+      if (!belowResults.contains(arg) && !ownResults.contains(arg)) {
+        arg =
+            precompute.toColumn(arg, /*alias=*/nullptr, /*allowConstant=*/true);
+      }
+    }
+  }
+  NodeCP input = std::move(precompute).node();
+
+  QGVector<PythonCall::Call> nodeCalls;
+  ColumnVector outputColumns = input->outputColumns();
+  if (below != nullptr) {
+    nodeCalls = below->calls();
+    for (ColumnCP column : below->outputColumns()) {
+      if (belowResults.contains(column)) {
+        outputColumns.push_back(column);
+      }
+    }
+  }
+  ColumnCP result = top.result;
+  nodeCalls.insert(nodeCalls.end(), calls.begin(), calls.end());
+  outputColumns.push_back(result);
+  auto node = nodeSimplifier_.make(
+      PythonCall::Key{input, std::move(nodeCalls), std::move(outputColumns)},
+      {input, {}});
+  liftTarget.node = nodeSimplifier_.materialize(node);
+
+  if (top.function->deterministic) {
+    pythonColumns_[key] = result;
+  }
+  return result;
+}
+
 namespace {
+
+// True if 'expr' calls a Python function anywhere.
+bool hasPythonCall(const lp::ExprPtr& expr) {
+  return expr->isPythonCall() ||
+      std::ranges::any_of(expr->inputs(), hasPythonCall);
+}
 
 // True if 'expr' calls a remote inference function anywhere.
 bool hasInferenceCall(const lp::ExprPtr& expr) {
@@ -3573,11 +3803,26 @@ size_t firstGuardedInput(lp::SpecialForm form) {
 ExprCP Translator::translateSpecialForm(
     const lp::SpecialFormExpr& expr,
     const Scope& scope,
-    LiftTarget* liftTarget) {
-  // An inference call becomes a node that runs for every row of its input and
-  // fails the query if it errors, so it cannot sit under a guarded input.
+    LiftTarget* liftTarget,
+    Name symbol) {
+  // A Python call under TRY becomes a node of its own, with the call marked
+  // null-on-error.
+  if (expr.form() == lp::SpecialForm::kTry && expr.inputAt(0)->isPythonCall()) {
+    const auto& call = *expr.inputAt(0)->as<lp::PythonCallExpr>();
+    return translatePythonCall(
+        call, scope, liftTarget, /*nullOnError=*/true, symbol);
+  }
+
+  // An inference or Python call becomes a node that runs for every row of its
+  // input and fails the query if it errors, so it cannot sit under a guarded
+  // input.
   for (size_t i = firstGuardedInput(expr.form()); i < expr.inputs().size();
        ++i) {
+    VELOX_USER_CHECK(
+        !hasPythonCall(expr.inputAt(i)),
+        "Python call is not supported under {}: {}",
+        lp::SpecialFormName::toName(expr.form()),
+        expr.inputAt(i)->toString());
     VELOX_USER_CHECK(
         !hasInferenceCall(expr.inputAt(i)),
         "Inference function is not supported under {}: {}",

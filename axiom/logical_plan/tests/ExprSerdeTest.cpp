@@ -40,13 +40,13 @@ class ExprSerdeTest : public testing::Test {
     velox::window::prestosql::registerAllWindowFunctions();
   }
 
-  // Verifies round-trip serialization by comparing toString() outputs.
+  // Verifies that an expression deserializes to one equal to the original.
   void testRoundTrip(const ExprPtr& expr) {
     auto serialized = expr->serialize();
     auto deserialized =
         velox::ISerializable::deserialize<Expr>(serialized, nullptr);
     ASSERT_NE(deserialized, nullptr);
-    EXPECT_EQ(expr->toString(), deserialized->toString());
+    EXPECT_EQ(*expr, *deserialized);
   }
 
   // Resolves an ExprApi expression and verifies round-trip serialization.
@@ -126,6 +126,22 @@ TEST_F(ExprSerdeTest, inputReference) {
 TEST_F(ExprSerdeTest, callExpr) {
   auto schema = velox::ROW({{"a", velox::BIGINT()}, {"b", velox::BIGINT()}});
   testRoundTrip(Call("plus", Col("a"), Col("b")), schema);
+}
+
+TEST_F(ExprSerdeTest, pythonCallExpr) {
+  // Pickles are binary, so the code includes bytes that are not UTF-8.
+  auto function = std::make_shared<PythonFunction>(PythonFunction{
+      .name = "classify",
+      .pickledFunction = std::string{"\x80\x05\x00\xff", 4},
+      .environmentUri = "file:///usr/bin/python3",
+      .pythonVersion = "3.12",
+      .deterministic = true,
+  });
+  testRoundTrip(
+      std::make_shared<PythonCallExpr>(
+          velox::VARCHAR(),
+          function,
+          std::make_shared<InputReferenceExpr>(velox::BIGINT(), "a")));
 }
 
 TEST_F(ExprSerdeTest, specialFormExpr) {

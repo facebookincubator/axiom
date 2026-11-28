@@ -135,6 +135,7 @@ const PlanObjectSet& NonNullOutput::get(NodeCP node) {
     case NodeType::kUnnest:
     case NodeType::kWindow:
     case NodeType::kInference:
+    case NodeType::kPythonCall:
     case NodeType::kRowNumber:
     case NodeType::kTopNRowNumber:
     case NodeType::kAssignUniqueId:

@@ -441,6 +441,13 @@ class Collector : public NodeVisitor {
     add(context, node.call());
   }
 
+  void visit(const PythonCall& node, NodeVisitorContext& context)
+      const override {
+    for (const auto& call : node.calls()) {
+      addAll(context, call.args);
+    }
+  }
+
   void visit(const RowNumber& node, NodeVisitorContext& context)
       const override {
     addAll(context, node.partitionKeys());

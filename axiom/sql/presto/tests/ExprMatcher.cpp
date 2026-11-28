@@ -57,6 +57,24 @@ void matchChildren(
   }
 }
 
+// Matches a call named 'name' with the inputs of 'actual' against an
+// expected call.
+bool matchCall(
+    const Expr& actual,
+    std::string_view name,
+    const velox::core::ExprPtr& expected) {
+  EXPECT_TRUE(expected->is(velox::core::IExpr::Kind::kCall))
+      << "Expected CallExpr.";
+  AXIOM_RETURN_FALSE_IF_FAILURE
+
+  const auto* expectedCall = expected->as<velox::core::CallExpr>();
+  EXPECT_EQ(name, expectedCall->name());
+  AXIOM_RETURN_FALSE_IF_FAILURE
+
+  matchChildren(actual.inputs(), expectedCall->inputs());
+  return !::testing::Test::HasNonfatalFailure();
+}
+
 void matchConstant(
     const ConstantExpr& actual,
     const velox::core::ConstantExpr& expected) {
@@ -471,20 +489,16 @@ bool matchImpl(const ExprPtr& actual, const velox::core::ExprPtr& expected) {
       return !::testing::Test::HasNonfatalFailure();
     }
 
-    case ExprKind::kCall: {
-      const auto* call = actual->as<CallExpr>();
+    case ExprKind::kCall:
+      return matchCall(*actual, actual->as<CallExpr>()->name(), expected);
 
-      EXPECT_TRUE(expected->is(velox::core::IExpr::Kind::kCall))
-          << "Expected CallExpr.";
-      AXIOM_RETURN_FALSE_IF_FAILURE
-
-      const auto* expectedCall = expected->as<velox::core::CallExpr>();
-      EXPECT_EQ(call->name(), expectedCall->name());
-      AXIOM_RETURN_FALSE_IF_FAILURE
-
-      matchChildren(call->inputs(), expectedCall->inputs());
-      return !::testing::Test::HasNonfatalFailure();
-    }
+    // An expected call names a Python function as python.<name>, as the
+    // expression prints.
+    case ExprKind::kPythonCall:
+      return matchCall(
+          *actual,
+          "python." + actual->as<PythonCallExpr>()->function()->name,
+          expected);
 
     case ExprKind::kSpecialForm: {
       matchSpecialForm(*actual->as<SpecialFormExpr>(), expected);

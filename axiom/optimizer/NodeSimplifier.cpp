@@ -652,6 +652,34 @@ NodeSimplifier::SimplifiedNode NodeSimplifier::make(
 }
 
 NodeSimplifier::SimplifiedNode NodeSimplifier::make(
+    PythonCall::Key key,
+    SimplifiedNode input) {
+  if (input.empty()) {
+    return emptyResult(std::move(key.outputColumns));
+  }
+  // The output keeps the input columns it had, as the input's substitutions
+  // replace them, and the results it had.
+  PlanObjectSet outputs;
+  for (ColumnCP column : key.outputColumns) {
+    ExprCP replacement = input.substitutions.apply(column, exprs_);
+    if (replacement->isColumn()) {
+      outputs.add(replacement);
+    }
+  }
+  key.input = input.node;
+  for (auto& call : key.calls) {
+    call.args = input.substitutions.apply(call.args, exprs_);
+  }
+  key.outputColumns =
+      PythonCall::outputColumnsIn(input.node, key.calls, outputs);
+  NodeCP output = builder_.make<PythonCall>(std::move(key));
+  input.substitutions =
+      visibleSubstitutions(std::move(input.substitutions), output);
+  input.node = output;
+  return input;
+}
+
+NodeSimplifier::SimplifiedNode NodeSimplifier::make(
     RowNumber::Key key,
     SimplifiedNode input) {
   if (input.empty()) {

@@ -652,6 +652,7 @@ class Pushdown : public NodeRewriter<PushdownContext> {
       case NodeType::kUnnest:
       case NodeType::kWindow:
       case NodeType::kInference:
+      case NodeType::kPythonCall:
       case NodeType::kRowNumber:
       case NodeType::kTopNRowNumber:
       case NodeType::kAssignUniqueId:
@@ -2590,6 +2591,55 @@ class Pushdown : public NodeRewriter<PushdownContext> {
                   node->call(),
                   node->result(),
                   node->outputColumns()},
+              {newInput, std::move(substitutions)});
+        });
+  }
+
+  // PythonCall: conjuncts that read a call's result stay above; the others,
+  // including nondeterministic ones, push below, so the calls run only on the
+  // rows they keep. A call is kept while something above or a later kept call
+  // reads its result; with none kept, the node is dropped.
+  NodeCP rewritePythonCall(const PythonCall* node, PushdownContext& context)
+      override {
+    PlanObjectSet results;
+    for (const auto& call : node->calls()) {
+      results.add(call.result);
+    }
+    PlanObjectSet readAbove = context.requiredAbove;
+    readAbove.unionColumns(context.pending);
+
+    QGVector<PythonCall::Call> kept;
+    PlanObjectSet needed = readAbove;
+    for (auto it = node->calls().rbegin(); it != node->calls().rend(); ++it) {
+      if (needed.contains(it->result)) {
+        kept.push_back(*it);
+        needed.unionColumns(it->args);
+      }
+    }
+    std::ranges::reverse(kept);
+
+    // The output keeps only the input columns and results read above.
+    ColumnVector outputColumns =
+        PythonCall::outputColumnsIn(node->input(), kept, readAbove);
+    PlanObjectSet readColumns;
+    for (const auto& call : kept) {
+      readColumns.unionColumns(call.args);
+    }
+    readColumns.except(results);
+
+    return rewritePerRowNode(
+        node->input(),
+        results,
+        readColumns,
+        context,
+        [&](NodeCP newInput,
+            PlanSubstitutions substitutions,
+            bool /*producedColumnsRead*/) -> NodeSimplifier::SimplifiedNode {
+          if (kept.empty()) {
+            return {newInput, std::move(substitutions)};
+          }
+          return nodeSimplifier_.make(
+              PythonCall::Key{newInput, kept, std::move(outputColumns)},
               {newInput, std::move(substitutions)});
         });
   }

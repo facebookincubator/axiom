@@ -372,6 +372,16 @@ class EmptyScanSimplifier : public NodeRewriter<SimplifiedNodeContext> {
     });
   }
 
+  NodeCP rewritePythonCall(
+      const PythonCall* node,
+      SimplifiedNodeContext& context) override {
+    return unary(node, context, [&](auto input) {
+      return simplifier_.make(
+          PythonCall::Key{node->input(), node->calls(), node->outputColumns()},
+          std::move(input));
+    });
+  }
+
   NodeCP rewriteRowNumber(const RowNumber* node, SimplifiedNodeContext& context)
       override {
     return unary(node, context, [&](auto input) {

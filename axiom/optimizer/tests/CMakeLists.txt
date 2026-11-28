@@ -141,6 +141,7 @@ if(AXIOM_BUILD_TESTING)
     TpchDataGenerator.cpp
     PlaceholderTest.cpp
     PlanTest.cpp
+    PythonCallTest.cpp
     RemoteOutputTest.cpp
     QueryGraphContextTest.cpp
     QueryWidthTest.cpp

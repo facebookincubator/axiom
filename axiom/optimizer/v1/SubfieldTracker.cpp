@@ -554,6 +554,8 @@ void SubfieldTracker::markSubfields(
 
   VELOX_USER_CHECK(
       !expr->isPlaceholder(), "Placeholders require the v2 optimizer");
+  VELOX_USER_CHECK(
+      !expr->isPythonCall(), "Python calls require the v2 optimizer");
 
   if (expr->isSpecialForm()) {
     const auto& specialForm = expr->as<lp::SpecialFormExpr>();

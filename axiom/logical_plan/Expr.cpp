@@ -20,6 +20,7 @@
 #include "axiom/logical_plan/ExprPrinter.h"
 #include "axiom/logical_plan/ExprVisitor.h"
 #include "axiom/logical_plan/LogicalPlanNode.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/serialization/Serializable.h"
 
 namespace facebook::axiom::logical_plan {
@@ -55,6 +56,11 @@ class SubqueryVisitor : public ExprVisitor {
   }
 
   void visit(const CallExpr& expr, ExprVisitorContext& context) const override {
+    visitInputs(expr, context);
+  }
+
+  void visit(const PythonCallExpr& expr, ExprVisitorContext& context)
+      const override {
     visitInputs(expr, context);
   }
 
@@ -130,6 +136,7 @@ const auto& exprKindNames() {
       {ExprKind::kSubquery, "Subquery"},
       {ExprKind::kSpecialFormAgg, "SpecialFormAgg"},
       {ExprKind::kPlaceholder, "Placeholder"},
+      {ExprKind::kPythonCall, "PythonCall"},
   };
   return kNames;
 }
@@ -273,6 +280,10 @@ std::optional<velox::Variant> ConstantExpr::tryConvert(
 
 bool CallExpr::equalTo(const Expr& other) const {
   return name_ == other.as<CallExpr>()->name_;
+}
+
+bool PythonCallExpr::equalTo(const Expr& other) const {
+  return *function_ == *other.as<PythonCallExpr>()->function_;
 }
 
 bool SpecialFormExpr::equalTo(const Expr& other) const {
@@ -472,6 +483,7 @@ void Expr::registerSerDe() {
   registry.Register("LambdaExpr", LambdaExpr::create);
   registry.Register("SubqueryExpr", SubqueryExpr::create);
   registry.Register("PlaceholderExpr", PlaceholderExpr::create);
+  registry.Register("PythonCallExpr", PythonCallExpr::create);
 }
 
 folly::dynamic PlaceholderExpr::serialize() const {
@@ -527,6 +539,33 @@ ExprPtr CallExpr::create(const folly::dynamic& obj, void* context) {
   auto inputs = deserializeInputs(obj, context);
   return std::make_shared<CallExpr>(
       std::move(type), obj["functionName"].asString(), std::move(inputs));
+}
+
+folly::dynamic PythonCallExpr::serialize() const {
+  auto obj = serializeBase("PythonCallExpr");
+  obj["functionName"] = function_->name;
+  obj["pickledFunction"] =
+      velox::encoding::Base64::encode(function_->pickledFunction);
+  obj["environmentUri"] = function_->environmentUri;
+  obj["pythonVersion"] = function_->pythonVersion;
+  obj["deterministic"] = function_->deterministic;
+  return obj;
+}
+
+// static
+ExprPtr PythonCallExpr::create(const folly::dynamic& obj, void* context) {
+  auto type = deserializeTypeField(obj);
+  auto inputs = deserializeInputs(obj, context);
+  auto function = std::make_shared<PythonFunction>(PythonFunction{
+      .name = obj["functionName"].asString(),
+      .pickledFunction =
+          velox::encoding::Base64::decode(obj["pickledFunction"].asString()),
+      .environmentUri = obj["environmentUri"].asString(),
+      .pythonVersion = obj["pythonVersion"].asString(),
+      .deterministic = obj["deterministic"].asBool(),
+  });
+  return std::make_shared<PythonCallExpr>(
+      std::move(type), std::move(function), std::move(inputs));
 }
 
 folly::dynamic SpecialFormExpr::serialize() const {
@@ -740,6 +779,12 @@ void PlaceholderExpr::accept(
 
 void CallExpr::accept(const ExprVisitor& visitor, ExprVisitorContext& context)
     const {
+  visitor.visit(*this, context);
+}
+
+void PythonCallExpr::accept(
+    const ExprVisitor& visitor,
+    ExprVisitorContext& context) const {
   visitor.visit(*this, context);
 }
 
@@ -1161,6 +1206,29 @@ CallExpr::CallExpr(
           boost::algorithm::to_upper_copy(name_)),
       "Function name cannot match special form name: {}",
       name_);
+}
+
+PythonCallExpr::PythonCallExpr(
+    velox::TypePtr type,
+    PythonFunctionPtr function,
+    std::vector<ExprPtr> inputs)
+    : Expr{ExprKind::kPythonCall, std::move(type), std::move(inputs)},
+      function_{std::move(function)} {
+  VELOX_CHECK_NOT_NULL(function_);
+  VELOX_USER_CHECK(
+      !function_->name.empty(), "Python function must have a name");
+  VELOX_USER_CHECK(
+      !function_->pickledFunction.empty(),
+      "Python function must have code: {}",
+      function_->name);
+  VELOX_USER_CHECK(
+      !function_->environmentUri.empty(),
+      "Python function must have an environment: {}",
+      function_->name);
+  VELOX_USER_CHECK(
+      !function_->pythonVersion.empty(),
+      "Python function must have a Python version: {}",
+      function_->name);
 }
 
 namespace {

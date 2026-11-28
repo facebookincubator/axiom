@@ -40,6 +40,14 @@ class ToTextVisitor : public ExprVisitor {
     appendInputs(expr, out, context);
   }
 
+  void visit(const PythonCallExpr& expr, ExprVisitorContext& context)
+      const override {
+    auto& out = toOut(context);
+
+    out << "python." << expr.function()->name;
+    appendInputs(expr, out, context);
+  }
+
   void visit(const SpecialFormExpr& expr, ExprVisitorContext& context)
       const override {
     auto& out = toOut(context);

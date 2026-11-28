@@ -725,6 +725,14 @@ class SummarizeExprVisitor : public ExprVisitor {
     visitInputs(expr, ctx);
   }
 
+  void visit(const PythonCallExpr& expr, ExprVisitorContext& ctx)
+      const override {
+    auto& myCtx = static_cast<Context&>(ctx);
+    myCtx.expressionCounts()["python call"]++;
+    myCtx.functionCounts()["python." + expr.function()->name]++;
+    visitInputs(expr, ctx);
+  }
+
   void visit(const SpecialFormExpr& expr, ExprVisitorContext& ctx)
       const override {
     auto& myCtx = static_cast<Context&>(ctx);
