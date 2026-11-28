@@ -345,9 +345,8 @@ struct CollectContext : public NodeVisitorContext {
   ColumnAccess& access;
 };
 
-// Feeds every expression one node evaluates to `ColumnAccess`. A node whose
-// only inputs are columns reads those columns whole, which is what an
-// unrecorded column already reports, so it contributes nothing here.
+// Feeds `ColumnAccess` the expressions each node evaluates and the columns it
+// produces from others. A node that passes columns through records nothing.
 class Collector : public NodeVisitor {
  public:
   void visit(const Scan& node, NodeVisitorContext& context) const override {}
@@ -407,6 +406,7 @@ class Collector : public NodeVisitor {
   }
 
   void visit(const Join& node, NodeVisitorContext& context) const override {
+    composeOutputs(context, node.sourceColumns(), node.outputColumns());
     addAll(context, node.leftKeys());
     addAll(context, node.rightKeys());
     addAll(context, node.filter());
@@ -420,6 +420,7 @@ class Collector : public NodeVisitor {
 
   void visit(const VectorSearch& node, NodeVisitorContext& context)
       const override {
+    composeOutputs(context, node.sourceColumns(), node.outputColumns());
     addAll(context, node.leftKeys());
     addAll(context, node.rightKeys());
     add(context, node.embedding());
@@ -459,7 +460,9 @@ class Collector : public NodeVisitor {
   }
 
   void visit(const EnforceSingleRow& node, NodeVisitorContext& context)
-      const override {}
+      const override {
+    composeOutputs(context, node.sourceColumns(), node.outputColumns());
+  }
 
   void visit(const AssignUniqueId& node, NodeVisitorContext& context)
       const override {}
@@ -477,6 +480,9 @@ class Collector : public NodeVisitor {
   void visit(const TableWrite& node, NodeVisitorContext& context)
       const override {
     addAll(context, node.columnExprs());
+    for (ColumnCP column : node.rowIdColumns()) {
+      add(context, column);
+    }
   }
 
   // Each column a read presents is produced from the state column at its
@@ -492,7 +498,21 @@ class Collector : public NodeVisitor {
   void visit(const FixedPoint& node, NodeVisitorContext& context)
       const override {}
 
+  // A hop array holds one value per hop, so its paths do not apply to its
+  // source. The source is read whole.
   void visit(const Repeat& node, NodeVisitorContext& context) const override {
+    const auto& sources = node.effectiveSourceColumns();
+    for (size_t i = 0; i < sources.size(); ++i) {
+      ColumnCP output = node.outputColumns()[i];
+      if (output == sources[i]) {
+        continue;
+      }
+      if (output->value().type->equivalent(*sources[i]->value().type)) {
+        accessOf(context).addProducing(sources[i], output);
+      } else {
+        add(context, sources[i]);
+      }
+    }
     addAll(context, node.startKeys());
     addAll(context, node.hopSourceKeys());
     addAll(context, node.hopDestinationKeys());
@@ -512,6 +532,18 @@ class Collector : public NodeVisitor {
 
   static void addAll(NodeVisitorContext& context, const ExprVector& exprs) {
     accessOf(context).addAll(exprs);
+  }
+
+  // Composes the paths read from each output onto its source column.
+  static void composeOutputs(
+      NodeVisitorContext& context,
+      const ColumnVector& sources,
+      const ColumnVector& outputs) {
+    for (size_t i = 0; i < outputs.size(); ++i) {
+      if (outputs[i] != sources[i]) {
+        accessOf(context).addProducing(sources[i], outputs[i]);
+      }
+    }
   }
 };
 
