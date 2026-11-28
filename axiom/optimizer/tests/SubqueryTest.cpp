@@ -3038,13 +3038,15 @@ TEST_P(SubqueryTest, existsWithNoFromClause) {
         "SELECT (SELECT count(*) FROM matched) FROM t",
         kTestConnectorId));
     auto matcher = matchScan("t")
-                       .aliases({"a"})
-                       .hashJoin(
-                           matchScan("u"),
-                           core::JoinType::kInner,
-                           {.keys = {{"a = x"}}, .filter = ""})
-                       .singleAggregation({}, {"count(*) as c"})
-                       .nestedLoopJoinInner(matchScan("t"), "")
+                       .nestedLoopJoinInner(
+                           matchScan("t")
+                               .aliases({"a"})
+                               .hashJoin(
+                                   matchScan("u"),
+                                   core::JoinType::kInner,
+                                   {.keys = {{"a = x"}}, .filter = ""})
+                               .singleAggregation({}, {"count(*) as c"}),
+                           "")
                        .build();
     AXIOM_ASSERT_PLAN_V2(plan, matcher);
   }

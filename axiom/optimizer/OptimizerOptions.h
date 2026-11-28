@@ -194,10 +194,14 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// Produce trace of plan candidates.
   uint32_t traceFlags{kTraceFlagsDefault};
 
-  /// Disable cost-based join order selection: place tables in the order they
-  /// appear in the query. Single-row uncorrelated subqueries are an exception:
-  /// they are always placed after the other tables, regardless of where they
-  /// appear in the query.
+  /// Disable cost-based join order selection: join tables in the order they
+  /// appear in the query, and keep each join's written sides. One exception in
+  /// v2: an inner join without keys takes an input of at most one row, of a
+  /// known size within `broadcastSizeLimit`, as its build side when its other
+  /// input may have more rows, as in cost-based order. v1 instead moves an
+  /// eligible global aggregation that no ON condition reads to just before
+  /// the first filter or join that reads it, or after all the tables
+  /// otherwise.
   bool syntacticJoinOrder{kSyntacticJoinOrderDefault};
 
   /// Use a greedy join-order search instead of exhaustive enumeration when
@@ -209,7 +213,9 @@ struct OptimizerOptions : public velox::config::ConfigProvider {
   /// fits in each worker's memory. Configured as a capacity string ("100MB",
   /// "1GB"); "0B" disables broadcast for keyed joins. A join with no
   /// partitioned distributed shape may still broadcast: a keyless join, or an
-  /// IN / NOT IN whose correlation has no equality.
+  /// IN / NOT IN whose correlation has no equality. The limit also bounds the
+  /// single row that an inner join without keys takes as its build side; at
+  /// "0B" that choice is off.
   int64_t broadcastSizeLimit{kBroadcastSizeLimitDefaultBytes};
 
   /// Maximum number of connected-subgraph/complement pairs the DPhyp join

@@ -800,6 +800,80 @@ SELECT sum(t1.a * (s + 1)) FROM t t1, (SELECT max(b) AS s FROM t)
 -- error_v2: division by zero
 SELECT t1.a + 10 / s FROM t t1, (SELECT min(b - 10 * a) AS s FROM t) WHERE t1.a > 5
 ----
+-- A relation of one row crossed with another relation returns one row for
+-- each row of the other relation, in either order of the two.
+SELECT s.c, r.a, r.b FROM (SELECT sum(b) AS c FROM t_no_stats) s CROSS JOIN t r
+----
+-- The same with a relation that has no statistics.
+SELECT s.c, r.a, r.b
+FROM (SELECT sum(b) AS c FROM t_no_stats) s
+CROSS JOIN t_no_stats r
+----
+-- A relation of at most one row that turns out empty: the cross join has no
+-- rows, so the count is 0.
+SELECT count(*)
+FROM (SELECT sum(b) AS c FROM t_no_stats HAVING sum(b) < 0) s
+CROSS JOIN t
+----
+-- The same relation with its row.
+SELECT count(*)
+FROM (SELECT sum(b) AS c FROM t_no_stats HAVING sum(b) > 0) s
+CROSS JOIN t
+----
+-- A join condition with a part that reads only the relation of one row.
+-- duckdb: SELECT r.a, r.b
+--   FROM (SELECT sum(b) AS c FROM t_no_stats) s, t r
+--   WHERE list_contains(generate_series(0, CAST(s.c AS BIGINT)), r.b)
+SELECT r.a, r.b
+FROM (SELECT sum(b) AS c FROM t_no_stats) s, t r
+WHERE contains(sequence(CAST(0 AS BIGINT), s.c), r.b)
+----
+-- A comparison with an expression over a scalar subquery.
+SELECT a FROM t WHERE b < (SELECT max(b) FROM t_no_stats) * 2
+----
+-- A scalar subquery with no row is NULL on every row of the other relation.
+SELECT r.a, s.x
+FROM (SELECT (SELECT b FROM t_no_stats WHERE b < 0) AS x) s
+CROSS JOIN t r
+----
+-- A scalar subquery with one row.
+SELECT r.a, s.x
+FROM (SELECT (SELECT b FROM t WHERE b = 150) AS x) s
+CROSS JOIN t r
+----
+-- A scalar subquery with five rows fails, also when the other relation is
+-- empty.
+-- error: Expected single row of input.
+SELECT s.x, r.a
+FROM (SELECT (SELECT b FROM t_no_stats) AS x) s
+CROSS JOIN (SELECT a FROM t_no_stats WHERE b < 0) r
+----
+-- A cross join with a relation of one row inside the side a LEFT JOIN pads.
+SELECT t.b, x.c
+FROM t
+LEFT JOIN (
+    SELECT s.c, r.b
+    FROM (SELECT sum(b) AS c FROM t_no_stats) s
+    CROSS JOIN t r
+    WHERE r.b > 100) x
+  ON t.b = x.b
+----
+-- Relations combined by cross products after join planning: the relation of
+-- one row joins the pair of tables.
+SELECT s.c, x.b, y.b
+FROM (SELECT sum(b) AS c FROM t_no_stats) s
+CROSS JOIN t x
+JOIN t y ON x.a = y.a
+WHERE x.b = 10 AND y.b = 40
+----
+-- The same with a condition that reads the relation of one row and a table
+-- with no statistics.
+SELECT count(*)
+FROM (SELECT max(b) AS m FROM t) s
+CROSS JOIN t_no_stats d
+CROSS JOIN t x
+JOIN t y ON x.a = y.a AND y.b > s.m
+----
 -- A left join pads the rows it does not match with NULL, which the expression
 -- above it reads.
 SELECT t1.a, coalesce(s, -1) * 2

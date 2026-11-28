@@ -39,14 +39,6 @@ class CostModel {
  public:
   virtual ~CostModel() = default;
 
-  /// Returns the estimated output bytes when `cardinality` is known and fits
-  /// `limitBytes`, or nullopt otherwise. Returns nullopt for a non-positive
-  /// limit.
-  static std::optional<float> broadcastSizeIfFits(
-      std::optional<float> cardinality,
-      float rowBytes,
-      int64_t limitBytes);
-
   /// Returns the estimated output bytes when `op` fits `limitBytes`, or nullopt
   /// otherwise.
   static std::optional<float> broadcastSizeIfFits(

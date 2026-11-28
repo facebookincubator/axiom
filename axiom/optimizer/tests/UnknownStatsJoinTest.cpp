@@ -382,6 +382,54 @@ TEST_P(UnknownStatsJoinTest, unknownCardinality) {
           .build());
 }
 
+// Without estimates, the single-row input of an inner join without keys still
+// goes on the build side.
+TEST_P(UnknownStatsJoinTest, singleRowBuild) {
+  using core::JoinType;
+  testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()))
+      ->setStats(1'000, {{"a", {.numDistinct = 1'000}}});
+  testConnector_->addTable("u", ROW("a", BIGINT()));
+  testConnector_->addTable("w", ROW("a", BIGINT()));
+  testConnector_->addTable("v", ROW({"a", "b"}, BIGINT()));
+  auto count = [] {
+    return matchScan("t").singleAggregation({}, {"count(*) as c"});
+  };
+
+  {
+    SCOPED_TRACE("missing estimate");
+    AXIOM_ASSERT_PLAN_V2(
+        plan(
+            "SELECT s.c, u.a FROM (SELECT count(*) AS c FROM t) s CROSS JOIN u"),
+        matchScan("u")
+            .aliases({"ua"})
+            .nestedLoopJoin(count(), JoinType::kInner, "")
+            .project({"c", "ua"})
+            .build());
+  }
+
+  // Without statistics, the keyed tables join as v, u, w, and the count is the
+  // build of the cross product above them.
+  {
+    SCOPED_TRACE("fallback planner");
+    AXIOM_ASSERT_PLAN_V2(
+        plan(
+            "SELECT s.c, l.a, d.a "
+            "FROM (SELECT count(*) AS c FROM t) s "
+            "CROSS JOIN u l "
+            "CROSS JOIN w d "
+            "JOIN v r ON l.a = r.a AND d.a = r.b"),
+        matchScan("v")
+            .aliases({"va", "vb"})
+            .hashJoinInner(
+                matchScan("u").aliases({"ua"}), {.keys = {{"va = ua"}}})
+            .hashJoinInner(
+                matchScan("w").aliases({"wa"}), {.keys = {{"vb = wa"}}})
+            .nestedLoopJoin(count(), JoinType::kInner, "")
+            .project({"c", "ua", "wa"})
+            .build());
+  }
+}
+
 TEST_P(UnknownStatsJoinTest, crossJoinFallback) {
   // 't' and 'u' join only through 'v', whose join-key NDV is absent, so the
   // join cost is unknown.

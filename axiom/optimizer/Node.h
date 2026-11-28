@@ -220,6 +220,10 @@ class Node : public PlanObject {
   /// global ones after.
   bool atMostOneRow() const;
 
+  /// Estimated size in bytes of one output row, or nullopt when a
+  /// variable-width output column has no average size.
+  std::optional<float> knownRowSize() const;
+
   /// Inputs in dependency order; empty for leaves. Returns a view into
   /// node-owned storage; callers must not retain it past the node's
   /// lifetime.
@@ -1607,6 +1611,19 @@ class Join : public Node {
       NodeCP left,
       NodeCP right);
 
+  /// Returns the side of an inner join without keys whose input is a
+  /// single-row build: it has at most one row, of a known size that fits
+  /// `limitBytes`, while the other input may have more rows. That input is the
+  /// join's build side and computes none of the join's filter parts, so the
+  /// build's row is the row whose size was checked. Sets no side for any other
+  /// join.
+  static Sides singleRowBuildSide(
+      velox::core::JoinType joinType,
+      bool hasKeys,
+      NodeCP left,
+      NodeCP right,
+      int64_t limitBytes);
+
   /// Returns whether replicating the right input while leaving the left input
   /// partitioned preserves results. Output rows must be tied to individual
   /// left rows, and counting joins are excluded because their build counts
@@ -2881,6 +2898,15 @@ class Exchange : public Node {
       NodeCP input,
       const Partitioning& partitioning,
       bool oneDriverPerTask);
+
+  /// Returns the estimated bytes of a broadcast copy of `cardinality` rows of
+  /// `rowBytes` each when `cardinality` is known and the copy fits
+  /// `limitBytes`, or nullopt otherwise. Returns nullopt for a non-positive
+  /// limit.
+  static std::optional<float> broadcastSizeIfFits(
+      std::optional<float> cardinality,
+      float rowBytes,
+      int64_t limitBytes);
 
   std::span<const NodeCP> inputs() const override {
     return {&input_, 1};

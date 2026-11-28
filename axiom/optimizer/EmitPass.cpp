@@ -41,20 +41,6 @@ namespace facebook::axiom::optimizer {
 
 namespace {
 
-// Size in bytes of a row of 'columns', or nullopt when the size of a
-// variable-width column is unknown.
-std::optional<float> rowSize(const ColumnVector& columns) {
-  float size{0};
-  for (ColumnCP column : columns) {
-    const auto& value = column->value();
-    if (!value.type->isFixedWidth() && !value.avgSizeInBytes.has_value()) {
-      return std::nullopt;
-    }
-    size += value.byteSize();
-  }
-  return size;
-}
-
 // True when `channels` selects every data column in order (no pruning).
 bool isIdentityChannels(
     const QGVector<velox::column_index_t>& channels,
@@ -343,7 +329,7 @@ class Emitter {
         .numRawInputRows = numRawInputRows,
         .numRawInputBytesPerRow = numRawInputBytesPerRow,
         .numSplits = numSplits,
-        .numOutputBytesPerRow = rowSize(node->outputColumns())};
+        .numOutputBytesPerRow = node->knownRowSize()};
   }
 
   // Returns `input` wrapped in a local exchange that brings all rows agreeing
