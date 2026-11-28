@@ -1188,8 +1188,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* comparison = node->as<ComparisonExpression>();
       return lp::Call(
           toFunctionName(comparison->op()),
-          toExpr(comparison->left(), options),
-          toExpr(comparison->right(), options));
+          {toExpr(comparison->left(), options),
+           toExpr(comparison->right(), options)});
     }
 
     case NodeType::kNotExpression: {
@@ -1223,17 +1223,16 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* binary = node->as<ArithmeticBinaryExpression>();
       return lp::Call(
           toFunctionName(binary->op()),
-          toExpr(binary->left(), options),
-          toExpr(binary->right(), options));
+          {toExpr(binary->left(), options), toExpr(binary->right(), options)});
     }
 
     case NodeType::kBetweenPredicate: {
       auto* between = node->as<BetweenPredicate>();
       return lp::Call(
           "between",
-          toExpr(between->value(), options),
-          toExpr(between->min(), options),
-          toExpr(between->max(), options));
+          {toExpr(between->value(), options),
+           toExpr(between->min(), options),
+           toExpr(between->max(), options)});
     }
 
     case NodeType::kInPredicate: {
@@ -1280,8 +1279,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
       const bool negated = lowersToNotIn(*comparison);
       auto in = lp::Call(
           "in",
-          toExpr(comparison->value(), options),
-          toExpr(comparison->subquery(), options));
+          {toExpr(comparison->value(), options),
+           toExpr(comparison->subquery(), options)});
       return negated ? lp::Call("not", in) : in;
     }
 
@@ -1627,8 +1626,8 @@ lp::ExprApi ExpressionPlanner::toExpr(
       auto* subscript = node->as<SubscriptExpression>();
       return lp::Call(
           "subscript",
-          toExpr(subscript->base(), options),
-          toExpr(subscript->index(), options));
+          {toExpr(subscript->base(), options),
+           toExpr(subscript->index(), options)});
     }
 
     case NodeType::kIsNullPredicate:
