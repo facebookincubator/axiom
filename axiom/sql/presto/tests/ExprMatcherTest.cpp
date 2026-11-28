@@ -179,10 +179,28 @@ TEST_F(ExprMatcherTest, functionNameMismatch) {
       call(BIGINT(), "minus", {field(BIGINT(), "a"), field(BIGINT(), "b")});
   EXPECT_NONFATAL_FAILURE(
       ExprMatcher::match(actual, parseExpr("a + b")),
-      R"(  call->name()
+      R"(  name
     Which is: "minus"
   expectedCall->name()
     Which is: "plus")");
+}
+
+TEST_F(ExprMatcherTest, pythonCall) {
+  auto actual = std::make_shared<PythonCallExpr>(
+      BIGINT(),
+      std::make_shared<PythonFunction>(PythonFunction{
+          .name = "classify",
+          .pickledFunction = "pickle",
+          .environmentUri = "file:///usr/bin/python3",
+          .pythonVersion = "3.12",
+      }),
+      field(BIGINT(), "a"));
+  ExprMatcher::match(actual, parseExpr("\"python.classify\"(a)"));
+
+  // A SQL function of the same name does not match.
+  EXPECT_NONFATAL_FAILURE(
+      ExprMatcher::match(actual, parseExpr("classify(a)")),
+      R"(Which is: "python.classify")");
 }
 
 TEST_F(ExprMatcherTest, specialFormAnd) {

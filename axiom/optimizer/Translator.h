@@ -403,9 +403,56 @@ class Translator {
   }
 
   // Lifts 'call' into an `Inference` node on 'liftTarget' and returns the
-  // column carrying its result. Velox evaluates a remote inference call in its
-  // own operator, so it cannot stay inside the expression that reads it.
-  ExprCP liftInferenceCall(const Call* call, LiftTarget* liftTarget);
+  // column carrying its result, named 'symbol' if not null. Velox evaluates a
+  // remote inference call in its own operator, so it cannot stay inside the
+  // expression that reads it.
+  ExprCP
+  liftInferenceCall(const Call* call, LiftTarget* liftTarget, Name symbol);
+
+  // Translates a Python call and lifts it into a `PythonCall` node on
+  // 'liftTarget', returning the column carrying its result, named 'symbol' if
+  // not null. 'nullOnError' is true for a call directly under TRY.
+  ExprCP translatePythonCall(
+      const logical_plan::PythonCallExpr& expr,
+      const Scope& scope,
+      LiftTarget* liftTarget,
+      bool nullOnError,
+      Name symbol);
+
+  // Appends the calls of 'expr', a Python call under TRY, or one 'nested' in
+  // the arguments of such a call, to 'calls': first the Python calls among
+  // its arguments, which nest in it under the same TRY and must run in the
+  // environment of 'outer', then the call itself. Other arguments are
+  // computed below the node, outside the TRY, so they must be columns or
+  // constants. Returns the call's result, named 'symbol' if not null.
+  ColumnCP addTryCalls(
+      const logical_plan::PythonCallExpr& expr,
+      const logical_plan::PythonFunction& outer,
+      const Scope& scope,
+      bool nested,
+      Name symbol,
+      QGVector<PythonCall::Call>& calls);
+
+  // Returns a call of 'expr''s function on 'args', with a new result column,
+  // named 'symbol' if not null. Equal functions share one object, and the
+  // calls of a function with one result type share one name, unique in the
+  // query.
+  PythonCall::Call makePythonCall(
+      const logical_plan::PythonCallExpr& expr,
+      ExprVector args,
+      bool nullOnError,
+      bool nested,
+      Name symbol);
+
+  // Lifts 'calls', the calls of one Python call, the call itself last, into a
+  // `PythonCall` node on 'liftTarget', and returns the call's result. Reuses
+  // the result of an equal deterministic call already lifted where the target
+  // can read it. The calls join the `PythonCall` node on top when it runs in
+  // the same environment and Python version and every read of its results
+  // passes `PythonCall::canRead`; otherwise they start a node above.
+  ExprCP liftPythonCalls(
+      QGVector<PythonCall::Call> calls,
+      LiftTarget& liftTarget);
 
   NodeCP maybeWrapInWindow(
       NodeCP input,
@@ -482,10 +529,15 @@ class Translator {
   // contain a subquery. Passing `nullptr` declares "no lift possible
   // here" and the lift path throws if a subquery is encountered
   // (e.g., row-literal expressions in `VALUES`).
+  //
+  // 'symbol', if not null, names the result of a Python or inference call
+  // that 'expr' is, or of a Python call under TRY: the call's node then
+  // produces the column under that name.
   ExprCP translateExpr(
       const logical_plan::Expr& expr,
       const Scope& scope,
-      LiftTarget* liftTarget);
+      LiftTarget* liftTarget,
+      Name symbol = nullptr);
   ExprCP translateInputReference(
       const logical_plan::InputReferenceExpr& expr,
       const Scope& scope);
@@ -494,11 +546,13 @@ class Translator {
   ExprCP translateCall(
       const logical_plan::CallExpr& expr,
       const Scope& scope,
-      LiftTarget* liftTarget);
+      LiftTarget* liftTarget,
+      Name symbol);
   ExprCP translateSpecialForm(
       const logical_plan::SpecialFormExpr& expr,
       const Scope& scope,
-      LiftTarget* liftTarget);
+      LiftTarget* liftTarget,
+      Name symbol);
 
   // Translates each conjunct of 'predicate', a filter or a join condition.
   ExprVector translatePredicate(
@@ -731,6 +785,38 @@ class Translator {
   // more than once is evaluated once. A column is reusable only where the
   // lift target can read it.
   folly::F14FastMap<const Call*, ColumnCP> inferenceColumns_;
+
+  // A Python call, for finding a call already lifted.
+  struct PythonCallKey {
+    const logical_plan::PythonFunction* function{nullptr};
+    const velox::Type* resultType{nullptr};
+    ExprVector args;
+    bool nullOnError{false};
+
+    bool operator==(const PythonCallKey& other) const = default;
+  };
+
+  // Hashes the function, result type, arguments and TRY of a call.
+  struct PythonCallKeyHash {
+    size_t operator()(const PythonCallKey& key) const;
+  };
+
+  // Result column of every deterministic Python call already lifted, so a
+  // call appearing more than once is evaluated once. A column is reusable
+  // only where the lift target can read it.
+  folly::F14FastMap<PythonCallKey, ColumnCP, PythonCallKeyHash> pythonColumns_;
+
+  // Name of the calls of each Python function with each result type, unique in
+  // the query.
+  folly::F14FastMap<
+      std::pair<const logical_plan::PythonFunction*, const velox::Type*>,
+      Name>
+      pythonCallNames_;
+
+  // The query's distinct Python functions, by name. Equal functions share one
+  // object, so calls of one function compare equal.
+  folly::F14FastMap<std::string, std::vector<logical_plan::PythonFunctionPtr>>
+      pythonFunctions_;
 
   // Depth of lambda bodies being translated. A call inside one runs per
   // element, so it cannot be lifted to a node.

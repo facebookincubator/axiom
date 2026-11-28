@@ -165,6 +165,13 @@ void forEachExpressionInNode(NodeCP node, Visit&& visit) {
     case NodeType::kInference:
       visit(node->as<Inference>()->call());
       break;
+    case NodeType::kPythonCall:
+      for (const auto& call : node->as<PythonCall>()->calls()) {
+        for (ExprCP arg : call.args) {
+          visit(arg);
+        }
+      }
+      break;
     case NodeType::kWindow: {
       const Window* window = node->as<Window>();
       for (ExprCP key : window->partitionKeys()) {

@@ -34,6 +34,10 @@
 #include "axiom/optimizer/RelationalProperties.h"
 #include "velox/core/PlanNode.h"
 
+namespace facebook::axiom::logical_plan {
+struct PythonFunction;
+} // namespace facebook::axiom::logical_plan
+
 /// Tree-IR for the optimizer.
 ///
 /// Nodes are immutable and, like all `PlanObject`s, arena-allocated from the
@@ -61,6 +65,7 @@ enum class NodeType : uint8_t {
   kIndexLookupJoin,
   kWindow,
   kInference,
+  kPythonCall,
   kRowNumber,
   kTopNRowNumber,
   kApply,
@@ -2143,6 +2148,121 @@ class Inference : public Node {
   const NodeCP input_;
   const ExprCP call_;
   const ColumnCP result_;
+};
+
+/// Evaluates Python function calls, such as Python UDFs, for every input row.
+/// Velox runs them in a Python worker process, in its own operator, so they
+/// cannot stay inside a `Project`. Output schema is some of the input
+/// columns, followed by some of the results.
+///
+///   PythonCall(score := score(comment),
+///              label := label(score))
+///
+/// A call reads columns of `input`, literals, or the results of earlier calls
+/// in the same node. Velox nests the call producing a result in each call
+/// reading it, so the worker passes results from one call to the next; they
+/// return to Velox only if read above. A call reads a result only when nesting
+/// keeps both calls' meaning: see `canRead`.
+///
+/// Invariants:
+/// - There is at least one call.
+/// - All calls run in one environment with one Python version.
+/// - Each call's arguments are columns of `input`, literals, or results of
+///   earlier calls it `canRead`.
+/// - Calls of one name call one function with one result type.
+/// - A `nested` call is read by exactly one later call and is not an output.
+/// - `outputColumns` is some of `input`'s columns, in input order, followed by
+///   some of the results, in call order; a result left out is read by a later
+///   call.
+class PythonCall : public Node {
+ public:
+  /// One call of a Python function.
+  struct Call {
+    /// The function, owned by the logical plan, which outlives optimization.
+    const logical_plan::PythonFunction* function{nullptr};
+    /// The function's key in the Velox node, shared by the calls of
+    /// 'function' with this result type and unique in the query.
+    Name name{nullptr};
+    /// Columns of the node's input, literals, or results of earlier calls.
+    ExprVector args;
+    /// Column carrying the call's result; its type is the call's result type.
+    ColumnCP result{nullptr};
+    /// True for a call under TRY: a row the call fails on gets NULL.
+    bool nullOnError{false};
+    /// True for a call nested in the arguments of a call under TRY, as
+    /// `score` in `try(label(score(x)))`. It exists to be nested in that call,
+    /// whose TRY covers it.
+    bool nested{false};
+
+    bool operator==(const Call& other) const = default;
+  };
+
+  /// True if 'reader' may read the result of 'producer' in the same node,
+  /// which nests 'producer' in 'reader'. A TRY covers the calls nested in its
+  /// call, so a `nested` call counts as under TRY:
+  /// - a `nested` producer only by a reader under TRY;
+  /// - otherwise, only when neither is under TRY, and only from a
+  ///   deterministic producer, since each reader nests a copy that Velox runs
+  ///   separately.
+  static bool canRead(const Call& reader, const Call& producer);
+
+  /// Returns the columns of 'input', then the results of 'calls', that are in
+  /// 'columns', each in order: the output columns of a node of 'calls' over
+  /// 'input' that outputs 'columns'.
+  static ColumnVector outputColumnsIn(
+      NodeCP input,
+      const QGVector<Call>& calls,
+      const PlanObjectSet& columns);
+
+  struct Key {
+    /// Input node.
+    NodeCP input;
+    /// The calls, each after the calls it reads.
+    QGVector<Call> calls;
+    /// Output columns: some of `input`'s columns, in input order, then some
+    /// of the results, in call order.
+    ColumnVector outputColumns;
+  };
+
+  /// Transparent hasher for interning `PythonCall`s by identity.
+  struct KeyHash {
+    using is_transparent = void;
+    size_t operator()(const PythonCall* node) const;
+    size_t operator()(const Key& key) const;
+  };
+
+  /// Transparent equality for interning `PythonCall`s by identity.
+  struct KeyEq {
+    using is_transparent = void;
+    bool operator()(const PythonCall* left, const PythonCall* right) const;
+    bool operator()(const Key& key, const PythonCall* node) const;
+    bool operator()(const PythonCall* node, const Key& key) const;
+  };
+
+  explicit PythonCall(Key key);
+
+  NodeCP input() const {
+    return input_;
+  }
+
+  const QGVector<Call>& calls() const {
+    return calls_;
+  }
+
+  std::span<const NodeCP> inputs() const override {
+    return {&input_, 1};
+  }
+
+  Partitioning globalPartition(
+      std::span<const Partitioning> inputPartitions,
+      Builder& builder) const override;
+
+  void accept(const NodeVisitor& visitor, NodeVisitorContext& context)
+      const override;
+
+ private:
+  const NodeCP input_;
+  const QGVector<Call> calls_;
 };
 
 /// Evaluates one or more window function calls. Output schema is input

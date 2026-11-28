@@ -121,6 +121,9 @@ class NodeSimplifier {
   /// Builds an Inference after substituting its call arguments.
   SimplifiedNode make(Inference::Key key, SimplifiedNode input);
 
+  /// Builds a PythonCall after substituting its call arguments.
+  SimplifiedNode make(PythonCall::Key key, SimplifiedNode input);
+
   /// Builds a RowNumber after removing redundant partition keys.
   SimplifiedNode make(RowNumber::Key key, SimplifiedNode input);
 

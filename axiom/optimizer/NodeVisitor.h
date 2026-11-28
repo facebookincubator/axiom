@@ -57,6 +57,8 @@ class NodeVisitor {
 
   virtual void visit(const Inference& node, NodeVisitorContext& context)
       const = 0;
+  virtual void visit(const PythonCall& node, NodeVisitorContext& context)
+      const = 0;
   virtual void visit(const RowNumber& node, NodeVisitorContext& context)
       const = 0;
   virtual void visit(const TopNRowNumber& node, NodeVisitorContext& context)

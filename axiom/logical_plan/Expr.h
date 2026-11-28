@@ -36,6 +36,7 @@ enum class ExprKind {
   kSubquery = 7,
   kSpecialFormAgg = 8,
   kPlaceholder = 9,
+  kPythonCall = 10,
 };
 
 AXIOM_DECLARE_ENUM_NAME(ExprKind);
@@ -130,15 +131,19 @@ class Expr : public velox::ISerializable {
     return kind_ == ExprKind::kPlaceholder;
   }
 
+  bool isPythonCall() const {
+    return kind_ == ExprKind::kPythonCall;
+  }
+
   /// Returns true if the expression appears constant such that it can be
   /// evaluated without any runtime dependencies. Literals and some calls
   /// with constant inputs are constant foldable while input references,
-  /// subqueries, and window functions are not.
+  /// placeholders, Python calls, subqueries, and window functions are not.
   bool looksConstant() const {
     if (isConstant()) {
       return true;
     }
-    if (isInputReference() || isPlaceholder()) {
+    if (isInputReference() || isPlaceholder() || isPythonCall()) {
       return false;
     }
     for (const auto& input : inputs_) {
@@ -359,6 +364,84 @@ class CallExpr : public Expr {
 };
 
 using CallExprPtr = std::shared_ptr<const CallExpr>;
+
+/// A Python function, such as a Python UDF: its code and the environment it
+/// runs in.
+struct PythonFunction {
+  /// The function's name, for EXPLAIN and error messages.
+  std::string name;
+
+  /// The function's code: a pickle of a callable, or of a tuple whose first
+  /// item is the callable, as cloudpickle writes.
+  std::string pickledFunction;
+
+  /// URI of the Python environment the function runs in, such as
+  /// file:///usr/bin/python3.
+  std::string environmentUri;
+
+  /// The Python major.minor version the function was pickled with, such as
+  /// 3.12.
+  std::string pythonVersion;
+
+  /// Whether the function returns the same result for the same arguments.
+  bool deterministic{false};
+
+  bool operator==(const PythonFunction& other) const = default;
+};
+
+using PythonFunctionPtr = std::shared_ptr<const PythonFunction>;
+
+/// A call of a Python function. The function runs in a Python worker process,
+/// not in Velox's expression evaluation, so the optimizer never evaluates or
+/// folds it. Its inputs are its arguments.
+///
+///   auto classify = std::make_shared<PythonFunction>(PythonFunction{
+///       .name = "classify",
+///       .pickledFunction = pickled,
+///       .environmentUri = "file:///usr/bin/python3",
+///       .pythonVersion = "3.12",
+///   });
+///   std::make_shared<PythonCallExpr>(VARCHAR(), classify, text);
+///
+/// Invariants:
+/// - 'function' is not null.
+/// - The function's name, code, environment URI and Python version are not
+///   empty.
+class PythonCallExpr : public Expr {
+ public:
+  /// @param type Return type of the call.
+  /// @param function The function to call.
+  /// @param inputs Zero or more arguments.
+  PythonCallExpr(
+      velox::TypePtr type,
+      PythonFunctionPtr function,
+      std::vector<ExprPtr> inputs);
+
+  template <typename... T>
+  PythonCallExpr(velox::TypePtr type, PythonFunctionPtr function, T... inputs)
+      : PythonCallExpr{
+            std::move(type),
+            std::move(function),
+            std::vector<ExprPtr>{std::forward<ExprPtr>(inputs)...}} {}
+
+  const PythonFunctionPtr& function() const {
+    return function_;
+  }
+
+  void accept(const ExprVisitor& visitor, ExprVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  static ExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  bool equalTo(const Expr& other) const override;
+
+  const PythonFunctionPtr function_;
+};
+
+using PythonCallExprPtr = std::shared_ptr<const PythonCallExpr>;
 
 enum class SpecialForm {
   /// Logical AND. Requires two or more boolean inputs. Commutative. The result

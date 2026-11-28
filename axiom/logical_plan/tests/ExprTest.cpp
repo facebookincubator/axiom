@@ -93,6 +93,56 @@ TEST_F(ExprTest, looksConstant) {
   testLooksConstant(Call("plus", Placeholder(BIGINT(), 1), Lit(1LL)), false);
 }
 
+TEST_F(ExprTest, pythonCall) {
+  const PythonFunction classify{
+      .name = "classify",
+      .pickledFunction = "pickle",
+      .environmentUri = "file:///usr/bin/python3",
+      .pythonVersion = "3.12",
+  };
+  const auto makeCall = [](PythonFunction function, ExprPtr input) {
+    return std::make_shared<PythonCallExpr>(
+        VARCHAR(),
+        std::make_shared<PythonFunction>(std::move(function)),
+        std::move(input));
+  };
+  const auto constant =
+      std::make_shared<ConstantExpr>(BIGINT(), std::make_shared<Variant>(1LL));
+
+  const auto call = makeCall(classify, constant);
+  EXPECT_EQ(call->toString(), "python.classify(1)");
+
+  // The optimizer cannot evaluate a Python call, even of constants.
+  EXPECT_FALSE(call->looksConstant());
+  EXPECT_FALSE(
+      std::make_shared<CallExpr>(VARCHAR(), "concat", call, call)
+          ->looksConstant());
+
+  EXPECT_EQ(*call, *makeCall(classify, constant));
+  auto otherCode = classify;
+  otherCode.pickledFunction = "other";
+  EXPECT_NE(*call, *makeCall(otherCode, constant));
+
+  auto noName = classify;
+  noName.name.clear();
+  VELOX_ASSERT_USER_THROW(
+      makeCall(noName, constant), "Python function must have a name");
+  auto noCode = classify;
+  noCode.pickledFunction.clear();
+  VELOX_ASSERT_USER_THROW(
+      makeCall(noCode, constant), "Python function must have code: classify");
+  auto noEnvironment = classify;
+  noEnvironment.environmentUri.clear();
+  VELOX_ASSERT_USER_THROW(
+      makeCall(noEnvironment, constant),
+      "Python function must have an environment: classify");
+  auto noVersion = classify;
+  noVersion.pythonVersion.clear();
+  VELOX_ASSERT_USER_THROW(
+      makeCall(noVersion, constant),
+      "Python function must have a Python version: classify");
+}
+
 TEST_F(ExprTest, conjunctInputTypes) {
   auto schema = ROW({"p", "a"}, {BOOLEAN(), BIGINT()});
   auto resolve = [&](const ExprApi& expr, const velox::TypeCoercer* coercer) {

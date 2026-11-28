@@ -15,6 +15,8 @@
  */
 
 #include "axiom/optimizer/NodePrinter.h"
+
+#include "axiom/logical_plan/Expr.h"
 #include "axiom/optimizer/TableAccessHandle.h"
 
 #include <fmt/format.h>
@@ -334,6 +336,22 @@ class Printer : public NodeVisitor {
     header(ctx, node);
     ctx.out << spaces(ctx.indent + 2) << node.result()->toString()
             << " := " << node.call()->toString() << '\n';
+    visitInputs(node, ctx);
+  }
+
+  void visit(const PythonCall& node, NodeVisitorContext& context)
+      const override {
+    auto& ctx = static_cast<Context&>(context);
+    header(ctx, node);
+    for (const auto& call : node.calls()) {
+      ctx.out << spaces(ctx.indent + 2) << call.result->toString()
+              << " := " << (call.nullOnError ? "TRY " : "")
+              << call.function->name << '(';
+      for (size_t i = 0; i < call.args.size(); ++i) {
+        ctx.out << (i > 0 ? ", " : "") << call.args[i]->toString();
+      }
+      ctx.out << ")\n";
+    }
     visitInputs(node, ctx);
   }
 
