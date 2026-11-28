@@ -1004,6 +1004,202 @@ TEST_P(SubfieldTest, recursiveCte) {
                             matchHiveScan("t", {{"a", {"[1]"}}}).project()))
             .build());
   }
+
+  // Tables for the cases below.
+  runCtas(
+      "CREATE TABLE u AS "
+      "SELECT CAST(ROW(f, g) AS ROW(f BIGINT, g BIGINT)) AS s "
+      "FROM (VALUES (1, 10), (2, 20)) AS x(f, g)");
+  runCtas(
+      "CREATE TABLE v AS "
+      "SELECT CAST(ROW(f, g) AS ROW(f BIGINT, g BIGINT)) AS s, "
+      "  CAST(k AS BIGINT) AS k "
+      "FROM (VALUES (3, 30, 0), (4, 40, 1)) AS x(f, g, k)");
+  runCtas(
+      "CREATE TABLE w AS "
+      "SELECT CAST(ROW(5, 50) AS ROW(f BIGINT, g BIGINT)) AS s");
+  runCtas(
+      "CREATE TABLE pair AS "
+      "SELECT CAST(ROW(1, 10) AS ROW(f BIGINT, g BIGINT)) AS a, "
+      "  CAST(ROW(2, 20) AS ROW(f BIGINT, g BIGINT)) AS b");
+  runCtas(
+      "CREATE TABLE triple AS "
+      "SELECT CAST(ROW(f, g, h) AS ROW(f BIGINT, g BIGINT, h BIGINT)) AS s, "
+      "  CAST(k AS BIGINT) AS k "
+      "FROM (VALUES (3, 30, 300, 0), (4, 40, 400, 1)) AS x(f, g, h, k)");
+  runCtas("CREATE TABLE gate AS SELECT CAST(1 AS BIGINT) AS k");
+
+  {
+    SCOPED_TRACE("columns swapped behind a padded join");
+    // The step swaps the two columns, so the anchor's scan reads both whole,
+    // although the step and the query read one field of each.
+    auto logicalPlan = parseSelect(
+        "WITH RECURSIVE r(x, y, d) AS ("
+        "  SELECT a, b, CAST(0 AS BIGINT) FROM pair"
+        "  UNION ALL"
+        "  SELECT step.y, step.x, step.d + 1"
+        "  FROM ("
+        "    SELECT q.x, q.y, q.d"
+        "    FROM gate"
+        "    LEFT JOIN ("
+        "      SELECT x, y, d"
+        "      FROM r"
+        "      WHERE d < 1 AND y.g > 0"
+        "    ) q ON gate.k = q.d + 1"
+        "    WHERE coalesce(q.d, -1) >= 0"
+        "  ) step)"
+        " SELECT x.f, y.g, d FROM r");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchFixedPoint(startFixedPoint("r")
+                            .outputState(
+                                /*append=*/true,
+                                matchHiveScan("pair", {{"a", {}}, {"b", {}}})
+                                    .project({"a", "b", "0"}))
+                            .vectorState("gate", matchHiveScan("gate")))
+            .aliases({"x", "y", "d"})
+            .project({"x.f", "y.g", "d"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("a state column moved by a join");
+    // The join moves the state's column x to y's position, so the anchor's
+    // scan reads x whole, although the step reads only x.f.
+    auto logicalPlan = parseSelect(
+        "WITH RECURSIVE r(x, y) AS ("
+        "  SELECT u.s AS x, w.s AS y FROM u, w"
+        "  UNION ALL"
+        "  SELECT v.s, r.x"
+        "  FROM v"
+        "  JOIN r ON v.k = r.x.f)"
+        " SELECT y.g FROM r");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchFixedPoint(
+            startFixedPoint("r")
+                .outputState(
+                    /*append=*/true,
+                    matchHiveScan("u", {{"s", {}}})
+                        .nestedLoopJoinInner(matchHiveScan("w")))
+                .hashTableState(
+                    matchHiveScan("v").aliases({"s", "k"}).project({"k", "s"})))
+            .aliases({"x", "y"})
+            .project({"y.g"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("a replace loop's convergence");
+    // The step passes the state through and reads s.f, and the convergence
+    // reads s.g, so the anchor's scan reads those two fields and not s.h.
+    auto context = makeContext();
+    auto anchor = lp::PlanBuilder(context).tableScan("triple");
+    auto state = [&]() {
+      return lp::PlanBuilder(context).fixedPointState("r", anchor);
+    };
+    auto logicalPlan =
+        lp::PlanBuilder(anchor)
+            .iterateUntil(
+                "r",
+                state().filter("(s).f > 0"),
+                state().aggregate({}, {"max(s.g) AS m"}).project({"m > 0"}),
+                /*maxIterations=*/3,
+                /*failAtBound=*/false,
+                /*keyColumns=*/{"k"})
+            .project({"s.f AS f"})
+            .build();
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchFixedPoint(
+            startFixedPoint("r").outputState(
+                /*append=*/false,
+                matchHiveScan("triple", {{"s", {".f", ".g"}}, {"k", {}}})))
+            .project({"s.f"})
+            .build());
+    checkSame(logicalPlan, {makeRowVector({makeFlatVector<int64_t>({3, 4})})});
+  }
+}
+
+// Collecting an edge property into an array reads the property whole. An
+// optional subpath keeps the property's type, so the scan reads only the part
+// the query names.
+TEST_P(SubfieldTest, walkProperty) {
+  // v1 does not implement graph queries.
+  if (!useV2_) {
+    return;
+  }
+
+  createTable(
+      "person",
+      {makeRowVector(
+          {"id", "name"},
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<std::string>({"a", "b", "c"})})});
+  runCtas(
+      "CREATE TABLE knows AS "
+      "SELECT CAST(src AS BIGINT) AS src, CAST(dst AS BIGINT) AS dst, "
+      "  CAST(ROW(f, g) AS ROW(f BIGINT, g BIGINT)) AS p, "
+      "  CAST(ARRAY[f, g] AS ARRAY(BIGINT)) AS tags "
+      "FROM (VALUES (1, 2, 12, 120), (2, 3, 23, 230)) AS x(src, dst, f, g)");
+  const std::string graph =
+      "WITH GRAPH g AS ("
+      "  VERTEX TABLES (person KEY (id) LABEL Person PROPERTIES (id, name))"
+      "  EDGE TABLES (knows KEY (src, dst)"
+      "    SOURCE KEY (src) REFERENCES person (id)"
+      "    DESTINATION KEY (dst) REFERENCES person (id) LABEL Knows))";
+
+  {
+    SCOPED_TRACE("hop array");
+    auto logicalPlan = parseSelect(
+        graph +
+        " SELECT ps[1].f"
+        " FROM GRAPH_TABLE (g"
+        "  MATCH (a IS Person) -[k IS Knows]->{1,2} (b IS Person)"
+        "  COLUMNS (k.p AS ps))");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchFixedPoint(
+            startFixedPoint("walk")
+                .outputState(
+                    /*append=*/true,
+                    matchHiveScan("person").project({"id", "[]", "0"}))
+                .hashTableState(matchHiveScan(
+                    "knows", {{"src", {}}, {"dst", {}}, {"p", {}}})))
+            .aliases({"vertex", "ps", "hops"})
+            .filter("hops >= 1")
+            .hashJoinInner(matchHiveScan("person"))
+            .project({"ps[1].f"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("optional subpath");
+    auto logicalPlan = parseSelect(
+        graph +
+        " SELECT t"
+        " FROM GRAPH_TABLE (g"
+        "  MATCH (a IS Person)"
+        "    ((x IS Person) -[e IS Knows]-> (m IS Person))? (b IS Person)"
+        "  COLUMNS (e.tags[1] AS t))");
+    AXIOM_ASSERT_PLAN(
+        toSingleNodePlan(logicalPlan),
+        matchHiveScan("person")
+            .project({"id", "null"})
+            .localPartition(
+                matchHiveScan("person")
+                    .hashJoinInner(
+                        matchHiveScan(
+                            "knows",
+                            {{"src", {}}, {"dst", {}}, {"tags", {"[1]"}}})
+                            .hashJoinInner(matchHiveScan("person"))
+                            .hashJoinInner(matchHiveScan("person")))
+                    .project({"dst", "tags"}))
+            .aliases({"vertex", "tags"})
+            .hashJoinInner(matchHiveScan("person"))
+            .project({"tags[1]"})
+            .build());
+  }
 }
 
 TEST_P(SubfieldTest, pushedFilter) {

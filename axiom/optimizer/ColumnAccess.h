@@ -51,13 +51,17 @@ namespace facebook::axiom::optimizer {
 /// Absence of a column is not "reads nothing" — a column never passed to
 /// `add` has no entry, and `subfieldsOf` reports the whole column for it.
 ///
-/// A node that produces a column from an expression -- a projection, a union
-/// leg -- composes the paths its consumers read with that expression.
-/// Elsewhere a path is recorded against the column the expression reads rather
-/// than the one it produces, which yields a prefix of the true path. A prefix
-/// covers the paths below it, so an uncomposed read is wider than needed and
-/// never narrower — which is what lets the nodes that rename columns leave
-/// composition alone.
+/// A node that produces a column from another composes its consumers' paths
+/// onto the source column. A projection and a union leg compose through their
+/// expressions. A join, a vector search, a walk, a single-row check and a read
+/// of a recursive loop's state compose each output that copies a source column.
+/// Without this, the source would keep only its other readers' paths. A walk's
+/// hop array is the exception: it reads its source whole.
+///
+/// The pass that plans a recursive loop composes the loop's state onto its
+/// anchor. A step output that does not pass a state column through at its own
+/// position is read whole. `addSubtree` never meets a loop, because a loop
+/// cannot sit inside another loop's step or convergence.
 ///
 /// The caller must hold to all of:
 ///  - `add(const Node&)` runs on each node from the root down, so a node

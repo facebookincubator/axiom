@@ -1742,13 +1742,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // kind's match semantics. Neither path moves a nondeterministic conjunct
   // into an input, which would evaluate it once for rows the join multiplies.
   NodeCP rewriteJoin(const Join* node, PushdownContext& context) override {
-    for (size_t i = 0; i < node->outputColumns().size(); ++i) {
-      if (node->outputColumns()[i] != node->sourceColumns()[i]) {
-        access_.addProducing(
-            node->sourceColumns()[i], node->outputColumns()[i]);
-      }
-    }
-
     if (node->joinType() != velox::core::JoinType::kInner &&
         node->joinType() != velox::core::JoinType::kLeft &&
         node->joinType() != velox::core::JoinType::kRight &&
@@ -1958,13 +1951,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
           session_,
           evaluator_);
       return rewrite(plan, context);
-    }
-
-    for (size_t i = 0; i < node->outputColumns().size(); ++i) {
-      if (node->outputColumns()[i] != node->sourceColumns()[i]) {
-        access_.addProducing(
-            node->sourceColumns()[i], node->outputColumns()[i]);
-      }
     }
 
     auto split = splitSearchPending(
@@ -2934,6 +2920,25 @@ class Pushdown : public NodeRewriter<PushdownContext> {
     // otherwise, a rejected seed can still produce matching descendants.
     // Record the step's paths before the anchor's scan negotiates; the
     // descent reaches them only afterwards.
+    //
+    // Nothing composes the state's paths onto the step's outputs, so each
+    // output is read whole. The exception is an output that passes a state
+    // column through at its own position: the state's paths already reach the
+    // anchor.
+    PlanObjectSet passedThrough;
+    WorkingTable::forEachRead(
+        node->step(), node->name(), [&](const WorkingTable& read) {
+          for (size_t i = 0; i < read.outputColumns().size(); ++i) {
+            if (read.outputColumns()[i] == node->step()->outputColumns()[i]) {
+              passedThrough.add(read.outputColumns()[i]);
+            }
+          }
+        });
+    for (ColumnCP output : node->step()->outputColumns()) {
+      if (!passedThrough.contains(output)) {
+        access_.add(output);
+      }
+    }
     access_.addSubtree(*node->step());
     if (node->convergence() != nullptr) {
       access_.addSubtree(*node->convergence());
@@ -2993,11 +2998,6 @@ class Pushdown : public NodeRewriter<PushdownContext> {
   // stays above.
   NodeCP rewriteRepeat(const Repeat* node, PushdownContext& context) override {
     const auto& sources = node->effectiveSourceColumns();
-    for (size_t i = 0; i < sources.size(); ++i) {
-      if (node->outputColumns()[i] != sources[i]) {
-        access_.addProducing(sources[i], node->outputColumns()[i]);
-      }
-    }
     const auto startColumns =
         PlanObjectSet::fromObjects(node->start()->outputColumns());
     const auto endColumns = node->end() != nullptr
