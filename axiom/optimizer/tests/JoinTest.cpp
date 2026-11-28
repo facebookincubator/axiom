@@ -631,6 +631,296 @@ TEST_P(JoinTest, filterBetweenJoins) {
   }
 }
 
+// A filter above a join tree runs once the joins it reads are done, as a filter
+// between two joins does. It stays above when a conjunct is nondeterministic,
+// when it reads the mark of the join below it or a column of an Unnest placed
+// above the joins, and when join planning cannot cost an order and keeps the
+// written one.
+TEST_P(JoinTest, filterAboveJoins) {
+  // Each row of 't' matches 5,000 rows of 'r', so the joins put the LEFT join
+  // first.
+  addTableWithStats("t", {"k", "rk", "x"}, 1'000, {{"rk", 10}, {"x", 100}});
+  addTableWithStats("r", {"rk", "y"}, 50'000, {{"rk", 10}});
+  addTableWithStats("u", {"k", "v"}, 1'000);
+
+  {
+    SCOPED_TRACE("Moves");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM t "
+            "JOIN r ON r.rk = t.rk "
+            "LEFT JOIN u ON u.k = t.k "
+            "WHERE coalesce(u.v, 0) < t.x"),
+        matchScan("r")
+            .hashJoin(
+                matchScan("t")
+                    .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+                    .filter("x > coalesce(v, 0)"),
+                velox::core::JoinType::kInner)
+            .project({"k"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("A nondeterministic conjunct");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM t "
+            "JOIN r ON r.rk = t.rk "
+            "LEFT JOIN u ON u.k = t.k "
+            "WHERE coalesce(u.v, 0) < rand() * 10"),
+        matchScan("r")
+            .hashJoin(
+                matchScan("t").hashJoin(
+                    matchScan("u"), velox::core::JoinType::kLeft),
+                velox::core::JoinType::kInner)
+            .filter("cast(coalesce(v, 0) as double) < rand() * 10e0")
+            .project({"k"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("The mark of the join below");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM t "
+            "WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.k) OR t.x > 50"),
+        matchScan("t")
+            .hashJoin(matchScan("u"), velox::core::JoinType::kLeftSemiProject)
+            .aliases({std::nullopt, std::nullopt, "m"})
+            .filter("m OR x > 50")
+            .project({"k"})
+            .build());
+  }
+
+  addTableWithStats("s", {"k"}, 1'000);
+  {
+    SCOPED_TRACE("The mark of a join made a leaf");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM ("
+            "  SELECT k, rk, x, EXISTS (SELECT 1 FROM s WHERE s.k = t.k) AS e "
+            "  FROM t) t "
+            "JOIN r ON r.rk = t.rk AND (t.e OR r.y > 0) "
+            "LEFT JOIN u ON u.k = t.k "
+            "WHERE t.e OR coalesce(u.v, 0) < t.x"),
+        matchScan("r")
+            .aliases({"r_rk"})
+            .project({"r_rk", "y > 0 AS p"})
+            .hashJoin(
+                matchScan("t")
+                    .hashJoin(
+                        matchScan("s"), velox::core::JoinType::kLeftSemiProject)
+                    .aliases({std::nullopt, std::nullopt, std::nullopt, "e"})
+                    .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+                    .filter("e OR x > coalesce(v, 0)"),
+                velox::core::JoinType::kInner,
+                {.filter = "e OR p"})
+            .project({"k"})
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("A column of an Unnest placed above the joins");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k, z.e "
+            "FROM t "
+            "CROSS JOIN UNNEST(ARRAY[t.k, t.x]) AS z(e) "
+            "LEFT JOIN u ON u.k = t.k "
+            "WHERE z.e > coalesce(u.v, 0)"),
+        matchScan("t")
+            .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+            .project({"k", "v", "array_constructor(k, x) as a"})
+            .unnest({"k", "v"}, {"a"})
+            .aliases({std::nullopt, std::nullopt, "e"})
+            .project({"k", "e", "v"})
+            .filter("e > coalesce(v, 0)")
+            .project({"k", "e"})
+            .build());
+  }
+
+  addTableWithStats("q", {"c"}, 10);
+  {
+    SCOPED_TRACE("A relation only an outer join's condition reads");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM t "
+            "CROSS JOIN q "
+            "JOIN r ON r.rk = t.rk "
+            "LEFT JOIN u ON u.k = t.k AND u.v > q.c "
+            "WHERE coalesce(u.v, 0) < t.x"),
+        matchScan("t")
+            .nestedLoopJoin(matchScan("q"))
+            .hashJoin(
+                matchScan("u"),
+                velox::core::JoinType::kLeft,
+                {.filter = "c < v"})
+            .filter("x > coalesce(v, 0)")
+            .hashJoin(matchScan("r"), velox::core::JoinType::kInner)
+            .project({"k"})
+            .build());
+  }
+
+  // 'w' has no statistics for its key, so the joins keep their written order.
+  testConnector_->addTable("w", ROW({"k", "v"}, BIGINT()))
+      ->setStats(1'000, {{"v", {.numDistinct = 1'000}}});
+  {
+    SCOPED_TRACE("Joins without an order");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(
+            "SELECT t.k "
+            "FROM t "
+            "JOIN r ON r.rk = t.rk "
+            "LEFT JOIN w ON w.k = t.k "
+            "WHERE coalesce(w.v, 0) < t.x"),
+        matchScan("r")
+            .hashJoin(matchScan("t"), velox::core::JoinType::kInner)
+            .hashJoin(matchScan("w"), velox::core::JoinType::kLeft)
+            .filter("x > coalesce(v, 0)")
+            .project({"k"})
+            .build());
+  }
+}
+
+// The conjuncts of a filter above a join tree are not costed, so the joins keep
+// the order they have with the filter on top. Here a conjunct reading 'u' and
+// 't' could first run in the join of 't' with 'r ⟕ u', where costing it would
+// estimate the padded 'v' as never NULL.
+TEST_P(JoinTest, filterAboveJoinsOrder) {
+  addTableWithStats("t", {"k", "x"}, 1'000'000, {{"x", 1'000}});
+  addTableWithStats("w", {"k"}, 1'000'000);
+  addTableWithStats("r", {"k", "j"}, 1'000'000);
+  addTableWithStats("u", {"j", "v"}, 1'000);
+
+  AXIOM_ASSERT_PLAN_V2(
+      toSingleNodePlan(
+          "SELECT t.k "
+          "FROM t "
+          "JOIN w ON w.k = t.k "
+          "JOIN r ON r.k = t.k "
+          "LEFT JOIN u ON u.j = r.j "
+          "WHERE u.v IS NULL OR u.v = t.x"),
+      matchScan("t")
+          .hashJoin(
+              matchScan("r").hashJoin(
+                  matchScan("w"), velox::core::JoinType::kInner),
+              velox::core::JoinType::kInner)
+          .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+          .filter("v IS NULL OR x = v")
+          .project({"k"})
+          .build());
+}
+
+// A conjunct of a filter above a join tree runs once the joins it reads are
+// done and returns the rows of the written order. It can raise an error on a
+// row that a later join, or the join that applies it, discards: SQL does not
+// keep a failing row out of reach. The written join order keeps the filter
+// above every join and returns the rows.
+TEST_P(JoinTest, filterAboveJoinsResults) {
+  // The outcomes follow from v2's placement, which the plans pin.
+  if (!useV2_) {
+    return;
+  }
+  testConnector_->addTable("t", ROW({"k", "b"}, BIGINT()))
+      ->addData(makeRowVector({
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<int64_t>({1, 0}),
+      }));
+  // Many rows of 'r' match k = 1 and none matches k = 2, so the joins put the
+  // LEFT join with 'u' first and 'r' on the probe side.
+  testConnector_->addTable("r", ROW({"k", "x"}, BIGINT()))
+      ->addData(makeRowVector({
+          makeFlatVector<int64_t>(100, [](auto /*row*/) { return 1; }),
+          makeFlatVector<int64_t>(100, [](auto /*row*/) { return 5'000; }),
+      }));
+  testConnector_->addTable("u", ROW({"k", "v"}, BIGINT()))
+      ->addData(makeRowVector({
+          makeFlatVector<int64_t>({1}),
+          makeFlatVector<int64_t>({1}),
+      }));
+  const MultiFragmentPlan::Options singleNode{
+      .maxRemotePartitions = 1,
+      .maxLocalPartitions = 1,
+  };
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(100, [](auto /*row*/) { return 1; })});
+
+  {
+    SCOPED_TRACE("Rows");
+    const auto logicalPlan = parseSelect(
+        "SELECT t.k "
+        "FROM t "
+        "JOIN r ON r.k = t.k "
+        "LEFT JOIN u ON u.k = t.k "
+        "WHERE coalesce(u.v, t.b) >= 1");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("r")
+            .hashJoin(
+                matchScan("t")
+                    .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+                    .filter("coalesce(v, b) >= 1"),
+                velox::core::JoinType::kInner)
+            .project({"k"})
+            .build());
+    checkSameSingleNode(logicalPlan, {expected});
+  }
+
+  {
+    SCOPED_TRACE("A row a later join discards");
+    const auto logicalPlan = parseSelect(
+        "SELECT t.k "
+        "FROM t "
+        "JOIN r ON r.k = t.k "
+        "LEFT JOIN u ON u.k = t.k "
+        "WHERE 1000 / coalesce(u.v, t.b) > 0");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("r")
+            .hashJoin(
+                matchScan("t")
+                    .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+                    .filter("1000 / coalesce(v, b) > 0"),
+                velox::core::JoinType::kInner)
+            .project({"k"})
+            .build());
+    VELOX_ASSERT_THROW(runVelox(logicalPlan, singleNode), "division by zero");
+    optimizerOptions_.syntacticJoinOrder = true;
+    checkSameSingleNode(logicalPlan, {expected});
+    optimizerOptions_.syntacticJoinOrder = false;
+  }
+
+  {
+    SCOPED_TRACE("A row the join that applies it discards");
+    const auto logicalPlan = parseSelect(
+        "SELECT t.k "
+        "FROM t "
+        "JOIN r ON r.k = t.k "
+        "LEFT JOIN u ON u.k = t.k "
+        "WHERE 1000 / coalesce(u.v, t.b) < r.x");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("r")
+            .hashJoinInner(
+                matchScan("t")
+                    .hashJoin(matchScan("u"), velox::core::JoinType::kLeft)
+                    .project({"k", "b", "v", "1000 / coalesce(v, b) as d"}),
+                {.filter = "x > d"})
+            .project({"k"})
+            .build());
+    VELOX_ASSERT_THROW(runVelox(logicalPlan, singleNode), "division by zero");
+    optimizerOptions_.syntacticJoinOrder = true;
+    checkSameSingleNode(logicalPlan, {expected});
+    optimizerOptions_.syntacticJoinOrder = false;
+  }
+}
+
 TEST_P(JoinTest, constantOnNullProducingSide) {
   testConnector_->addTable("t", ROW({"a", "b"}, BIGINT()));
   testConnector_->addTable("u", ROW({"x", "y"}, BIGINT()));

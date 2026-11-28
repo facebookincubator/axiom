@@ -62,6 +62,54 @@ LEFT JOIN (
 JOIN (VALUES (1), (2)) AS w(k) ON w.k = t.k
 WHERE v.k IS NULL
 ----
+-- A filter above the joins that reads the side a LEFT join pads keeps the
+-- padded rows, wherever the joins run it.
+-- ordered
+SELECT o.a, o.b
+FROM t o
+JOIN t s ON o.b = s.b
+LEFT JOIN t r ON o.a = r.a AND r.b > 140
+WHERE r.b IS NULL OR r.b > 200
+ORDER BY o.a, o.b
+----
+-- The same over a FULL join, reading the right side.
+SELECT count(*), count(o.a), count(r.b)
+FROM t o
+LEFT JOIN t s ON o.b = s.b
+FULL OUTER JOIN t r ON o.a = r.a AND r.b > 140
+WHERE r.b IS NULL OR r.b > 200
+----
+-- The same over a FULL join, reading the left side.
+SELECT count(*), count(o.a), count(r.b)
+FROM t o
+LEFT JOIN t s ON o.b = s.b
+FULL OUTER JOIN t r ON o.a = r.a AND r.b > 140
+WHERE o.b IS NULL OR o.b > 200
+----
+-- The same over a RIGHT join, which pads its left side.
+SELECT count(*), count(o.a), count(r.b)
+FROM t o
+JOIN t s ON o.b = s.b
+RIGHT JOIN t r ON o.a = r.a AND o.b > 130
+WHERE o.b IS NULL OR o.b > 145
+----
+-- A filter above the joins on a column two nested left joins pad.
+SELECT t.k
+FROM (VALUES (1), (2)) AS t(k)
+JOIN (VALUES (1), (2)) AS w(k) ON w.k = t.k
+LEFT JOIN (
+  (VALUES (1)) AS u(k) LEFT JOIN (VALUES (1)) AS v(k) ON u.k = v.k
+) ON t.k = u.k
+WHERE v.k IS NULL
+----
+-- A filter above a cross join and a LEFT join whose condition reads both sides
+-- of the cross join.
+SELECT count(*)
+FROM t t1
+CROSS JOIN t t2
+LEFT JOIN t t3 ON t3.a = t1.a AND t3.b > t2.b
+WHERE coalesce(t3.c, 0) < t1.c
+----
 -- JOIN with UNION ALL subquery.
 SELECT t1.a, t1.b
 FROM t t1 JOIN (SELECT a FROM t WHERE a = 1 UNION ALL SELECT a FROM t WHERE a = 2) t2 ON t1.a = t2.a

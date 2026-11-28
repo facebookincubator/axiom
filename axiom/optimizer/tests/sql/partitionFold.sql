@@ -164,3 +164,32 @@ SELECT d,
         LEFT JOIN (SELECT a FROM t WHERE ds = '1900-01-01') x ON true
         WHERE nullif(u.d, '2025-01-03') > '2025-01-01')
 FROM u
+----
+-- A subquery of the same shape under NOT EXISTS, beside another NOT EXISTS: its
+-- condition is NULL where a = 1, which it keeps, and true where a = 2, which it
+-- drops.
+-- disabled_v1: v1 drops the row whose condition is NULL
+SELECT a
+FROM v
+WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.ds = v.ds)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM (VALUES (1)) w(k)
+      LEFT JOIN (SELECT a FROM t WHERE ds = '1900-01-01') x ON true
+      WHERE nullif(v.a, 1) > 1)
+----
+-- The same NOT EXISTS pair in a derived table under a join: the condition reads
+-- ds, which nothing above the anti join reads.
+-- disabled_v1: v1 drops the row whose condition is NULL
+SELECT w.k
+FROM (
+    SELECT a, ds
+    FROM v
+    WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.ds = v.ds)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM (VALUES (1)) x(k)
+          LEFT JOIN (SELECT a FROM t WHERE ds = '1900-01-01') y ON true
+          WHERE v.ds > 'a')
+) s
+JOIN (VALUES (1), (2)) w(k) ON w.k = s.a

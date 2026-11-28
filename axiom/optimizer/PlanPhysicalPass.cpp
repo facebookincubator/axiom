@@ -355,6 +355,11 @@ DistinctExpansion expandDistinct(
   return {currentInput, std::move(newAggregates)};
 }
 
+bool isDeterministic(const ExprVector& exprs) {
+  return std::ranges::none_of(
+      exprs, [](ExprCP expr) { return expr->containsNonDeterministic(); });
+}
+
 // Walks a cluster's subtree, taking each node into the cluster or ending the
 // branch with it as a leaf. `preserved` is false once the walk has entered an
 // input a join above does not preserve, where a node that decides which rows
@@ -447,11 +452,7 @@ class ClusterCollector {
     // join above does not preserve decides which rows that join sees, so it
     // cannot move above the join; a Filter separating no joins is already
     // where pushdown put it.
-    const bool deterministic = std::none_of(
-        filter->predicates().begin(),
-        filter->predicates().end(),
-        [](ExprCP predicate) { return predicate->containsNonDeterministic(); });
-    if (!deterministic || !preserved ||
+    if (!isDeterministic(filter->predicates()) || !preserved ||
         !separatesJoins(filter->input(), dissolveCrossJoins_, opaqueJoins_)) {
       return false;
     }
@@ -461,15 +462,10 @@ class ClusterCollector {
   }
 
   void collectUnnest(UnnestCP unnest, bool preserved, bool unnestMovable) {
-    const bool deterministic = std::none_of(
-        unnest->unnestExpressions().begin(),
-        unnest->unnestExpressions().end(),
-        [](ExprCP expression) {
-          return expression->containsNonDeterministic();
-        });
     // A column-free input can contain operators that need physical planning.
     // Keep the full subtree inside a leaf of the cluster.
-    if (!deterministic || unnest->input()->outputColumns().empty()) {
+    if (!isDeterministic(unnest->unnestExpressions()) ||
+        unnest->input()->outputColumns().empty()) {
       cluster_.leaves.push_back(unnest);
       return;
     }
@@ -527,6 +523,43 @@ std::vector<UnnestCP> takeFreeUnnests(JoinCluster& cluster) {
   return free;
 }
 
+// Returns the semi projects of 'cluster' whose mark is in 'columns', directly
+// or as an outer join's copy of it.
+folly::F14FastSet<const Join*> markProducers(
+    const JoinCluster& cluster,
+    PlanObjectSet columns) {
+  const JoinCluster::FreshOutputs freshOutputs{cluster};
+  PlanObjectSet sources;
+  columns.forEach<Column>([&](ColumnCP column) {
+    sources.add(freshOutputs.source(column, [](JoinCP) {}));
+  });
+  columns.unionSet(sources);
+  folly::F14FastSet<const Join*> producers;
+  for (JoinCP join : cluster.joins) {
+    if (join->isLeftSemiProject() && columns.contains(join->markColumn())) {
+      producers.insert(join);
+    }
+  }
+  return producers;
+}
+
+// True when the cluster takes in 'predicates', those of the Filter directly
+// above its root. Each must be deterministic and read a column: the joins place
+// a conjunct by the relations it reads. None may read the mark of a semi
+// project in the cluster, which would make that join opaque, or a column of an
+// Unnest the cluster places above its joins.
+bool absorbs(const JoinCluster& cluster, const ExprVector& predicates) {
+  if (!isDeterministic(predicates) ||
+      std::ranges::any_of(predicates, [](ExprCP predicate) {
+        return predicate->columns().empty();
+      })) {
+    return false;
+  }
+  const PlanObjectSet columns = PlanObjectSet::columnsOf(predicates);
+  return !columns.hasIntersection(cluster.freeUnnestColumns) &&
+      markProducers(cluster, columns).empty();
+}
+
 struct CollectedJoinCluster {
   // Relations and operators retained in the hypergraph.
   JoinCluster cluster;
@@ -540,8 +573,11 @@ struct CollectedJoinCluster {
   }
 };
 
+// Collects the cluster under 'root'. The cluster takes in the predicates of
+// 'filter', the Filter directly above 'root', when it can.
 CollectedJoinCluster collectJoinCluster(
     JoinCP root,
+    FilterCP filter,
     bool dissolveCrossJoins,
     const folly::F14FastSet<const Join*>& opaqueJoins,
     bool stopAtStateFree) {
@@ -550,6 +586,9 @@ CollectedJoinCluster collectJoinCluster(
   ClusterCollector{cluster, dissolveCrossJoins, opaqueJoins, stopAtStateFree}
       .collect(root, /*preserved=*/true, /*unnestMovable=*/true);
   std::vector<UnnestCP> freeUnnests = takeFreeUnnests(cluster);
+  if (filter != nullptr && absorbs(cluster, filter->predicates())) {
+    cluster.absorbedPredicates = filter->predicates();
+  }
   return {std::move(cluster), std::move(freeUnnests)};
 }
 
@@ -699,27 +738,14 @@ folly::F14FastSet<const Join*> valueProducersReadInCluster(
     add(join->filter());
   }
   // A predicate the cluster took from a Filter resolves against the same
-  // relations, so a mark it reads also keeps its producer opaque. A predicate
-  // that reads an outer join's copy of a column also reads the column the
-  // copies start from.
+  // relations, so a mark it reads also keeps its producer opaque.
   PlanObjectSet predicateColumns = joinPredicateColumns;
   for (ExprCP predicate : cluster.filterPredicates) {
     predicateColumns.unionSet(predicate->columns());
   }
-  const JoinCluster::FreshOutputs freshOutputs{cluster};
-  PlanObjectSet sources;
-  predicateColumns.forEach<Column>([&](ColumnCP column) {
-    sources.add(freshOutputs.source(column, [](JoinCP) {}));
-  });
-  predicateColumns.unionSet(sources);
-
-  folly::F14FastSet<const Join*> opaqueJoins;
+  folly::F14FastSet<const Join*> opaqueJoins =
+      markProducers(cluster, std::move(predicateColumns));
   for (JoinCP join : cluster.joins) {
-    if (join->isLeftSemiProject() &&
-        predicateColumns.contains(join->markColumn())) {
-      opaqueJoins.insert(join);
-      continue;
-    }
     for (size_t i = 0; i < join->outputColumns().size(); ++i) {
       if (join->outputColumns()[i] != join->sourceColumns()[i] &&
           joinPredicateColumns.contains(join->outputColumns()[i])) {
@@ -817,15 +843,20 @@ struct PlannedCluster {
 };
 
 // Returns the cluster join planning orders under 'join', or nullopt when it
-// plans 'join' with its inputs in written order. 'stopAtStateFree' carries the
-// meaning it has in `ClusterCollector`.
-std::optional<PlannedCluster>
-planCluster(const Join* join, bool syntacticJoinOrder, bool stopAtStateFree) {
+// plans 'join' with its inputs in written order. The cluster takes in the
+// predicates of 'filter', the Filter directly above 'join', when it can.
+// 'stopAtStateFree' carries the meaning it has in `ClusterCollector`.
+std::optional<PlannedCluster> planCluster(
+    const Join* join,
+    FilterCP filter,
+    bool syntacticJoinOrder,
+    bool stopAtStateFree) {
   if (syntacticJoinOrder || !isClusterable(join)) {
     return std::nullopt;
   }
   CollectedJoinCluster collected = collectJoinCluster(
       join,
+      filter,
       /*dissolveCrossJoins=*/true,
       /*opaqueJoins=*/{},
       stopAtStateFree);
@@ -836,7 +867,11 @@ planCluster(const Join* join, bool syntacticJoinOrder, bool stopAtStateFree) {
       valueProducersReadInCluster(collected.cluster);
   if (!opaqueJoins.empty()) {
     collected = collectJoinCluster(
-        join, /*dissolveCrossJoins=*/true, opaqueJoins, stopAtStateFree);
+        join,
+        filter,
+        /*dissolveCrossJoins=*/true,
+        opaqueJoins,
+        stopAtStateFree);
   }
   // A RelationSet holds `kMaxRelations` relations, so a larger cluster has no
   // hypergraph to enumerate over. Join planning keeps the join tree and plans
@@ -1039,8 +1074,8 @@ class SmallRelationExpressions {
       return;
     }
     const auto* join = node->as<Join>();
-    std::optional<PlannedCluster> planned =
-        planCluster(join, syntacticJoinOrder_, stopAtStateFree_);
+    std::optional<PlannedCluster> planned = planCluster(
+        join, /*filter=*/nullptr, syntacticJoinOrder_, stopAtStateFree_);
     if (!planned.has_value()) {
       for (NodeCP side : {join->left(), join->right()}) {
         if (entersSide(*join, side)) {
@@ -2156,17 +2191,41 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         fallbackJoinFactory);
   }
 
+  // A Filter directly above a join is planned with the cluster under that join.
+  NodeCP rewriteFilter(const Filter* node, NoContext& context) override {
+    if (!options_.syntacticJoinOrder && node->input()->is(NodeType::kJoin)) {
+      return planJoins(node->input()->as<Join>(), node, context);
+    }
+    return NodeRewriter::rewriteFilter(node, context);
+  }
+
   NodeCP rewriteJoin(const Join* node, NoContext& context) override {
     // Syntactic mode keeps every join in query order, including its input
     // orientation.
     if (options_.syntacticJoinOrder) {
       return makePhysicalJoin(rewriteJoinInputs(node, context));
     }
+    return planJoins(node, /*filter=*/nullptr, context);
+  }
+
+  // Orders the cluster of joins under 'node'. With 'filter', the Filter
+  // directly above 'node', the cluster places the Filter's predicates when it
+  // can take them in, and the Filter stays on top otherwise.
+  NodeCP planJoins(const Join* node, const Filter* filter, NoContext& context) {
     const bool stopAtStateFree = replicate_ != nullptr;
-    std::optional<PlannedCluster> planned =
-        planCluster(node, /*syntacticJoinOrder=*/false, stopAtStateFree);
+    auto withFilter = [&](NodeCP joins) {
+      return filter == nullptr
+          ? joins
+          : builder().make<Filter>({joins, filter->predicates()});
+    };
+    // The written join tree places no predicate of the Filter.
+    auto fallback = [&]() {
+      return withFilter(rewriteFallbackJoin(node, context));
+    };
+    std::optional<PlannedCluster> planned = planCluster(
+        node, filter, /*syntacticJoinOrder=*/false, stopAtStateFree);
     if (!planned.has_value()) {
-      return rewriteFallbackJoin(node, context);
+      return fallback();
     }
     CollectedJoinCluster& collected = planned->collected;
     const folly::F14FastSet<const Join*>& opaqueJoins = planned->opaqueJoins;
@@ -2191,9 +2250,13 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     // stranded relation and keep the dissolved form.
     if (hasEndpointStrandedRelation(graph)) {
       collected = collectJoinCluster(
-          node, /*dissolveCrossJoins=*/false, opaqueJoins, stopAtStateFree);
+          node,
+          filter,
+          /*dissolveCrossJoins=*/false,
+          opaqueJoins,
+          stopAtStateFree);
       if (!collected.fitsRelationSet()) {
-        return rewriteFallbackJoin(node, context);
+        return fallback();
       }
       graph = buildGraph();
     }
@@ -2207,10 +2270,12 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     NodeCP joinTree =
         planJoinGraph(graph, components, freePlacement.graphOutputColumns);
     if (joinTree == nullptr) {
-      return rewriteFallbackJoin(node, context);
+      return fallback();
     }
-    return placeFreeUnnests(
+    NodeCP joins = placeFreeUnnests(
         joinTree, freePlacement, node->outputColumns(), builder(), simplifier_);
+    return collected.cluster.absorbedPredicates.empty() ? withFilter(joins)
+                                                        : joins;
   }
 
   // An exchange by 'key', with the placement of the rows after it, which run

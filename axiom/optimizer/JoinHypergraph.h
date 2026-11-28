@@ -44,6 +44,14 @@ namespace facebook::axiom::optimizer {
 struct FilterConjunct {
   ExprCP expr{nullptr};
   RelationSet relations;
+  /// True for a predicate of the Filter above the cluster's root. The emitter
+  /// places it like any conjunct, and the cost model leaves it out of every
+  /// estimate, so taking the Filter in changes no estimate join enumeration
+  /// uses.
+  ///
+  /// TODO: Remove `absorbed` once the cost model estimates a column padded by
+  /// an outer join as possibly NULL.
+  bool absorbed{false};
 };
 
 /// The hypergraph DPhyp enumerates over: a set of relations

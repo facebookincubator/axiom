@@ -2650,6 +2650,59 @@ TEST_P(SubqueryTest, innerJoinOnSubquery) {
   }
 }
 
+// A filter above a join tree runs once the joins it reads are done. Each row of
+// 't' matches 5,000 rows of 'r', so the joins order the LEFT join with the
+// count first, and the comparison runs before the join with 'r'.
+TEST_P(SubqueryTest, filterAboveJoins) {
+  testConnector_->addTable("t", ROW({"k", "rk"}, BIGINT()))
+      ->setStats(
+          1'000, {{"k", {.numDistinct = 1'000}}, {"rk", {.numDistinct = 10}}});
+  testConnector_->addTable("r", ROW({"rk", "name"}, BIGINT()))
+      ->setStats(
+          50'000,
+          {{"rk", {.numDistinct = 10}}, {"name", {.numDistinct = 50'000}}});
+  testConnector_->addTable("s", ROW("k", BIGINT()))
+      ->setStats(10'000, {{"k", {.numDistinct = 1'000}}});
+
+  const auto matcher = [&]() {
+    return matchScan("r")
+        .hashJoin(
+            matchScan("t")
+                .hashJoin(
+                    matchScan("s").aliases({"sk"}).singleAggregation(
+                        {"sk"}, {"count(*) as cnt"}),
+                    velox::core::JoinType::kLeft)
+                .filter("k > coalesce(cnt, 0)"),
+            velox::core::JoinType::kInner)
+        .project({"k", "name"})
+        .build();
+  };
+
+  {
+    SCOPED_TRACE("ON");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT t.k, r.name "
+            "FROM t "
+            "JOIN r ON r.rk = t.rk "
+            "  AND t.k > (SELECT count(*) FROM s WHERE s.k = t.k)",
+            kTestConnectorId)),
+        matcher());
+  }
+
+  {
+    SCOPED_TRACE("WHERE");
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(parseSelect(
+            "SELECT t.k, r.name "
+            "FROM t "
+            "JOIN r ON r.rk = t.rk "
+            "WHERE t.k > (SELECT count(*) FROM s WHERE s.k = t.k)",
+            kTestConnectorId)),
+        matcher());
+  }
+}
+
 TEST_P(SubqueryTest, leftJoinOnSubquery) {
   // Subqueries in LEFT JOIN ON clauses are supported when they reference only
   // the right (null-supplying) side. See Subqueries.md.
