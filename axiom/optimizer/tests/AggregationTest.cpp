@@ -845,9 +845,16 @@ TEST_P(AggregationTest, joinColocation) {
             .singleAggregation({"c"}, {"count(*) as count"})
             .project({"c as m", "count"})
             .build());
+    // The join reads only v from x, so x's shuffle drops its grouping key.
     AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
         planVelox(logicalPlan).plan,
-        matchKeyed()
+        matchScan("t")
+            .partialAggregation({"a"}, {"max(b) as v"})
+            .shuffle({"a"})
+            .localPartition({"a"})
+            .finalAggregation({"a"}, {"max(v) as v"})
+            .project({"v"})
+            .shuffle({"v"})
             .hashJoinInner(
                 matchScan("u")
                     .partialAggregation({"c"}, {"max(d) as w"})

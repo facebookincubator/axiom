@@ -99,6 +99,10 @@ class PrecomputeProjections {
   // project outputs only the columns passed to `toColumn`.
   NodeCP node() &&;
 
+  /// Like `node()`, but also adds the project when nothing was lifted, if the
+  /// columns passed to `toColumn` are fewer than the input's.
+  NodeCP narrowedNode() &&;
+
   // Returns a substitution from each deterministic expression read from a
   // column -- one projected here or one the input already computes -- to that
   // column, so a consumer above reads the column instead of computing the

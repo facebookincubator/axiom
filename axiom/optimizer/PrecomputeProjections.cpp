@@ -237,6 +237,13 @@ NodeCP PrecomputeProjections::node() && {
       simplifier_);
 }
 
+NodeCP PrecomputeProjections::narrowedNode() && {
+  if (outColumns_.size() < input_->outputColumns().size()) {
+    needsProject_ = true;
+  }
+  return std::move(*this).node();
+}
+
 PlanSubstitutions PrecomputeProjections::computedColumns() const {
   PlanSubstitutions computed;
   for (const auto& [expr, column] : seen_) {

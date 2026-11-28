@@ -1698,21 +1698,81 @@ TEST_P(JoinTest, joinWithComputedKeys) {
   {
     auto distributedPlan = planVelox(logicalPlan);
 
-    auto rightSideMatcher = matchScan("region").shuffle();
+    auto rightSideMatcher = matchScan("region").shuffle({"r_regionkey"});
 
-    // V2 is worse: it carries the unused `n_regionkey` through the shuffle.
-    // TODO: Eliminate the unused `n_regionkey` field from the V2 plan.
-    auto matcher = matchScan("nation")
-                       .project({"coalesce(n_regionkey, 1)"})
-                       .shuffle()
-                       .hashJoin(rightSideMatcher, core::JoinType::kRight)
-                       .partialAggregation()
-                       .shuffle()
-                       .localPartition()
-                       .finalAggregation()
-                       .build();
+    // The shuffle carries the computed key alone.
+    auto matcher =
+        matchScan("nation")
+            .project({"coalesce(n_regionkey, 1) AS k"})
+            .shuffle({"k"})
+            .hashJoinRight(rightSideMatcher, {.keys = {{"k = r_regionkey"}}})
+            .partialAggregation({}, {"count(1) AS c"})
+            .gather()
+            .localGather()
+            .finalAggregation({}, {"count(c)"})
+            .build();
 
-    AXIOM_ASSERT_DISTRIBUTED_PLAN_V1(distributedPlan.plan, matcher);
+    AXIOM_ASSERT_DISTRIBUTED_PLAN(distributedPlan.plan, matcher);
+  }
+
+  // A broadcast build carries its computed key alone.
+  {
+    SCOPED_TRACE("Broadcast build");
+    const auto broadcastBuild = parseSelect(
+        "SELECT n_name "
+        "FROM nation JOIN region ON n_regionkey = coalesce(r_regionkey, 1)");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(broadcastBuild),
+        matchScan("nation")
+            .hashJoinInner(
+                matchScan("region").project({"coalesce(r_regionkey, 1) AS k"}),
+                {.keys = {{"n_regionkey = k"}}})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(broadcastBuild).plan,
+        matchScan("nation")
+            .hashJoinInner(
+                matchScan("region")
+                    .project({"coalesce(r_regionkey, 1) AS k"})
+                    .broadcast(),
+                {.keys = {{"n_regionkey = k"}}})
+            .gather()
+            .build());
+  }
+
+  {
+    SCOPED_TRACE("Reordered joins");
+    addTableWithStats("t", {"t_k"}, 10'000);
+    addTableWithStats("u", {"u_k"}, 1'000);
+    addTableWithStats("v", {"k"}, 100);
+    optimizerOptions_.broadcastSizeLimit = 1;
+
+    const auto reordered = parseSelect(
+        "SELECT u_k, k "
+        "FROM (t JOIN u ON coalesce(t_k, 0) = u_k) "
+        "LEFT JOIN v ON coalesce(u_k, 0) = k");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(reordered),
+        matchScan("t")
+            .project({"coalesce(t_k, 0) AS key"})
+            .hashJoinInner(matchScan("u"), {.keys = {{"key = u_k"}}})
+            .hashJoinLeft(matchScan("v"), {.keys = {{"u_k = k"}}})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(reordered).plan,
+        matchScan("t")
+            .project({"coalesce(t_k, 0) AS key"})
+            .shuffle({"key"})
+            .hashJoinInner(
+                matchScan("u").shuffle({"u_k"}).hashJoinLeft(
+                    matchScan("v").shuffle({"k"}), {.keys = {{"u_k = k"}}}),
+                {.keys = {{"key = u_k"}}})
+            .gather()
+            .build());
   }
 }
 
@@ -2274,6 +2334,37 @@ TEST_P(JoinTest, syntacticJoinAlignsPartitioning) {
                         matchScan("sp_x").shuffle({"d"}), {.keys = {{"q = d"}}})
                     .shuffle({"c"}),
                 {.keys = {{"a = c", "p = q"}}})
+            .gather()
+            .build());
+  }
+
+  // The side moved onto the other's partitioning computes its key below the
+  // shuffle, and the shuffle carries that key alone.
+  {
+    SCOPED_TRACE("Computed key on the moved side");
+    const auto logicalPlan = parseSelect(
+        "SELECT sp_t.a "
+        "FROM (sp_t JOIN sp_u ON a = b) "
+        "JOIN sp_x ON a = d + 1");
+
+    AXIOM_ASSERT_PLAN_V2(
+        toSingleNodePlan(logicalPlan),
+        matchScan("sp_t")
+            .hashJoinInner(matchScan("sp_u"), {.keys = {{"a = b"}}})
+            .hashJoinInner(
+                matchScan("sp_x").project({"d + 1 AS k"}),
+                {.keys = {{"a = k"}}})
+            .build());
+
+    AXIOM_ASSERT_DISTRIBUTED_PLAN_V2(
+        planVelox(logicalPlan).plan,
+        matchScan("sp_t")
+            .shuffle({"a"})
+            .hashJoinInner(
+                matchScan("sp_u").shuffle({"b"}), {.keys = {{"a = b"}}})
+            .hashJoinInner(
+                matchScan("sp_x").project({"d + 1 AS k"}).shuffle({"k"}),
+                {.keys = {{"a = k"}}})
             .gather()
             .build());
   }
